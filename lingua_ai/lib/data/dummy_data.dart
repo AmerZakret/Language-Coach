@@ -14,19 +14,19 @@ class DummyData {
         progress: 1.0,
         questions: [
           Question(
-            text: 'How do you say "Hello" in Spanish?',
-            options: ['Adiós', 'Hola', 'Gracias', 'Por favor'],
-            correctAnswer: 'Hola',
+            text: 'What does "Hello" mean in Turkish?',
+            options: ['Hoşça kal', 'Merhaba', 'Teşekkürler', 'Lütfen'],
+            correctAnswer: 'Merhaba',
           ),
           Question(
-            text: 'Translate: "¿Cómo estás?"',
+            text: 'Translate: "Nasılsın?" to English',
             options: ['How are you?', 'What is your name?', 'Where are you?', 'Good morning'],
             correctAnswer: 'How are you?',
           ),
           Question(
-            text: 'Which of the following means "Goodbye"?',
-            options: ['Buenos días', 'Hola', 'Adiós', 'Perdón'],
-            correctAnswer: 'Adiós',
+            text: 'Which of the following means "Hoşça kal"?',
+            options: ['Good morning', 'Hello', 'Goodbye', 'Sorry'],
+            correctAnswer: 'Goodbye',
           ),
         ],
       ),
@@ -41,19 +41,19 @@ class DummyData {
         progress: 0.5,
         questions: [
           Question(
-            text: 'Translate: "I would like a coffee, please."',
+            text: 'Translate: "Bir kahve istiyorum, lütfen." to English',
             options: [
-              'Me gustaría un café, por favor.',
-              'Quiero agua, gracias.',
-              '¿Dónde está el menú?',
-              'La cuenta, por favor.'
+              'I would like a coffee, please.',
+              'I want water, thanks.',
+              'Where is the menu?',
+              'The bill, please.'
             ],
-            correctAnswer: 'Me gustaría un café, por favor.',
+            correctAnswer: 'I would like a coffee, please.',
           ),
           Question(
-            text: 'How do you ask for "the bill"?',
-            options: ['El baño', 'El menú', 'La mesa', 'La cuenta'],
-            correctAnswer: 'La cuenta',
+            text: 'How do you ask for "hesap" (the bill)?',
+            options: ['The bathroom', 'The menu', 'The table', 'The bill'],
+            correctAnswer: 'The bill',
           ),
         ],
       ),
@@ -68,19 +68,19 @@ class DummyData {
         progress: 0.0,
         questions: [
           Question(
-            text: 'Translate: "Where is the train station?"',
+            text: 'Translate: "Tren istasyonu nerede?" to English',
             options: [
-              '¿Dónde está el aeropuerto?',
-              '¿Dónde está la estación de tren?',
-              '¿A qué hora sale el tren?',
-              '¿Cuánto cuesta un boleto?'
+              'Where is the airport?',
+              'Where is the train station?',
+              'What time does the train leave?',
+              'How much is a ticket?'
             ],
-            correctAnswer: '¿Dónde está la estación de tren?',
+            correctAnswer: 'Where is the train station?',
           ),
           Question(
-            text: 'What does "Gire a la izquierda" mean?',
-            options: ['Turn right', 'Go straight', 'Turn left', 'Stop'],
-            correctAnswer: 'Turn left',
+            text: 'Choose the correct grammar:',
+            options: ['She go to school', 'She goes to school', 'She going school', 'She gone school'],
+            correctAnswer: 'She goes to school',
           ),
         ],
       ),
@@ -95,14 +95,14 @@ class DummyData {
         progress: 0.0,
         questions: [
           Question(
-            text: 'Translate: "It is a pleasure to meet you."',
+            text: 'Translate: "Tanıştığıma memnun oldum." to English',
             options: [
-              'Encantado de conocerle.',
-              'Mucho gusto.',
-              'Es un placer conocerle.',
-              'Todos los anteriores.'
+              'Nice to meet you.',
+              'It is a pleasure to meet you.',
+              'Glad to meet you.',
+              'All of the above.'
             ],
-            correctAnswer: 'Todos los anteriores.',
+            correctAnswer: 'All of the above.',
           ),
         ],
       ),

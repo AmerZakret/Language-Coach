@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/routes/app_routes.dart';
 import '../../widgets/custom_button.dart';
+import '../../core/localization/language_service.dart';
 
 class LessonResultScreen extends StatelessWidget {
   const LessonResultScreen({super.key});
@@ -13,57 +14,64 @@ class LessonResultScreen extends StatelessWidget {
     final total = args?['total'] ?? 0;
     final xp = args?['xp'] ?? 0;
 
-    return Scaffold(
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(24.0),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              const Spacer(),
-              Container(
-                padding: const EdgeInsets.all(32),
-                decoration: BoxDecoration(
-                  color: AppTheme.secondaryColor.withValues(alpha: 0.1),
-                  shape: BoxShape.circle,
-                ),
-                child: const Icon(
-                  Icons.star_rounded,
-                  size: 100,
-                  color: AppTheme.secondaryColor,
-                ),
+    return ListenableBuilder(
+      listenable: LanguageService(),
+      builder: (context, child) {
+        final lang = LanguageService();
+        
+        return Scaffold(
+          body: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(24.0),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  const Spacer(),
+                  Container(
+                    padding: const EdgeInsets.all(32),
+                    decoration: BoxDecoration(
+                      color: AppTheme.secondaryColor.withValues(alpha: 0.1),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(
+                      Icons.star_rounded,
+                      size: 100,
+                      color: AppTheme.secondaryColor,
+                    ),
+                  ),
+                  const SizedBox(height: 48),
+                  Text(
+                    lang.getString('lesson_completed'),
+                    style: const TextStyle(
+                      fontSize: 32,
+                      fontWeight: FontWeight.bold,
+                      color: AppTheme.textPrimaryColor,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    '${lang.getString('you_scored')} $score / $total!\n${lang.getString('you_earned')} $xp ${lang.getString('xp')}\n${lang.getString('great_job')}',
+                    style: const TextStyle(
+                      fontSize: 18,
+                      color: AppTheme.textSecondaryColor,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const Spacer(),
+                  CustomButton(
+                    text: lang.getString('continue'),
+                    onPressed: () {
+                      Navigator.popUntil(context, ModalRoute.withName(AppRoutes.home));
+                    },
+                  ),
+                ],
               ),
-              const SizedBox(height: 48),
-              const Text(
-                'Lesson Completed!',
-                style: TextStyle(
-                  fontSize: 32,
-                  fontWeight: FontWeight.bold,
-                  color: AppTheme.textPrimaryColor,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 16),
-              Text(
-                'You scored $score / $total!\nYou earned $xp XP\nGreat job keeping up your streak!',
-                style: const TextStyle(
-                  fontSize: 18,
-                  color: AppTheme.textSecondaryColor,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const Spacer(),
-              CustomButton(
-                text: 'Continue',
-                onPressed: () {
-                  Navigator.popUntil(context, ModalRoute.withName(AppRoutes.home));
-                },
-              ),
-            ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }
