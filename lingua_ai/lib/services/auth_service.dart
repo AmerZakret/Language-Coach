@@ -12,11 +12,13 @@ class AuthService extends ChangeNotifier {
   bool _isGuest = false;
   String _currentUserName = '';
   String _currentUserEmail = '';
+  String _token = '';
 
   bool get isLoggedIn => _isLoggedIn;
   bool get isGuest => _isGuest;
   String get currentUserName => _currentUserName;
   String get currentUserEmail => _currentUserEmail;
+  String get token => _token;
 
   Future<void> init() async {
     _prefs = await SharedPreferences.getInstance();
@@ -25,18 +27,19 @@ class AuthService extends ChangeNotifier {
     _isGuest = _prefs.getBool('isGuest') ?? false;
     _currentUserName = _prefs.getString('currentUserName') ?? '';
     _currentUserEmail = _prefs.getString('currentUserEmail') ?? '';
+    _token = _prefs.getString('token') ?? '';
     
     notifyListeners();
   }
 
   // Returns null if successful, or an error message if invalid
-  String? login(String email, String password) {
+  String? loginLocal(String email, String password) {
     if (email.trim().isEmpty || password.trim().isEmpty) {
       return 'fields_empty_error';
     }
     
-    // Very basic email format check
-    if (!email.contains('@') || !email.contains('.')) {
+    final emailRegex = RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$');
+    if (!emailRegex.hasMatch(email)) {
       return 'invalid_email_error';
     }
 
@@ -44,14 +47,28 @@ class AuthService extends ChangeNotifier {
       return 'password_length_error';
     }
 
-    // Dummy success
     _isLoggedIn = true;
     _isGuest = false;
-    _currentUserName = 'Demo User'; // Just assigning a dummy name since we don't have a DB
+    _currentUserName = email.split('@')[0].toUpperCase();
     _currentUserEmail = email;
+    _token = 'dummy-local-token';
     
     _saveSession();
     return null;
+  }
+
+  void setBackendSession({
+    required String name,
+    required String email,
+    required String token,
+  }) {
+    _isLoggedIn = true;
+    _isGuest = false;
+    _currentUserName = name;
+    _currentUserEmail = email;
+    _token = token;
+    
+    _saveSession();
   }
 
   void loginAsGuest() {
@@ -59,17 +76,19 @@ class AuthService extends ChangeNotifier {
     _isGuest = true;
     _currentUserName = 'Guest User';
     _currentUserEmail = 'guest@lingua.ai';
+    _token = '';
     
     _saveSession();
   }
 
   // Returns null if successful, or an error message if invalid
-  String? register(String name, String email, String password, String confirmPassword) {
+  String? registerLocal(String name, String email, String password, String confirmPassword) {
     if (name.trim().isEmpty || email.trim().isEmpty || password.trim().isEmpty || confirmPassword.trim().isEmpty) {
       return 'fields_empty_error';
     }
     
-    if (!email.contains('@') || !email.contains('.')) {
+    final emailRegex = RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$');
+    if (!emailRegex.hasMatch(email)) {
       return 'invalid_email_error';
     }
 
@@ -85,6 +104,7 @@ class AuthService extends ChangeNotifier {
     _isGuest = false;
     _currentUserName = name;
     _currentUserEmail = email;
+    _token = 'dummy-local-token';
     
     _saveSession();
     return null;
@@ -95,11 +115,13 @@ class AuthService extends ChangeNotifier {
     _isGuest = false;
     _currentUserName = '';
     _currentUserEmail = '';
+    _token = '';
     
     _prefs.remove('isLoggedIn');
     _prefs.remove('isGuest');
     _prefs.remove('currentUserName');
     _prefs.remove('currentUserEmail');
+    _prefs.remove('token');
     
     notifyListeners();
   }
@@ -109,6 +131,8 @@ class AuthService extends ChangeNotifier {
     await _prefs.setBool('isGuest', _isGuest);
     await _prefs.setString('currentUserName', _currentUserName);
     await _prefs.setString('currentUserEmail', _currentUserEmail);
+    await _prefs.setString('token', _token);
     notifyListeners();
   }
 }
+

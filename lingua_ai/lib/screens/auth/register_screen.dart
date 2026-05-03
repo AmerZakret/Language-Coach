@@ -5,6 +5,8 @@ import '../../widgets/custom_button.dart';
 import '../../widgets/custom_text_field.dart';
 import '../../core/localization/language_service.dart';
 import '../../services/auth_service.dart';
+import '../../services/auth_api_service.dart';
+import '../../services/progress_service.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -18,27 +20,62 @@ class _RegisterScreenState extends State<RegisterScreen> {
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
   final TextEditingController _confirmPasswordController = TextEditingController();
+  final AuthApiService _apiService = AuthApiService();
+  bool _isLoading = false;
 
-  void _handleRegister() {
+  void _showError(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.red,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ),
+    );
+  }
+
+  Future<void> _handleRegister() async {
     final lang = LanguageService();
     final auth = AuthService();
-    
-    final errorKey = auth.register(
-      _nameController.text, 
-      _emailController.text, 
-      _passwordController.text, 
-      _confirmPasswordController.text
-    );
-    
-    if (errorKey != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(lang.getString(errorKey)),
-          backgroundColor: Colors.red,
-        ),
+
+    final name = _nameController.text.trim();
+    final email = _emailController.text.trim();
+    final password = _passwordController.text.trim();
+    final confirmPassword = _confirmPasswordController.text.trim();
+
+    // Local validation first
+    final localError = auth.registerLocal(name, email, password, confirmPassword);
+    if (localError != null) {
+      _showError(lang.getString(localError));
+      return;
+    }
+
+    setState(() => _isLoading = true);
+
+    try {
+      final response = await _apiService.register(name, email, password);
+      
+      // Update session with backend data
+      auth.setBackendSession(
+        name: name,
+        email: email,
+        token: response['access_token'] ?? 'placeholder-token',
       );
-    } else {
-      Navigator.pushReplacementNamed(context, AppRoutes.home);
+
+      // Sync progress
+      await ProgressService().syncWithBackend();
+
+      if (mounted) {
+        Navigator.pushNamedAndRemoveUntil(context, AppRoutes.home, (route) => false);
+      }
+    } catch (e) {
+      if (mounted) {
+        _showError(e.toString().replaceAll('Exception: ', ''));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
@@ -71,17 +108,19 @@ class _RegisterScreenState extends State<RegisterScreen> {
           ),
           body: SafeArea(
             child: SingleChildScrollView(
+              physics: const BouncingScrollPhysics(),
               child: Padding(
-                padding: const EdgeInsets.all(24.0),
+                padding: const EdgeInsets.all(AppTheme.standardPadding),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     Text(
                       lang.getString('start_journey'),
                       style: const TextStyle(
-                        fontSize: 28,
-                        fontWeight: FontWeight.bold,
+                        fontSize: 32,
+                        fontWeight: FontWeight.w900,
                         color: AppTheme.textPrimaryColor,
+                        letterSpacing: -1,
                       ),
                     ),
                     const SizedBox(height: 8),
@@ -90,38 +129,40 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       style: const TextStyle(
                         fontSize: 16,
                         color: AppTheme.textSecondaryColor,
+                        fontWeight: FontWeight.w500,
                       ),
                     ),
-                    const SizedBox(height: 32),
+                    const SizedBox(height: 40),
                     CustomTextField(
                       controller: _nameController,
                       hintText: lang.getString('full_name'),
-                      prefixIcon: Icons.person_outline,
+                      prefixIcon: Icons.person_rounded,
                     ),
                     const SizedBox(height: 16),
                     CustomTextField(
                       controller: _emailController,
                       hintText: lang.getString('email'),
-                      prefixIcon: Icons.email_outlined,
+                      prefixIcon: Icons.email_rounded,
                     ),
                     const SizedBox(height: 16),
                     CustomTextField(
                       controller: _passwordController,
                       hintText: lang.getString('password'),
-                      prefixIcon: Icons.lock_outline,
+                      prefixIcon: Icons.lock_rounded,
                       isPassword: true,
                     ),
                     const SizedBox(height: 16),
                     CustomTextField(
                       controller: _confirmPasswordController,
                       hintText: lang.getString('confirm_password'),
-                      prefixIcon: Icons.lock_outline,
+                      prefixIcon: Icons.lock_clock_rounded,
                       isPassword: true,
                     ),
-                    const SizedBox(height: 32),
+                    const SizedBox(height: 40),
                     CustomButton(
                       text: lang.getString('register'),
-                      onPressed: _handleRegister,
+                      onPressed: _isLoading ? null : () => _handleRegister(),
+                      isLoading: _isLoading,
                     ),
                     const SizedBox(height: 32),
                     Row(
@@ -145,6 +186,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         ),
                       ],
                     ),
+
                   ],
                 ),
               ),

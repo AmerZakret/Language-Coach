@@ -22,48 +22,76 @@ class LessonResultScreen extends StatelessWidget {
         return Scaffold(
           body: SafeArea(
             child: Padding(
-              padding: const EdgeInsets.all(24.0),
+              padding: const EdgeInsets.all(AppTheme.standardPadding),
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   const Spacer(),
-                  Container(
-                    padding: const EdgeInsets.all(32),
-                    decoration: BoxDecoration(
-                      color: AppTheme.secondaryColor.withValues(alpha: 0.1),
-                      shape: BoxShape.circle,
-                    ),
-                    child: const Icon(
-                      Icons.star_rounded,
-                      size: 100,
-                      color: AppTheme.secondaryColor,
-                    ),
+                  Icon(
+                    Icons.emoji_events_rounded,
+                    size: 120,
+                    color: AppTheme.secondaryColor.withValues(alpha: 0.8),
                   ),
-                  const SizedBox(height: 48),
+                  const SizedBox(height: 32),
                   Text(
                     lang.getString('lesson_completed'),
                     style: const TextStyle(
-                      fontSize: 32,
-                      fontWeight: FontWeight.bold,
+                      fontSize: 36,
+                      fontWeight: FontWeight.w900,
                       color: AppTheme.textPrimaryColor,
+                      letterSpacing: -1,
                     ),
                     textAlign: TextAlign.center,
                   ),
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 8),
                   Text(
-                    '${lang.getString('you_scored')} $score / $total!\n${lang.getString('you_earned')} $xp ${lang.getString('xp')}\n${lang.getString('great_job')}',
+                    lang.getString('great_job'),
                     style: const TextStyle(
                       fontSize: 18,
                       color: AppTheme.textSecondaryColor,
+                      fontWeight: FontWeight.w500,
                     ),
                     textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 48),
+                  Container(
+                    padding: const EdgeInsets.all(32),
+                    decoration: BoxDecoration(
+                      color: AppTheme.surfaceColor,
+                      borderRadius: BorderRadius.circular(AppTheme.cardRadius),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.05),
+                          blurRadius: 20,
+                          offset: const Offset(0, 10),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceAround,
+                      children: [
+                        _buildResultStat(
+                          lang.getString('you_scored').split(' ').first,
+                          '$score/$total',
+                          Icons.query_stats_rounded,
+                          AppTheme.primaryColor,
+                        ),
+                        Container(width: 1, height: 50, color: AppTheme.backgroundColor),
+                        _buildResultStat(
+                          lang.getString('xp'),
+                          '+$xp',
+                          Icons.bolt_rounded,
+                          Colors.orange,
+                        ),
+                      ],
+                    ),
                   ),
                   const Spacer(),
                   CustomButton(
                     text: lang.getString('continue'),
                     onPressed: () {
-                      Navigator.popUntil(context, ModalRoute.withName(AppRoutes.home));
+                      Navigator.pushNamedAndRemoveUntil(context, AppRoutes.home, (route) => false);
                     },
                   ),
                 ],
@@ -74,4 +102,30 @@ class LessonResultScreen extends StatelessWidget {
       },
     );
   }
+
+  Widget _buildResultStat(String label, String value, IconData icon, Color color) {
+    return Column(
+      children: [
+        Icon(icon, color: color, size: 28),
+        const SizedBox(height: 8),
+        Text(
+          value,
+          style: const TextStyle(
+            fontSize: 24,
+            fontWeight: FontWeight.bold,
+            color: AppTheme.textPrimaryColor,
+          ),
+        ),
+        Text(
+          label,
+          style: const TextStyle(
+            fontSize: 14,
+            color: AppTheme.textSecondaryColor,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ],
+    );
+  }
 }
+

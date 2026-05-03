@@ -5,6 +5,8 @@ import '../../widgets/custom_button.dart';
 import '../../widgets/custom_text_field.dart';
 import '../../core/localization/language_service.dart';
 import '../../services/auth_service.dart';
+import '../../services/auth_api_service.dart';
+import '../../services/progress_service.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -16,28 +18,66 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController _emailController = TextEditingController();
   final TextEditingController _passwordController = TextEditingController();
+  final AuthApiService _apiService = AuthApiService();
+  bool _isLoading = false;
 
-  void _handleLogin() {
+  void _showError(String message) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        backgroundColor: Colors.red,
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+      ),
+    );
+  }
+
+  Future<void> _handleLogin() async {
     final lang = LanguageService();
     final auth = AuthService();
-    
-    final errorKey = auth.login(_emailController.text, _passwordController.text);
-    
-    if (errorKey != null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(lang.getString(errorKey)),
-          backgroundColor: Colors.red,
-        ),
+
+    final email = _emailController.text.trim();
+    final password = _passwordController.text.trim();
+
+    // Local validation first
+    final localError = auth.loginLocal(email, password);
+    if (localError != null) {
+      _showError(lang.getString(localError));
+      return;
+    }
+
+    setState(() => _isLoading = true);
+
+    try {
+      final response = await _apiService.login(email, password);
+      
+      // Update session with backend data
+      auth.setBackendSession(
+        name: email.split('@')[0].toUpperCase(),
+        email: email,
+        token: response['access_token'] ?? '',
       );
-    } else {
-      Navigator.pushReplacementNamed(context, AppRoutes.home);
+
+      // Sync progress from backend
+      await ProgressService().syncWithBackend();
+
+      if (mounted) {
+        Navigator.pushNamedAndRemoveUntil(context, AppRoutes.home, (route) => false);
+      }
+    } catch (e) {
+      if (mounted) {
+        _showError(e.toString().replaceAll('Exception: ', ''));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
     }
   }
 
   void _handleGuestLogin() {
     AuthService().loginAsGuest();
-    Navigator.pushReplacementNamed(context, AppRoutes.home);
+    Navigator.pushNamedAndRemoveUntil(context, AppRoutes.home, (route) => false);
   }
 
   @override
@@ -56,8 +96,9 @@ class _LoginScreenState extends State<LoginScreen> {
         return Scaffold(
           body: SafeArea(
             child: SingleChildScrollView(
+              physics: const BouncingScrollPhysics(),
               child: Padding(
-                padding: const EdgeInsets.all(24.0),
+                padding: const EdgeInsets.all(AppTheme.standardPadding),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
@@ -70,19 +111,23 @@ class _LoginScreenState extends State<LoginScreen> {
                         },
                       ),
                     ),
-                    const SizedBox(height: 16),
-                    const Icon(
-                      Icons.language,
-                      size: 80,
-                      color: AppTheme.primaryColor,
+                    const SizedBox(height: 32),
+                    const Hero(
+                      tag: 'logo',
+                      child: Icon(
+                        Icons.auto_awesome_rounded,
+                        size: 80,
+                        color: AppTheme.primaryColor,
+                      ),
                     ),
-                    const SizedBox(height: 24),
+                    const SizedBox(height: 32),
                     Text(
                       lang.getString('welcome_title'),
                       style: const TextStyle(
                         fontSize: 32,
-                        fontWeight: FontWeight.bold,
+                        fontWeight: FontWeight.w900,
                         color: AppTheme.textPrimaryColor,
+                        letterSpacing: -1,
                       ),
                       textAlign: TextAlign.center,
                     ),
@@ -92,6 +137,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       style: const TextStyle(
                         fontSize: 16,
                         color: AppTheme.textSecondaryColor,
+                        fontWeight: FontWeight.w500,
                       ),
                       textAlign: TextAlign.center,
                     ),
@@ -99,13 +145,13 @@ class _LoginScreenState extends State<LoginScreen> {
                     CustomTextField(
                       controller: _emailController,
                       hintText: lang.getString('email'),
-                      prefixIcon: Icons.email_outlined,
+                      prefixIcon: Icons.email_rounded,
                     ),
                     const SizedBox(height: 16),
                     CustomTextField(
                       controller: _passwordController,
                       hintText: lang.getString('password'),
-                      prefixIcon: Icons.lock_outline,
+                      prefixIcon: Icons.lock_rounded,
                       isPassword: true,
                     ),
                     const SizedBox(height: 8),
@@ -115,35 +161,27 @@ class _LoginScreenState extends State<LoginScreen> {
                         onPressed: () {},
                         child: Text(
                           lang.getString('forgot_password'),
-                          style: const TextStyle(color: AppTheme.primaryColor),
+                          style: const TextStyle(
+                            color: AppTheme.primaryColor,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
                       ),
                     ),
                     const SizedBox(height: 24),
                     CustomButton(
                       text: lang.getString('login'),
-                      onPressed: _handleLogin,
+                      onPressed: _isLoading ? null : () => _handleLogin(),
+                      isLoading: _isLoading,
                     ),
                     const SizedBox(height: 16),
-                    OutlinedButton(
+                    CustomButton(
+                      text: lang.getString('continue_as_guest'),
                       onPressed: _handleGuestLogin,
-                      style: OutlinedButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        side: const BorderSide(color: AppTheme.primaryColor, width: 2),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(16),
-                        ),
-                      ),
-                      child: Text(
-                        lang.getString('continue_as_guest'),
-                        style: const TextStyle(
-                          color: AppTheme.primaryColor,
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
+                      isOutlined: true,
                     ),
                     const SizedBox(height: 32),
+
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [

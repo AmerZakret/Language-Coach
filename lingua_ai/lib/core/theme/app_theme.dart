@@ -9,6 +9,11 @@ class AppTheme {
   static const Color textPrimaryColor = Color(0xFF2D3142);
   static const Color textSecondaryColor = Color(0xFF9094A6);
 
+  // Design Constants
+  static const double cardRadius = 24.0;
+  static const double buttonRadius = 16.0;
+  static const double standardPadding = 24.0;
+
   static ThemeData get lightTheme {
     return ThemeData(
       primaryColor: primaryColor,
@@ -37,15 +42,15 @@ class AppTheme {
         filled: true,
         fillColor: surfaceColor,
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(buttonRadius),
           borderSide: BorderSide.none,
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(buttonRadius),
           borderSide: BorderSide.none,
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(buttonRadius),
           borderSide: const BorderSide(color: primaryColor, width: 2),
         ),
         contentPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
@@ -56,9 +61,9 @@ class AppTheme {
           foregroundColor: Colors.white,
           elevation: 0,
           shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16),
+            borderRadius: BorderRadius.circular(buttonRadius),
           ),
-          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 16),
+          padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 18),
           textStyle: const TextStyle(
             fontSize: 16,
             fontWeight: FontWeight.bold,
@@ -68,3 +73,4 @@ class AppTheme {
     );
   }
 }
+

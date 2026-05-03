@@ -23,108 +23,139 @@ class ProfileScreen extends StatelessWidget {
           appBar: AppBar(
             title: Text(lang.getString('profile')),
             centerTitle: true,
-            actions: [
-              IconButton(
-                icon: const Icon(Icons.settings),
-                onPressed: () {},
-              ),
-            ],
           ),
           body: SafeArea(
             child: SingleChildScrollView(
-              padding: const EdgeInsets.all(24.0),
+              padding: const EdgeInsets.all(AppTheme.standardPadding),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.center,
                 children: [
-                  CircleAvatar(
-                    radius: 60,
-                    backgroundColor:
-                        AppTheme.primaryColor.withValues(alpha: 0.1),
-                    child: const Icon(
-                      Icons.person,
-                      size: 60,
-                      color: AppTheme.primaryColor,
+                  Container(
+                    padding: const EdgeInsets.all(24),
+                    decoration: BoxDecoration(
+                      color: AppTheme.surfaceColor,
+                      borderRadius: BorderRadius.circular(AppTheme.cardRadius),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.03),
+                          blurRadius: 10,
+                          offset: const Offset(0, 4),
+                        ),
+                      ],
                     ),
-                  ),
-                  const SizedBox(height: 16),
-                  Text(
-                    auth.currentUserName,
-                    style: const TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                      color: AppTheme.textPrimaryColor,
-                    ),
-                  ),
-                  const SizedBox(height: 8),
-                  Text(
-                    auth.currentUserEmail,
-                    style: const TextStyle(
-                      fontSize: 16,
-                      color: AppTheme.textSecondaryColor,
+                    child: Column(
+                      children: [
+                        CircleAvatar(
+                          radius: 50,
+                          backgroundColor: AppTheme.primaryColor.withValues(alpha: 0.1),
+                          child: const Icon(
+                            Icons.person,
+                            size: 50,
+                            color: AppTheme.primaryColor,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        Text(
+                          auth.isGuest ? lang.getString('guest_user') : auth.currentUserName,
+                          style: const TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.bold,
+                            color: AppTheme.textPrimaryColor,
+                          ),
+                        ),
+                        if (!auth.isGuest) ...[
+                          const SizedBox(height: 4),
+                          Text(
+                            auth.currentUserEmail,
+                            style: const TextStyle(
+                              fontSize: 14,
+                              color: AppTheme.textSecondaryColor,
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                   ),
                   const SizedBox(height: 32),
                   _buildSectionTitle(lang.getString('learning_stats')),
                   const SizedBox(height: 16),
                   Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceAround,
                     children: [
-                      _buildStatCard(lang.getString('xp'),
-                          '${progress.totalXp}', Icons.star),
-                      _buildStatCard(lang.getString('streak'),
-                          '${progress.streak}', Icons.local_fire_department),
-                      _buildStatCard(lang.getString('lessons'),
-                          '${progress.completedLessonsCount}', Icons.menu_book),
+                      Expanded(
+                        child: _buildStatCard(lang.getString('xp'),
+                            '${progress.totalXp}', Icons.bolt_rounded, Colors.orange),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _buildStatCard(lang.getString('streak'),
+                            '${progress.streak}', Icons.local_fire_department_rounded, Colors.red),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: _buildStatCard(lang.getString('lessons'),
+                            '${progress.completedLessonsCount}', Icons.menu_book_rounded, Colors.blue),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 32),
-                  _buildSectionTitle(lang.getString('weekly_activity')),
-                  const SizedBox(height: 16),
-                  _buildWeeklyActivityChart(progress.weeklyActivity),
-                  const SizedBox(height: 32),
                   _buildSectionTitle(lang.getString('settings')),
                   const SizedBox(height: 16),
-                  _buildListTile(Icons.notifications_outlined,
-                      lang.getString('notifications'), () {}),
-                  _buildListTile(
-                      Icons.language_outlined, lang.getString('language_pref'),
-                      () {
+                  _buildListTile(Icons.language_outlined, lang.getString('language_pref'), () {
                     lang.toggleLanguage();
                   }),
-                  _buildListTile(Icons.security_outlined,
-                      lang.getString('privacy'), () {}),
-                  _buildListTile(
-                      Icons.help_outline, lang.getString('help'), () {}),
-                  const SizedBox(height: 24),
+                  _buildListTile(Icons.notifications_none_rounded, lang.getString('notifications'), () {}),
+                  _buildListTile(Icons.security_rounded, lang.getString('privacy'), () {}),
+                  
+                  const SizedBox(height: 32),
                   _buildSectionTitle('Testing Tools'),
                   const SizedBox(height: 16),
-                  _buildListTile(
-                      Icons.restart_alt, lang.getString('reset_progress'), () {
-                    progress.resetProgress();
-                  }),
-                  _buildListTile(
-                      Icons.translate, lang.getString('reset_language'), () {
-                    lang.resetLanguage();
-                  }),
-                  const SizedBox(height: 24),
-                  ListTile(
-                    leading: const Icon(Icons.logout, color: Colors.red),
-                    title: Text(lang.getString('logout'),
-                        style: const TextStyle(
-                            color: Colors.red, fontWeight: FontWeight.bold)),
-                    onTap: () {
-                      auth.logout();
-                      Navigator.pushReplacementNamed(context, AppRoutes.login);
-                    },
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
+                  Container(
+                    decoration: BoxDecoration(
+                      color: Colors.grey.withValues(alpha: 0.05),
+                      borderRadius: BorderRadius.circular(AppTheme.cardRadius),
                     ),
-                    tileColor: Colors.red.withValues(alpha: 0.1),
+                    child: Column(
+                      children: [
+                        _buildListTile(Icons.restart_alt_rounded, lang.getString('reset_progress'), () {
+                          progress.resetProgress();
+                        }, isDense: true),
+                        _buildListTile(Icons.translate_rounded, lang.getString('reset_language'), () {
+                          lang.resetLanguage();
+                        }, isDense: true),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 40),
+                  SizedBox(
+                    width: double.infinity,
+                    child: TextButton.icon(
+                      onPressed: () {
+                        auth.logout();
+                        Navigator.pushNamedAndRemoveUntil(context, AppRoutes.login, (route) => false);
+                      },
+                      icon: const Icon(Icons.logout_rounded, color: Colors.red),
+                      label: Text(
+                        lang.getString('logout'),
+                        style: const TextStyle(
+                          color: Colors.red,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
+                      ),
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        backgroundColor: Colors.red.withValues(alpha: 0.05),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+                        ),
+                      ),
+                    ),
                   ),
                 ],
               ),
             ),
           ),
+
           bottomNavigationBar: const BottomNavBar(currentIndex: 2),
         );
       },
@@ -145,65 +176,15 @@ class ProfileScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildWeeklyActivityChart(List<double> activity) {
-    final days = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+  Widget _buildStatCard(String title, String value, IconData icon, Color color) {
     return Container(
-      padding: const EdgeInsets.all(20),
+      padding: const EdgeInsets.symmetric(vertical: 20),
       decoration: BoxDecoration(
         color: AppTheme.surfaceColor,
-        borderRadius: BorderRadius.circular(20),
+        borderRadius: BorderRadius.circular(AppTheme.cardRadius),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: List.generate(7, (index) {
-          final barHeight = 100 * activity[index];
-          return Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Container(
-                width: 16,
-                height: barHeight == 0 ? 4 : barHeight,
-                decoration: BoxDecoration(
-                  color: activity[index] > 0
-                      ? AppTheme.primaryColor
-                      : AppTheme.backgroundColor,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                days[index],
-                style: const TextStyle(
-                  color: AppTheme.textSecondaryColor,
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ],
-          );
-        }),
-      ),
-    );
-  }
-
-  Widget _buildStatCard(String title, String value, IconData icon) {
-    return Container(
-      width: 100,
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: AppTheme.surfaceColor,
-        borderRadius: BorderRadius.circular(20),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.05),
+            color: Colors.black.withValues(alpha: 0.02),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
@@ -211,22 +192,30 @@ class ProfileScreen extends StatelessWidget {
       ),
       child: Column(
         children: [
-          Icon(icon, color: AppTheme.primaryColor, size: 28),
-          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.1),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, color: color, size: 24),
+          ),
+          const SizedBox(height: 12),
           Text(
             value,
             style: const TextStyle(
-              fontSize: 16,
+              fontSize: 18,
               fontWeight: FontWeight.bold,
               color: AppTheme.textPrimaryColor,
             ),
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 2),
           Text(
             title,
             style: const TextStyle(
               fontSize: 12,
               color: AppTheme.textSecondaryColor,
+              fontWeight: FontWeight.w500,
             ),
           ),
         ],
@@ -234,33 +223,32 @@ class ProfileScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildListTile(IconData icon, String title, VoidCallback onTap) {
-    return Container(
-      margin: const EdgeInsets.only(bottom: 12),
-      decoration: BoxDecoration(
-        color: AppTheme.surfaceColor,
-        borderRadius: BorderRadius.circular(16),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.02),
-            blurRadius: 5,
-            offset: const Offset(0, 2),
-          ),
-        ],
-      ),
-      child: ListTile(
-        leading: Icon(icon, color: AppTheme.textSecondaryColor),
-        title: Text(
-          title,
-          style: const TextStyle(
-            color: AppTheme.textPrimaryColor,
-            fontWeight: FontWeight.bold,
-          ),
+  Widget _buildListTile(IconData icon, String title, VoidCallback onTap, {bool isDense = false}) {
+    return ListTile(
+      leading: Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: AppTheme.textSecondaryColor.withValues(alpha: 0.05),
+          borderRadius: BorderRadius.circular(8),
         ),
-        trailing: const Icon(Icons.arrow_forward_ios,
-            size: 16, color: AppTheme.textSecondaryColor),
-        onTap: onTap,
+        child: Icon(icon, color: AppTheme.textPrimaryColor, size: 20),
+      ),
+      title: Text(
+        title,
+        style: TextStyle(
+          color: AppTheme.textPrimaryColor,
+          fontWeight: isDense ? FontWeight.w500 : FontWeight.w600,
+          fontSize: isDense ? 14 : 16,
+        ),
+      ),
+      trailing: const Icon(Icons.arrow_forward_ios_rounded,
+          size: 14, color: AppTheme.textSecondaryColor),
+      onTap: onTap,
+      contentPadding: EdgeInsets.symmetric(
+        horizontal: 16, 
+        vertical: isDense ? 0 : 4
       ),
     );
   }
 }
+

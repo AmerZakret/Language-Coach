@@ -25,89 +25,126 @@ class LessonCard extends StatelessWidget {
           },
           child: Container(
             margin: const EdgeInsets.only(bottom: 16),
-            padding: const EdgeInsets.all(16),
+            padding: const EdgeInsets.all(20),
             decoration: BoxDecoration(
               color: AppTheme.surfaceColor,
-              borderRadius: BorderRadius.circular(20),
+              borderRadius: BorderRadius.circular(AppTheme.cardRadius),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withValues(alpha: 0.05),
-                  blurRadius: 10,
+                  color: Colors.black.withValues(alpha: 0.04),
+                  blurRadius: 12,
                   offset: const Offset(0, 4),
                 ),
               ],
-              border: isCompleted ? Border.all(color: AppTheme.secondaryColor.withValues(alpha: 0.5), width: 2) : null,
+              border: isCompleted 
+                ? Border.all(color: AppTheme.secondaryColor.withValues(alpha: 0.3), width: 1.5) 
+                : null,
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
                     Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                       decoration: BoxDecoration(
                         color: AppTheme.primaryColor.withValues(alpha: 0.1),
-                        borderRadius: BorderRadius.circular(20),
+                        borderRadius: BorderRadius.circular(8),
                       ),
                       child: Text(
-                        lang.getString(lesson.level), // e.g. "Beginner" -> "Başlangıç"
+                        lang.getString(lesson.level),
                         style: const TextStyle(
                           color: AppTheme.primaryColor,
-                          fontSize: 12,
+                          fontSize: 10,
                           fontWeight: FontWeight.bold,
                         ),
                       ),
                     ),
-                    Row(
-                      children: [
-                        if (isCompleted)
-                          const Padding(
-                            padding: EdgeInsets.only(right: 8.0),
-                            child: Icon(Icons.check_circle, color: AppTheme.secondaryColor, size: 16),
-                          ),
-                        Text(
-                          '${lesson.durationMinutes} ${lang.getString('min')}',
-                          style: const TextStyle(
-                            color: AppTheme.textSecondaryColor,
-                            fontSize: 12,
-                            fontWeight: FontWeight.bold,
-                          ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: Colors.orange.withValues(alpha: 0.1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        lesson.type.toUpperCase(),
+                        style: const TextStyle(
+                          color: Colors.orange,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
                         ),
-                      ],
+                      ),
                     ),
+                    const Spacer(),
+                    if (isCompleted)
+                      const Icon(Icons.check_circle, color: AppTheme.secondaryColor, size: 20)
+                    else
+                      Text(
+                        '${lesson.durationMinutes} ${lang.getString('min')}',
+                        style: const TextStyle(
+                          color: AppTheme.textSecondaryColor,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                   ],
                 ),
-                const SizedBox(height: 12),
+                const SizedBox(height: 16),
                 Text(
                   lesson.title,
                   style: const TextStyle(
                     color: AppTheme.textPrimaryColor,
-                    fontSize: 18,
+                    fontSize: 20,
                     fontWeight: FontWeight.bold,
+                    letterSpacing: -0.5,
                   ),
                 ),
-                const SizedBox(height: 8),
+                const SizedBox(height: 6),
                 Text(
                   lesson.description,
                   style: const TextStyle(
                     color: AppTheme.textSecondaryColor,
                     fontSize: 14,
+                    height: 1.4,
                   ),
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
-                const SizedBox(height: 16),
-                LinearProgressIndicator(
-                  value: displayProgress,
-                  backgroundColor: AppTheme.backgroundColor,
-                  valueColor: const AlwaysStoppedAnimation<Color>(AppTheme.secondaryColor),
-                  minHeight: 8,
-                  borderRadius: BorderRadius.circular(4),
+                const SizedBox(height: 20),
+                Stack(
+                  children: [
+                    Container(
+                      height: 8,
+                      decoration: BoxDecoration(
+                        color: AppTheme.backgroundColor,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                    ),
+                    FractionallySizedBox(
+                      widthFactor: displayProgress,
+                      child: Container(
+                        height: 8,
+                        decoration: BoxDecoration(
+                          color: AppTheme.secondaryColor,
+                          borderRadius: BorderRadius.circular(4),
+                          boxShadow: [
+                            if (displayProgress > 0)
+                              BoxShadow(
+                                color: AppTheme.secondaryColor.withValues(alpha: 0.3),
+                                blurRadius: 4,
+                                offset: const Offset(0, 2),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
           ),
+
         );
       },
     );

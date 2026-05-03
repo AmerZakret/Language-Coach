@@ -6,6 +6,8 @@ import '../../widgets/custom_button.dart';
 import '../../services/progress_service.dart';
 import '../../core/localization/language_service.dart';
 
+import '../../services/lesson_api_service.dart';
+
 class LessonScreen extends StatefulWidget {
   const LessonScreen({super.key});
 
@@ -18,6 +20,8 @@ class _LessonScreenState extends State<LessonScreen> {
   int score = 0;
   String? selectedAnswer;
   Lesson? lesson;
+  bool _isLoading = false;
+  final LessonApiService _apiService = LessonApiService();
 
   @override
   void didChangeDependencies() {
@@ -26,6 +30,28 @@ class _LessonScreenState extends State<LessonScreen> {
       final args = ModalRoute.of(context)?.settings.arguments;
       if (args is Lesson) {
         lesson = args;
+        // If the lesson object from list doesn't have questions, fetch the full details
+        if (lesson!.questions.isEmpty) {
+          _fetchFullLesson();
+        }
+      }
+    }
+  }
+
+  Future<void> _fetchFullLesson() async {
+    if (lesson == null) return;
+    setState(() => _isLoading = true);
+    try {
+      final fullLesson = await _apiService.fetchLessonById(lesson!.id);
+      if (mounted) {
+        setState(() {
+          lesson = fullLesson;
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isLoading = false);
       }
     }
   }
@@ -64,7 +90,7 @@ class _LessonScreenState extends State<LessonScreen> {
       builder: (context, child) {
         final lang = LanguageService();
         
-        if (lesson == null) {
+        if (_isLoading || lesson == null) {
           return Scaffold(
             appBar: AppBar(
               leading: IconButton(
@@ -72,7 +98,9 @@ class _LessonScreenState extends State<LessonScreen> {
                 onPressed: () => Navigator.pop(context),
               ),
             ),
-            body: Center(child: Text(lang.getString('error_loading'))),
+            body: const Center(
+              child: CircularProgressIndicator(color: AppTheme.primaryColor),
+            ),
           );
         }
 
@@ -90,6 +118,8 @@ class _LessonScreenState extends State<LessonScreen> {
 
         final currentQuestion = lesson!.questions[currentQuestionIndex];
         final progress = (currentQuestionIndex + 1) / lesson!.questions.length;
+        final totalQuestions = lesson!.questions.length;
+        final currentNumber = currentQuestionIndex + 1;
 
         return Scaffold(
           appBar: AppBar(
@@ -97,65 +127,87 @@ class _LessonScreenState extends State<LessonScreen> {
               icon: const Icon(Icons.close),
               onPressed: () => Navigator.pop(context),
             ),
-            title: LinearProgressIndicator(
-              value: progress,
-              backgroundColor: AppTheme.backgroundColor,
-              valueColor: const AlwaysStoppedAnimation<Color>(AppTheme.secondaryColor),
-              minHeight: 12,
-              borderRadius: BorderRadius.circular(6),
+            title: ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: LinearProgressIndicator(
+                value: progress,
+                backgroundColor: AppTheme.primaryColor.withValues(alpha: 0.1),
+                valueColor: const AlwaysStoppedAnimation<Color>(AppTheme.secondaryColor),
+                minHeight: 12,
+              ),
             ),
+            actions: [
+              Padding(
+                padding: const EdgeInsets.only(right: 16.0),
+                child: Center(
+                  child: Text(
+                    '$currentNumber/$totalQuestions',
+                    style: const TextStyle(
+                      color: AppTheme.textSecondaryColor,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ),
           body: SafeArea(
             child: Padding(
-              padding: const EdgeInsets.all(24.0),
+              padding: const EdgeInsets.all(AppTheme.standardPadding),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  const SizedBox(height: 32),
+                  const SizedBox(height: 16),
                   Text(
                     lang.getString('translate_sentence'),
                     style: const TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
+                      fontSize: 22,
+                      fontWeight: FontWeight.w800,
                       color: AppTheme.textPrimaryColor,
+                      letterSpacing: -0.5,
                     ),
                   ),
-                  const SizedBox(height: 32),
+                  const SizedBox(height: 24),
                   Container(
-                    padding: const EdgeInsets.all(24),
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 40),
                     decoration: BoxDecoration(
                       color: AppTheme.surfaceColor,
-                      borderRadius: BorderRadius.circular(20),
+                      borderRadius: BorderRadius.circular(AppTheme.cardRadius),
                       boxShadow: [
                         BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.05),
-                          blurRadius: 10,
-                          offset: const Offset(0, 4),
+                          color: Colors.black.withValues(alpha: 0.04),
+                          blurRadius: 15,
+                          offset: const Offset(0, 8),
                         ),
                       ],
                     ),
                     child: Text(
                       currentQuestion.text,
                       style: const TextStyle(
-                        fontSize: 20,
-                        color: AppTheme.textPrimaryColor,
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                        color: AppTheme.primaryColor,
                       ),
                       textAlign: TextAlign.center,
                     ),
                   ),
-                  const SizedBox(height: 48),
+                  const SizedBox(height: 40),
                   Expanded(
                     child: ListView.separated(
+                      physics: const BouncingScrollPhysics(),
                       itemCount: currentQuestion.options.length,
-                      separatorBuilder: (context, index) => const SizedBox(height: 16),
+                      separatorBuilder: (context, index) => const SizedBox(height: 12),
                       itemBuilder: (context, index) {
                         final option = currentQuestion.options[index];
                         return _buildOption(option);
                       },
                     ),
                   ),
+                  const SizedBox(height: 16),
                   CustomButton(
-                    text: currentQuestionIndex == lesson!.questions.length - 1 
+                    text: currentQuestionIndex == totalQuestions - 1 
                         ? lang.getString('finish') 
                         : lang.getString('next'),
                     onPressed: selectedAnswer != null ? _nextStep : () {},
@@ -172,30 +224,46 @@ class _LessonScreenState extends State<LessonScreen> {
   Widget _buildOption(String text) {
     final isSelected = selectedAnswer == text;
     
-    return InkWell(
-      onTap: () {
-        setState(() {
-          selectedAnswer = text;
-        });
-      },
-      child: Container(
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: isSelected ? AppTheme.primaryColor.withValues(alpha: 0.1) : Colors.transparent,
-          border: Border.all(
-            color: isSelected 
-                ? AppTheme.primaryColor 
-                : AppTheme.textSecondaryColor.withValues(alpha: 0.2), 
-            width: 2,
-          ),
-          borderRadius: BorderRadius.circular(16),
-        ),
-        child: Text(
-          text,
-          style: TextStyle(
-            fontSize: 16,
-            color: isSelected ? AppTheme.primaryColor : AppTheme.textPrimaryColor,
-            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 200),
+      child: Material(
+        color: isSelected ? AppTheme.primaryColor : AppTheme.surfaceColor,
+        borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+        elevation: isSelected ? 4 : 0,
+        child: InkWell(
+          onTap: () {
+            setState(() {
+              selectedAnswer = text;
+            });
+          },
+          borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+          child: Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              border: Border.all(
+                color: isSelected 
+                    ? AppTheme.primaryColor 
+                    : AppTheme.textSecondaryColor.withValues(alpha: 0.1), 
+                width: 2,
+              ),
+              borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
+            ),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    text,
+                    style: TextStyle(
+                      fontSize: 16,
+                      color: isSelected ? Colors.white : AppTheme.textPrimaryColor,
+                      fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                    ),
+                  ),
+                ),
+                if (isSelected)
+                  const Icon(Icons.check_circle_outline, color: Colors.white, size: 20),
+              ],
+            ),
           ),
         ),
       ),

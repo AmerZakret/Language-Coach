@@ -8,6 +8,14 @@ class Question {
     required this.options,
     required this.correctAnswer,
   });
+
+  factory Question.fromJson(Map<String, dynamic> json) {
+    return Question(
+      text: json['text'] ?? '',
+      options: List<String>.from(json['options'] ?? []),
+      correctAnswer: json['correctAnswer'] ?? '',
+    );
+  }
 }
 
 class Lesson {
@@ -32,4 +40,21 @@ class Lesson {
     required this.questions,
     this.progress = 0.0,
   });
+
+  factory Lesson.fromJson(Map<String, dynamic> json) {
+    return Lesson(
+      id: json['id']?.toString() ?? '',
+      title: json['title'] ?? '',
+      description: json['description'] ?? '',
+      level: json['level'] ?? '',
+      type: json['type'] ?? '',
+      xpReward: json['xpReward'] ?? 0,
+      durationMinutes: json['durationMinutes'] ?? 0,
+      questions: (json['questions'] as List?)
+              ?.map((q) => Question.fromJson(q))
+              .toList() ??
+          [],
+      progress: (json['progress']?.toDouble()) ?? 0.0,
+    );
+  }
 }
