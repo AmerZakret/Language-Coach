@@ -1,19 +1,19 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document, Schema as MongooseSchema } from 'mongoose';
+import { Document } from 'mongoose';
 
 @Schema({ timestamps: true })
 export class ChatMessage extends Document {
-  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
+  @Prop({ required: true })
   userId: string;
 
-  @Prop({ required: true, enum: ['user', 'assistant'] })
-  role: string;
+  @Prop({ required: true })
+  userMessage: string;
 
   @Prop({ required: true })
-  content: string;
+  assistantResponse: string;
 
-  @Prop({ type: [Object], default: [] })
-  corrections: any[];
+  @Prop({ required: true })
+  language: string;
 }
 
 export const ChatMessageSchema = SchemaFactory.createForClass(ChatMessage);
