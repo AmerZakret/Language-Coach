@@ -112,7 +112,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
             ],
           ),
           body: Container(
-            decoration: BoxDecoration(gradient: AppTheme.backgroundGradient),
+            decoration: const BoxDecoration(gradient: AppTheme.backgroundGradient),
             child: SafeArea(
             child: SingleChildScrollView(
               physics: const BouncingScrollPhysics(),

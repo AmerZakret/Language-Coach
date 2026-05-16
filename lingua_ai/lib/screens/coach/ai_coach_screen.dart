@@ -189,7 +189,7 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
                             children: [
                               Container(
                                 padding: const EdgeInsets.all(24),
-                                decoration: BoxDecoration(
+                                decoration: const BoxDecoration(
                                   color: AppTheme.primaryLight,
                                   shape: BoxShape.circle,
                                 ),

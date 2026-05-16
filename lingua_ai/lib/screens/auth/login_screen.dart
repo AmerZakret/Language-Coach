@@ -95,7 +95,7 @@ class _LoginScreenState extends State<LoginScreen> {
         final lang = LanguageService();
         return Scaffold(
           body: Container(
-            decoration: BoxDecoration(
+            decoration: const BoxDecoration(
               gradient: AppTheme.backgroundGradient,
             ),
             child: SafeArea(
