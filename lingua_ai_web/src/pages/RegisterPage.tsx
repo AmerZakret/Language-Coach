@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { authApi } from '../services/authApi';
-import { useAuth } from '../contexts/AuthContext';
-import { Bot } from 'lucide-react';
+import { register as apiRegister } from '../api/authApi';
+import { useAuth } from '../context/AuthContext';
+// Removed unused Bot import
+import { Button } from '../components/common/Button';
 import './Auth.css';
 
 export const RegisterPage: React.FC = () => {
@@ -21,10 +22,8 @@ export const RegisterPage: React.FC = () => {
     setLoading(true);
     
     try {
-      const data = await authApi.register(email, password, name);
-      // Fallback for mock backend
-      const fallbackUser = data.user || { id: 'user-1', email, name };
-      login(data.access_token || data.token || 'dummy-token', fallbackUser);
+      const data = await apiRegister(name, email, password);
+      login(data.user, data.access_token);
       navigate('/');
     } catch (err: any) {
       let errorMessage = 'Registration failed. Please try again.';
@@ -32,8 +31,6 @@ export const RegisterPage: React.FC = () => {
         errorMessage = Array.isArray(err.response.data.message) 
           ? err.response.data.message.join(', ') 
           : err.response.data.message;
-      } else if (err.message) {
-        errorMessage = err.message; // e.g. Network Error
       }
       setError(errorMessage);
     } finally {
@@ -45,21 +42,24 @@ export const RegisterPage: React.FC = () => {
     <div className="auth-container">
       <div className="auth-card glass-panel animate-fade-in">
         <div className="auth-header">
-          <Bot size={48} color="var(--primary-color)" />
+          <div className="logo-container">
+            <img src="/assets/images/logo.png" alt="LinguaAI Logo" className="auth-logo-img" />
+          </div>
           <h2>Create Account</h2>
-          <p>Start your language learning journey.</p>
+          <p>Join thousands of students learning languages.</p>
         </div>
         
         {error && <div className="auth-error">{error}</div>}
         
         <form onSubmit={handleSubmit} className="auth-form">
           <div className="form-group">
-            <label>Name</label>
+            <label>Full Name</label>
             <input 
               type="text" 
               value={name} 
               onChange={(e) => setName(e.target.value)} 
               required 
+              placeholder="Amer Zakret"
             />
           </div>
           <div className="form-group">
@@ -69,6 +69,7 @@ export const RegisterPage: React.FC = () => {
               value={email} 
               onChange={(e) => setEmail(e.target.value)} 
               required 
+              placeholder="amer@example.com"
             />
           </div>
           <div className="form-group">
@@ -78,11 +79,12 @@ export const RegisterPage: React.FC = () => {
               value={password} 
               onChange={(e) => setPassword(e.target.value)} 
               required 
+              placeholder="••••••••"
             />
           </div>
-          <button type="submit" className="primary full-width" disabled={loading}>
-            {loading ? 'Registering...' : 'Register'}
-          </button>
+          <Button type="submit" isLoading={loading} className="full-width">
+            Register
+          </Button>
         </form>
         
         <div className="auth-footer">

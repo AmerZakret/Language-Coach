@@ -17,16 +17,35 @@ interface ParsedAIResponse {
   correction: string;
 }
 
+const LANGUAGE_NAMES: Record<string, string> = {
+  en: 'English',
+  de: 'German',
+  es: 'Spanish',
+  fr: 'French',
+  ar: 'Arabic',
+  english: 'English',
+  german: 'German',
+  spanish: 'Spanish',
+  french: 'French',
+  arabic: 'Arabic',
+};
+
 @Injectable()
 export class AiCoachService {
   private readonly logger = new Logger(AiCoachService.name);
 
   constructor(
     private configService: ConfigService,
-    @InjectModel(ChatMessage.name) private chatMessageModel: Model<ChatMessage>,
+    @InjectModel(ChatMessage.name)
+    private chatMessageModel: Model<ChatMessage>,
   ) {}
 
-  async sendMessage(userId: string, message: string, language: string) {
+  async sendMessage(
+    userId: string,
+    message: string,
+    language: string,
+    targetLanguage?: string,
+  ) {
     const apiKey = this.configService.get<string>('GEMINI_API_KEY')?.trim();
     const model = (
       this.configService.get<string>('GEMINI_MODEL') || 'gemini-flash-latest'
@@ -44,18 +63,27 @@ export class AiCoachService {
       };
     }
 
-    const systemInstruction = `You are a beginner-friendly English learning coach for Turkish users.
-The user is learning English. 
-Your job is to gently correct grammar mistakes if any, and respond to their message encouragingly.
-If the requested language is 'tr', your explanations should be in Turkish.
-If the requested language is 'en', your explanations should be in English.
+    // Resolve target language name
+    const targetLangName =
+      LANGUAGE_NAMES[targetLanguage?.toLowerCase() || ''] ||
+      targetLanguage ||
+      'English';
+    const interfaceLangName = language === 'tr' ? 'Turkish' : 'English';
+
+    const systemInstruction = `You are a friendly language learning coach.
+The user is learning ${targetLangName}.
+Your job is to:
+1. Gently correct any ${targetLangName} grammar or vocabulary mistakes.
+2. Respond to their message encouragingly.
+3. Provide all explanations and feedback in ${interfaceLangName}.
+4. The corrected sentence must be in ${targetLangName}.
 
 Return a JSON object with two fields:
-- "reply": Your conversational response and explanation.
-- "correction": The corrected version of their sentence (if perfect, just repeat it).
+- "reply": Your conversational response, feedback, and explanation in ${interfaceLangName}.
+- "correction": The corrected version of the user's sentence in ${targetLangName} (if already perfect, just repeat it).
 Do not include markdown code block formatting like \`\`\`json. Return pure JSON.`;
 
-    const prompt = `User Message: "${message}"\nRequested Language: "${language}"\n\nPlease evaluate and respond in JSON format.`;
+    const prompt = `User Message: "${message}"\nTarget Language: "${targetLangName}"\nInterface Language: "${interfaceLangName}"\n\nPlease evaluate and respond in JSON format.`;
 
     try {
       const response = await fetch(
@@ -106,13 +134,21 @@ Do not include markdown code block formatting like \`\`\`json. Return pure JSON.
         };
       }
 
-      const chatMessage = new this.chatMessageModel({
+      // 1. Save user message
+      await new this.chatMessageModel({
         userId,
-        userMessage: message,
-        assistantResponse: parsedResponse.reply,
-        language,
-      });
-      await chatMessage.save();
+        targetLanguage: targetLangName,
+        role: 'user',
+        message,
+      }).save();
+
+      // 2. Save assistant response
+      await new this.chatMessageModel({
+        userId,
+        targetLanguage: targetLangName,
+        role: 'assistant',
+        message: parsedResponse.reply,
+      }).save();
 
       return {
         reply: parsedResponse.reply,
@@ -129,5 +165,29 @@ Do not include markdown code block formatting like \`\`\`json. Return pure JSON.
         saved: false,
       };
     }
+  }
+
+  async getHistory(userId: string, targetLanguage: string) {
+    const targetLangName =
+      LANGUAGE_NAMES[targetLanguage?.toLowerCase() || ''] ||
+      targetLanguage ||
+      'English';
+
+    return this.chatMessageModel
+      .find({ userId, targetLanguage: targetLangName })
+      .sort({ createdAt: 1 })
+      .limit(50)
+      .exec();
+  }
+
+  async clearHistory(userId: string, targetLanguage: string) {
+    const targetLangName =
+      LANGUAGE_NAMES[targetLanguage?.toLowerCase() || ''] ||
+      targetLanguage ||
+      'English';
+
+    return this.chatMessageModel
+      .deleteMany({ userId, targetLanguage: targetLangName })
+      .exec();
   }
 }

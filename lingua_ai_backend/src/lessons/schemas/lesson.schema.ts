@@ -7,17 +7,26 @@ class Question {
   id: string;
 
   @Prop({ required: true })
-  text: string;
+  question: string;
 
   @Prop({ type: [String], required: true })
   options: string[];
 
   @Prop({ required: true })
   correctAnswer: string;
+
+  @Prop({ required: true })
+  type: string;
 }
 
 @Schema({ timestamps: true })
 export class Lesson extends Document {
+  @Prop({ required: true, unique: true })
+  id: string;
+
+  @Prop({ required: true })
+  targetLanguage: string;
+
   @Prop({ required: true })
   title: string;
 
@@ -25,13 +34,19 @@ export class Lesson extends Document {
   description: string;
 
   @Prop({ required: true })
+  category: string;
+
+  @Prop({ required: true })
+  difficulty: string;
+
+  @Prop({ required: true })
   level: string;
 
   @Prop({ required: true })
-  type: string;
+  order: number;
 
   @Prop({ required: true })
-  durationMinutes: number;
+  duration: number;
 
   @Prop({ required: true })
   xpReward: number;

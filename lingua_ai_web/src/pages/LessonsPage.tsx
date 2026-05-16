@@ -1,79 +1,133 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState, useEffect } from 'react';
+import { useLanguage } from '../context/LanguageContext';
+import { useTargetLanguage } from '../context/TargetLanguageContext';
+import { useProgress } from '../context/ProgressContext';
+import { getLessons } from '../api/lessonsApi';
+import { fallbackLessons } from '../data/fallbackLessons';
+import type { Lesson } from '../types/lesson';
+import { LessonCard } from '../components/cards/LessonCard';
 import { useNavigate } from 'react-router-dom';
-import { lessonsApi, type Lesson } from '../services/lessonsApi';
-import { useLanguage } from '../contexts/LanguageContext';
-import { Play, Clock, Star, BookOpen } from 'lucide-react';
 import './Lessons.css';
 
 export const LessonsPage: React.FC = () => {
   const { t } = useLanguage();
-  const navigate = useNavigate();
+  const { targetLanguage } = useTargetLanguage();
+  const { progress } = useProgress();
   const [lessons, setLessons] = useState<Lesson[]>([]);
   const [loading, setLoading] = useState(true);
+  const navigate = useNavigate();
 
   useEffect(() => {
-    const fetchLessons = async () => {
+    const loadLessons = async () => {
+      setLoading(true);
       try {
-        const data = await lessonsApi.getLessons();
-        setLessons(data || []);
-      } catch (error) {
-        console.error("Failed to fetch lessons", error);
+        const data = await getLessons(targetLanguage);
+        setLessons(data);
+      } catch (e) {
+        console.error('Failed to load lessons, using fallback', e);
+        setLessons(fallbackLessons.filter(l => l.targetLanguage === targetLanguage));
       } finally {
         setLoading(false);
       }
     };
-    fetchLessons();
-  }, []);
 
-  if (loading) return <div className="loading">Loading lessons...</div>;
+    loadLessons();
+  }, [targetLanguage]);
+
+  // Group lessons by level
+  const groupedLessons = lessons.reduce((acc, lesson) => {
+    const level = lesson.level || 'Beginner'; // Fallback to Beginner if no level
+    if (!acc[level]) {
+      acc[level] = [];
+    }
+    acc[level].push(lesson);
+    return acc;
+  }, {} as Record<string, Lesson[]>);
+
+  // Define section configuration
+  const sections = [
+    { level: 'Beginner', title: 'Beginner', subtitle: 'Basic foundations' },
+    { level: 'Elementary', title: 'Elementary', subtitle: 'Build core grammar' },
+    { level: 'Pre-Intermediate', title: 'Pre-Intermediate', subtitle: 'Improve communication' },
+  ];
+
+  // Logic for unlocking levels based on progress
+  const isLevelCompleted = (level: string) => {
+    const levelLessons = groupedLessons[level] || [];
+    if (levelLessons.length === 0) return false;
+    return levelLessons.every((l) => progress.completedLessonIds.includes(l.id));
+  };
+
+  const isSectionLocked = (level: string) => {
+    if (level === 'Beginner') return false; // Always unlocked
+    if (level === 'Elementary') return !isLevelCompleted('Beginner');
+    if (level === 'Pre-Intermediate') return !isLevelCompleted('Elementary');
+    return false;
+  };
 
   return (
-    <div className="lessons-page">
+    <div className="lessons-page animate-fade-in">
       <div className="page-header">
-        <h1 className="page-title">{t('lessons')}</h1>
-        <p className="page-subtitle">Pick up where you left off or explore new topics.</p>
+        <h1 className="page-title">{t('available_lessons')}</h1>
+        <p className="page-subtitle">
+          {t('learning')}: <strong>{targetLanguage}</strong>
+        </p>
       </div>
-      
-      <div className="lessons-grid">
-        {lessons.length === 0 ? (
-          <div className="empty-state glass-panel">
-            <BookOpen size={48} color="var(--text-muted)" />
-            <h3>No lessons available</h3>
-            <p>Check back later for new content.</p>
+
+      {loading ? (
+        <div className="loading-container">
+          <div className="spinner"></div>
+        </div>
+      ) : lessons.length === 0 ? (
+        <div className="empty-state-container">
+          <div className="empty-state">
+            <h3>Lessons not available</h3>
+            <p>We are currently adding more content for this language.</p>
           </div>
-        ) : (
-          lessons.map((lesson, index) => (
-            <div 
-              key={lesson.id} 
-              className="lesson-card glass-panel animate-fade-in"
-              style={{ animationDelay: `${index * 0.1}s` }}
-            >
-              <div className="lesson-info">
-                <div className="lesson-type-badge">{lesson.type}</div>
-                <h3>{lesson.title}</h3>
-                <p>{lesson.description}</p>
-                
-                <div className="lesson-stats">
-                  <div className="stat">
-                    <Clock size={16} />
-                    <span>{lesson.durationMinutes} min</span>
+        </div>
+      ) : (
+        <div className="curriculum-container">
+          {sections.map(({ level, title, subtitle }) => {
+            const levelLessons = groupedLessons[level];
+            if (!levelLessons || levelLessons.length === 0) return null;
+            
+            const isLocked = isSectionLocked(level);
+
+            return (
+              <section key={level} className="level-section">
+                <div className="level-header">
+                  <div className="level-header-content">
+                    <h2 className="level-title">{title}</h2>
+                    <p className="level-subtitle">{subtitle}</p>
                   </div>
-                  <div className="stat">
-                    <Star size={16} color="var(--warning)" />
-                    <span>{lesson.xpReward} XP</span>
+                  <div className="level-progress-info">
+                    <div className="level-progress-text">
+                      <strong>{t('progress')}</strong>: {levelLessons.filter(l => progress.completedLessonIds.includes(l.id)).length} / {levelLessons.length} {t('lessons').toLowerCase()}
+                    </div>
+                    <div className="level-progress-bar">
+                      <div 
+                        className="level-progress-fill" 
+                        style={{ width: `${(levelLessons.filter(l => progress.completedLessonIds.includes(l.id)).length / levelLessons.length) * 100}%` }}
+                      ></div>
+                    </div>
                   </div>
                 </div>
-              </div>
-              <button 
-                className="primary icon-btn full-width"
-                onClick={() => navigate(`/lessons/${lesson.id}`)}
-              >
-                <Play size={18} /> Start Lesson
-              </button>
-            </div>
-          ))
-        )}
-      </div>
+                <div className="lessons-grid">
+                  {levelLessons.map((lesson) => (
+                    <LessonCard
+                      key={lesson.id}
+                      lesson={lesson}
+                      isCompleted={progress.completedLessonIds.includes(lesson.id)}
+                      isLocked={isLocked}
+                      onClick={() => navigate(`/lessons/${lesson.id}`)}
+                    />
+                  ))}
+                </div>
+              </section>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 };

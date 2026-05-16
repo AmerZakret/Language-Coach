@@ -1,4 +1,4 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Post, Query } from '@nestjs/common';
 import { AiCoachService } from './ai-coach.service';
 import { ChatDto } from './dto/chat.dto';
 
@@ -12,6 +12,23 @@ export class AiCoachController {
       chatDto.userId,
       chatDto.message,
       chatDto.language,
+      chatDto.targetLanguage,
     );
+  }
+
+  @Get('history')
+  async getHistory(
+    @Query('userId') userId: string,
+    @Query('targetLanguage') targetLanguage: string,
+  ) {
+    return this.aiCoachService.getHistory(userId, targetLanguage);
+  }
+
+  @Delete('clear')
+  async clearHistory(
+    @Query('userId') userId: string,
+    @Query('targetLanguage') targetLanguage: string,
+  ) {
+    return this.aiCoachService.clearHistory(userId, targetLanguage);
   }
 }

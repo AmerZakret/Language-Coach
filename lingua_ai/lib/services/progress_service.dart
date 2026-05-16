@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_service.dart';
 import 'progress_api_service.dart';
+import '../core/localization/target_language_service.dart';
 
 class ProgressService extends ChangeNotifier {
   static final ProgressService _instance = ProgressService._internal();
@@ -22,28 +23,68 @@ class ProgressService extends ChangeNotifier {
   Set<String> get completedLessonIds => _completedLessonIds;
   List<double> get weeklyActivity => _weeklyActivity;
 
+  String get currentLevel => getLevelFromXp(_totalXp);
+
+  static String getLevelFromXp(int xp) {
+    if (xp >= 2200) return 'Advanced';
+    if (xp >= 1400) return 'Upper-Intermediate';
+    if (xp >= 900) return 'Intermediate';
+    if (xp >= 500) return 'Pre-Intermediate';
+    if (xp >= 200) return 'Elementary';
+    return 'Beginner';
+  }
+
+  // Scopes keys by user (email or guest) and target language
+  String _getScopedKey(String suffix) {
+    final auth = AuthService();
+    final targetLang = TargetLanguageService();
+    
+    // Identity part
+    String userPart = 'guest';
+    if (auth.isLoggedIn && auth.currentUserEmail.isNotEmpty) {
+      userPart = auth.currentUserEmail.replaceAll('.', '_').replaceAll('@', '_');
+    }
+    
+    // Language part
+    String langPart = targetLang.currentLanguage;
+    
+    return 'progress_${userPart}_${langPart}_$suffix';
+  }
+
   Future<void> init() async {
     _prefs = await SharedPreferences.getInstance();
+    await reloadProgress();
+  }
 
-    // Load local fallback data
-    _totalXp = _prefs.getInt('totalXp') ?? 0;
-    _streak = _prefs.getInt('streak') ?? 0;
+  // Resets in-memory state and reloads from SharedPreferences for current user/language
+  Future<void> reloadProgress() async {
+    // 1. Reset in-memory state
+    _totalXp = 0;
+    _streak = 0;
+    _completedLessonIds = {};
+    _weeklyActivity = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
 
-    final savedIds = _prefs.getStringList('completedLessonIds');
+    // 2. Load from scoped keys
+    _totalXp = _prefs.getInt(_getScopedKey('totalXp')) ?? 0;
+    _streak = _prefs.getInt(_getScopedKey('streak')) ?? 0;
+
+    final savedIds = _prefs.getStringList(_getScopedKey('completedLessonIds'));
     if (savedIds != null) {
       _completedLessonIds = savedIds.toSet();
     }
 
-    final savedActivity = _prefs.getStringList('weeklyActivity');
+    final savedActivity = _prefs.getStringList(_getScopedKey('weeklyActivity'));
     if (savedActivity != null) {
       _weeklyActivity =
           savedActivity.map((e) => double.tryParse(e) ?? 0.0).toList();
     } else {
+      // Default placeholder activity if new user
       _weeklyActivity = [0.2, 0.5, 0.8, 0.4, 0.9, 0.3, 0.0];
     }
 
-    // If logged in, try to sync with backend
-    if (AuthService().isLoggedIn) {
+    // 3. If logged in (not guest), try to sync with backend
+    final auth = AuthService();
+    if (auth.isLoggedIn && !auth.isGuest) {
       syncWithBackend();
     }
 
@@ -52,15 +93,22 @@ class ProgressService extends ChangeNotifier {
 
   Future<void> syncWithBackend() async {
     final auth = AuthService();
-    if (!auth.isLoggedIn) return;
+    if (!auth.isLoggedIn || auth.isGuest) return;
 
     try {
       final response = await _apiService.getProgress(auth.currentUserEmail);
       final stats = response['stats'];
 
       if (stats != null) {
-        _totalXp = stats['totalXp'] ?? _totalXp;
-        _streak = stats['streak'] ?? _streak;
+        // Take the HIGHER value so local progress is never lost
+        final backendXp = stats['totalXp'] as int? ?? 0;
+        if (backendXp > _totalXp) {
+          _totalXp = backendXp;
+        }
+        final backendStreak = stats['streak'] as int? ?? 0;
+        if (backendStreak > _streak) {
+          _streak = backendStreak;
+        }
       }
 
       final completed = response['completedLessons'] as List?;
@@ -87,22 +135,14 @@ class ProgressService extends ChangeNotifier {
       _saveLocalData();
       notifyListeners();
 
-      // If logged in, sync to backend
-      if (auth.isLoggedIn) {
+      // If logged in and NOT guest, sync to backend (fire-and-forget)
+      if (auth.isLoggedIn && !auth.isGuest) {
         try {
-          final response = await _apiService.completeLesson(
+          await _apiService.completeLesson(
             auth.currentUserEmail,
             lessonId,
-            100, // Placeholder score
+            100,
           );
-
-          // Update state from backend response if it contains new totals
-          final data = response['data'];
-          if (data != null) {
-            _totalXp = data['newTotalXp'] ?? _totalXp;
-            _saveLocalData();
-            notifyListeners();
-          }
         } catch (e) {
           debugPrint('Backend progress update failed: $e');
         }
@@ -114,13 +154,19 @@ class ProgressService extends ChangeNotifier {
     return _completedLessonIds.contains(lessonId);
   }
 
+  void addXp(int amount) {
+    _totalXp += amount;
+    _saveLocalData();
+    notifyListeners();
+  }
+
   Future<void> _saveLocalData() async {
-    await _prefs.setInt('totalXp', _totalXp);
-    await _prefs.setInt('streak', _streak);
+    await _prefs.setInt(_getScopedKey('totalXp'), _totalXp);
+    await _prefs.setInt(_getScopedKey('streak'), _streak);
     await _prefs.setStringList(
-        'completedLessonIds', _completedLessonIds.toList());
+        _getScopedKey('completedLessonIds'), _completedLessonIds.toList());
     await _prefs.setStringList(
-        'weeklyActivity', _weeklyActivity.map((e) => e.toString()).toList());
+        _getScopedKey('weeklyActivity'), _weeklyActivity.map((e) => e.toString()).toList());
   }
 
   Future<void> resetProgress() async {
@@ -129,10 +175,10 @@ class ProgressService extends ChangeNotifier {
     _completedLessonIds.clear();
     _weeklyActivity = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
 
-    await _prefs.remove('totalXp');
-    await _prefs.remove('streak');
-    await _prefs.remove('completedLessonIds');
-    await _prefs.remove('weeklyActivity');
+    await _prefs.remove(_getScopedKey('totalXp'));
+    await _prefs.remove(_getScopedKey('streak'));
+    await _prefs.remove(_getScopedKey('completedLessonIds'));
+    await _prefs.remove(_getScopedKey('weeklyActivity'));
 
     notifyListeners();
   }

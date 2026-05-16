@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/cupertino.dart';
 import '../../core/theme/app_theme.dart';
-import '../../core/routes/app_routes.dart';
 import '../../widgets/bottom_nav_bar.dart';
-import '../../services/progress_service.dart';
 import '../../core/localization/language_service.dart';
 import '../../services/auth_service.dart';
+import '../../services/progress_service.dart';
+import '../../services/sound_service.dart';
+import '../../core/localization/target_language_service.dart';
+import '../../widgets/target_language_modal.dart';
 
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
@@ -12,243 +15,222 @@ class ProfileScreen extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: Listenable.merge(
-          [ProgressService(), LanguageService(), AuthService()]),
+      listenable: Listenable.merge([
+        LanguageService(),
+        TargetLanguageService(),
+        AuthService(),
+        ProgressService(),
+        SoundService()
+      ]),
       builder: (context, child) {
-        final progress = ProgressService();
         final lang = LanguageService();
+        final targetLang = TargetLanguageService();
         final auth = AuthService();
+        final progress = ProgressService();
+        final sound = SoundService();
 
         return Scaffold(
-          appBar: AppBar(
-            title: Text(lang.getString('profile')),
-            centerTitle: true,
-          ),
-          body: SafeArea(
-            child: SingleChildScrollView(
-              padding: const EdgeInsets.all(AppTheme.standardPadding),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  Container(
-                    padding: const EdgeInsets.all(24),
-                    decoration: BoxDecoration(
-                      color: AppTheme.surfaceColor,
-                      borderRadius: BorderRadius.circular(AppTheme.cardRadius),
-                      boxShadow: [
-                        BoxShadow(
-                          color: Colors.black.withValues(alpha: 0.03),
-                          blurRadius: 10,
-                          offset: const Offset(0, 4),
-                        ),
-                      ],
-                    ),
-                    child: Column(
-                      children: [
-                        CircleAvatar(
-                          radius: 50,
-                          backgroundColor: AppTheme.primaryColor.withValues(alpha: 0.1),
-                          child: const Icon(
-                            Icons.person,
-                            size: 50,
-                            color: AppTheme.primaryColor,
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-                        Text(
-                          auth.isGuest ? lang.getString('guest_user') : auth.currentUserName,
-                          style: const TextStyle(
-                            fontSize: 22,
-                            fontWeight: FontWeight.bold,
-                            color: AppTheme.textPrimaryColor,
-                          ),
-                        ),
-                        if (!auth.isGuest) ...[
-                          const SizedBox(height: 4),
-                          Text(
-                            auth.currentUserEmail,
-                            style: const TextStyle(
-                              fontSize: 14,
-                              color: AppTheme.textSecondaryColor,
-                            ),
-                          ),
-                        ],
-                      ],
-                    ),
+          body: Stack(
+            children: [
+               Positioned(
+                top: -50,
+                left: -50,
+                child: Container(
+                  width: 250,
+                  height: 250,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: AppTheme.primaryColor.withValues(alpha: 0.1),
                   ),
-                  const SizedBox(height: 32),
-                  _buildSectionTitle(lang.getString('learning_stats')),
-                  const SizedBox(height: 16),
-                  Row(
+                ),
+              ),
+              SafeArea(
+                child: SingleChildScrollView(
+                  physics: const BouncingScrollPhysics(),
+                  padding: const EdgeInsets.all(24),
+                  child: Column(
                     children: [
-                      Expanded(
-                        child: _buildStatCard(lang.getString('xp'),
-                            '${progress.totalXp}', Icons.bolt_rounded, Colors.orange),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _buildStatCard(lang.getString('streak'),
-                            '${progress.streak}', Icons.local_fire_department_rounded, Colors.red),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: _buildStatCard(lang.getString('lessons'),
-                            '${progress.completedLessonsCount}', Icons.menu_book_rounded, Colors.blue),
-                      ),
+                      _buildHeader(lang),
+                      const SizedBox(height: 32),
+                      _buildUserCard(auth, targetLang, lang),
+                      const SizedBox(height: 24),
+                      _buildStatsRow(progress, lang),
+                      const SizedBox(height: 32),
+                      _buildSettingsSection(context, lang, sound, targetLang, auth),
                     ],
                   ),
-                  const SizedBox(height: 32),
-                  _buildSectionTitle(lang.getString('settings')),
-                  const SizedBox(height: 16),
-                  _buildListTile(Icons.language_outlined, lang.getString('language_pref'), () {
-                    lang.toggleLanguage();
-                  }),
-                  _buildListTile(Icons.notifications_none_rounded, lang.getString('notifications'), () {}),
-                  _buildListTile(Icons.security_rounded, lang.getString('privacy'), () {}),
-                  
-                  const SizedBox(height: 32),
-                  _buildSectionTitle('Testing Tools'),
-                  const SizedBox(height: 16),
-                  Container(
-                    decoration: BoxDecoration(
-                      color: Colors.grey.withValues(alpha: 0.05),
-                      borderRadius: BorderRadius.circular(AppTheme.cardRadius),
-                    ),
-                    child: Column(
-                      children: [
-                        _buildListTile(Icons.restart_alt_rounded, lang.getString('reset_progress'), () {
-                          progress.resetProgress();
-                        }, isDense: true),
-                        _buildListTile(Icons.translate_rounded, lang.getString('reset_language'), () {
-                          lang.resetLanguage();
-                        }, isDense: true),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 40),
-                  SizedBox(
-                    width: double.infinity,
-                    child: TextButton.icon(
-                      onPressed: () {
-                        auth.logout();
-                        Navigator.pushNamedAndRemoveUntil(context, AppRoutes.login, (route) => false);
-                      },
-                      icon: const Icon(Icons.logout_rounded, color: Colors.red),
-                      label: Text(
-                        lang.getString('logout'),
-                        style: const TextStyle(
-                          color: Colors.red,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 16,
-                        ),
-                      ),
-                      style: TextButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 16),
-                        backgroundColor: Colors.red.withValues(alpha: 0.05),
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(AppTheme.buttonRadius),
-                        ),
-                      ),
-                    ),
-                  ),
-                ],
+                ),
               ),
-            ),
+            ],
           ),
-
-          bottomNavigationBar: const BottomNavBar(currentIndex: 2),
+          bottomNavigationBar: const BottomNavBar(currentIndex: 3),
         );
       },
     );
   }
 
-  Widget _buildSectionTitle(String title) {
-    return Align(
-      alignment: Alignment.centerLeft,
-      child: Text(
-        title,
-        style: const TextStyle(
-          fontSize: 20,
-          fontWeight: FontWeight.bold,
-          color: AppTheme.textPrimaryColor,
-        ),
+  Widget _buildHeader(LanguageService lang) {
+    return Text(
+      lang.getString('profile'),
+      style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: AppTheme.textPrimary),
+    );
+  }
+
+  Widget _buildUserCard(AuthService auth, TargetLanguageService targetLang, LanguageService lang) {
+    return Container(
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        gradient: AppTheme.premiumGradient,
+        borderRadius: BorderRadius.circular(32),
+        boxShadow: [
+          BoxShadow(color: AppTheme.primaryColor.withValues(alpha: 0.3), blurRadius: 20, offset: const Offset(0, 10)),
+        ],
+      ),
+      child: Row(
+        children: [
+          CircleAvatar(
+            radius: 35,
+            backgroundColor: Colors.white24,
+            child: Text(
+              auth.currentUserName.isNotEmpty ? auth.currentUserName[0].toUpperCase() : 'G',
+              style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w900, color: Colors.white),
+            ),
+          ),
+          const SizedBox(width: 20),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  auth.isGuest ? lang.getString('guest_user') : auth.currentUserName,
+                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: Colors.white),
+                ),
+                Text(
+                  auth.currentUserEmail,
+                  style: const TextStyle(fontSize: 14, color: Colors.white70, fontWeight: FontWeight.w500),
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(color: Colors.white24, borderRadius: BorderRadius.circular(12)),
+                  child: Text(
+                    '${targetLang.getLanguageFlag(targetLang.currentLanguage)} ${targetLang.getLanguageName(targetLang.currentLanguage)}',
+                    style: const TextStyle(color: Colors.white, fontSize: 12, fontWeight: FontWeight.w800),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildStatCard(String title, String value, IconData icon, Color color) {
+  Widget _buildStatsRow(ProgressService progress, LanguageService lang) {
+    return Row(
+      children: [
+        Expanded(child: _buildMiniStat(lang.getString('xp'), '${progress.totalXp}', Icons.bolt_rounded, Colors.orange)),
+        const SizedBox(width: 12),
+        Expanded(child: _buildMiniStat(lang.getString('streak'), '${progress.streak}', Icons.local_fire_department_rounded, Colors.redAccent)),
+        const SizedBox(width: 12),
+        Expanded(child: _buildMiniStat(lang.getString('completed'), '${progress.completedLessonsCount}', Icons.check_circle_rounded, Colors.green)),
+      ],
+    );
+  }
+
+  Widget _buildMiniStat(String label, String value, IconData icon, Color color) {
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 20),
+      padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: AppTheme.surfaceColor,
-        borderRadius: BorderRadius.circular(AppTheme.cardRadius),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.02),
-            blurRadius: 10,
-            offset: const Offset(0, 4),
-          ),
-        ],
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: AppTheme.glassShadow,
+        border: Border.all(color: Colors.grey.shade100),
       ),
       child: Column(
         children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.1),
-              shape: BoxShape.circle,
-            ),
-            child: Icon(icon, color: color, size: 24),
-          ),
-          const SizedBox(height: 12),
-          Text(
-            value,
-            style: const TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: AppTheme.textPrimaryColor,
-            ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            title,
-            style: const TextStyle(
-              fontSize: 12,
-              color: AppTheme.textSecondaryColor,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
+          Icon(icon, color: color, size: 24),
+          const SizedBox(height: 8),
+          Text(value, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: AppTheme.textPrimary)),
+          Text(label, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
         ],
       ),
     );
   }
 
-  Widget _buildListTile(IconData icon, String title, VoidCallback onTap, {bool isDense = false}) {
-    return ListTile(
-      leading: Container(
-        padding: const EdgeInsets.all(8),
+  Widget _buildSettingsSection(BuildContext context, LanguageService lang, SoundService sound, TargetLanguageService targetLang, AuthService auth) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        _buildSectionTitle(lang.getString('settings')),
+        const SizedBox(height: 16),
+        _buildSettingTile(
+          icon: Icons.language_rounded,
+          title: lang.getString('interface_language'),
+          trailing: DropdownButton<String>(
+            value: lang.currentLanguage,
+            underline: const SizedBox(),
+            items: const [
+              DropdownMenuItem(value: 'en', child: Text('English')),
+              DropdownMenuItem(value: 'tr', child: Text('Türkçe')),
+            ],
+            onChanged: (v) => v != null ? lang.changeLanguage(v) : null,
+          ),
+        ),
+        _buildSettingTile(
+          icon: sound.isSoundEnabled ? Icons.volume_up_rounded : Icons.volume_off_rounded,
+          title: lang.getString('sound_effects'),
+          trailing: CupertinoSwitch(
+            activeTrackColor: AppTheme.primaryColor,
+            value: sound.isSoundEnabled,
+            onChanged: (v) => sound.toggleSound(),
+          ),
+        ),
+        _buildSettingTile(
+          icon: Icons.translate_rounded,
+          title: lang.getString('target_language'),
+          onTap: () => showModalBottomSheet(
+            context: context,
+            backgroundColor: Colors.transparent,
+            isScrollControlled: true,
+            builder: (context) => const TargetLanguageModal(),
+          ),
+        ),
+        const SizedBox(height: 32),
+        _buildSettingTile(
+          icon: Icons.logout_rounded,
+          title: lang.getString('logout'),
+          color: Colors.redAccent,
+          onTap: () => auth.logout(),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildSectionTitle(String title) {
+    return Text(
+      title.toUpperCase(),
+      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: AppTheme.textSecondary, letterSpacing: 1.5),
+    );
+  }
+
+  Widget _buildSettingTile({required IconData icon, required String title, Widget? trailing, VoidCallback? onTap, Color? color}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Container(
         decoration: BoxDecoration(
-          color: AppTheme.textSecondaryColor.withValues(alpha: 0.05),
-          borderRadius: BorderRadius.circular(8),
+          color: Colors.white,
+          borderRadius: BorderRadius.circular(20),
+          boxShadow: AppTheme.glassShadow,
+          border: Border.all(color: Colors.grey.shade100),
         ),
-        child: Icon(icon, color: AppTheme.textPrimaryColor, size: 20),
-      ),
-      title: Text(
-        title,
-        style: TextStyle(
-          color: AppTheme.textPrimaryColor,
-          fontWeight: isDense ? FontWeight.w500 : FontWeight.w600,
-          fontSize: isDense ? 14 : 16,
+        child: ListTile(
+          onTap: onTap,
+          leading: Icon(icon, color: color ?? AppTheme.primaryColor),
+          title: Text(title, style: TextStyle(fontWeight: FontWeight.w700, color: color ?? AppTheme.textPrimary)),
+          trailing: trailing ?? const Icon(Icons.chevron_right_rounded, color: AppTheme.textSecondary),
         ),
-      ),
-      trailing: const Icon(Icons.arrow_forward_ios_rounded,
-          size: 14, color: AppTheme.textSecondaryColor),
-      onTap: onTap,
-      contentPadding: EdgeInsets.symmetric(
-        horizontal: 16, 
-        vertical: isDense ? 0 : 4
       ),
     );
   }
 }
-

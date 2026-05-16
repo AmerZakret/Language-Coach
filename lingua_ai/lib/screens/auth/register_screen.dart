@@ -27,9 +27,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
-        backgroundColor: Colors.red,
+        backgroundColor: AppTheme.errorColor,
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
     );
   }
@@ -98,15 +98,22 @@ class _RegisterScreenState extends State<RegisterScreen> {
           appBar: AppBar(
             title: Text(lang.getString('create_account')),
             actions: [
-              IconButton(
-                icon: const Icon(Icons.language, color: AppTheme.primaryColor),
-                onPressed: () {
-                  lang.toggleLanguage();
-                },
+              Container(
+                margin: const EdgeInsets.only(right: 8),
+                decoration: BoxDecoration(
+                  color: AppTheme.primaryColor.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: IconButton(
+                  icon: const Icon(Icons.translate_rounded, color: AppTheme.primaryColor, size: 22),
+                  onPressed: () => lang.toggleLanguage(),
+                ),
               ),
             ],
           ),
-          body: SafeArea(
+          body: Container(
+            decoration: BoxDecoration(gradient: AppTheme.backgroundGradient),
+            child: SafeArea(
             child: SingleChildScrollView(
               physics: const BouncingScrollPhysics(),
               child: Padding(
@@ -114,14 +121,31 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    Center(
+                      child: Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          shape: BoxShape.circle,
+                          boxShadow: AppTheme.softShadow,
+                        ),
+                        child: Image.asset(
+                          'assets/images/language-learning.png',
+                          width: 60,
+                          height: 60,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 20),
                     Text(
                       lang.getString('start_journey'),
                       style: const TextStyle(
-                        fontSize: 32,
+                        fontSize: 28,
                         fontWeight: FontWeight.w900,
                         color: AppTheme.textPrimaryColor,
-                        letterSpacing: -1,
+                        letterSpacing: -0.8,
                       ),
+                      textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 8),
                     Text(
@@ -190,6 +214,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                   ],
                 ),
               ),
+            ),
             ),
           ),
         );

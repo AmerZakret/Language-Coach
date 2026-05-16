@@ -5,10 +5,10 @@ import '../core/config/api_config.dart';
 import '../data/dummy_data.dart';
 
 class LessonApiService {
-  Future<List<Lesson>> fetchLessons() async {
+  Future<List<Lesson>> fetchLessons(String targetLanguage) async {
     try {
-      final response = await http
-          .get(Uri.parse('${ApiConfig.baseUrl}${ApiConfig.lessons}'));
+      final response = await http.get(Uri.parse(
+          '${ApiConfig.baseUrl}${ApiConfig.lessons}?targetLanguage=$targetLanguage'));
 
       if (response.statusCode == 200) {
         final List<dynamic> data = json.decode(response.body);
@@ -18,7 +18,7 @@ class LessonApiService {
       }
     } catch (e) {
       // Fallback to dummy data if API fails
-      return DummyData.getLessons();
+      return DummyData.getLessons(targetLanguage);
     }
   }
 
@@ -34,7 +34,7 @@ class LessonApiService {
       }
     } catch (e) {
       // Fallback to dummy data by finding the lesson in the local list
-      final localLessons = DummyData.getLessons();
+      final localLessons = DummyData.getAllLessons();
       return localLessons.firstWhere(
         (l) => l.id == id,
         orElse: () => localLessons[0],

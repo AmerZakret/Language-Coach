@@ -1,0 +1,113 @@
+.lesson-card {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-color);
+  padding: 24px;
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  transition: var(--transition);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+}
+
+.lesson-card:hover {
+  transform: translateY(-4px);
+  border-color: var(--primary-color);
+  box-shadow: var(--shadow-md);
+}
+
+.lesson-card.completed {
+  border-color: var(--secondary-color);
+}
+
+.lesson-card.locked {
+  opacity: 0.6;
+  cursor: not-allowed;
+  background: var(--bg-main);
+}
+
+.lesson-card.locked:hover {
+  transform: none;
+  border-color: var(--border-color);
+  box-shadow: none;
+}
+
+.lesson-badge-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.difficulty-badge {
+  font-size: 0.75rem;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 8px;
+  text-transform: uppercase;
+}
+
+.difficulty-badge.beginner { background: rgba(34, 197, 94, 0.1); color: #22c55e; }
+.difficulty-badge.elementary { background: rgba(59, 130, 246, 0.1); color: #3b82f6; }
+.difficulty-badge.preintermediate { background: rgba(168, 85, 247, 0.1); color: #a855f7; }
+
+.category-badge {
+  font-size: 0.75rem;
+  font-weight: 600;
+  background: rgba(148, 163, 184, 0.1);
+  color: var(--text-secondary);
+  padding: 4px 10px;
+  border-radius: 8px;
+}
+
+.completion-icon {
+  margin-left: auto;
+  color: var(--secondary-color);
+}
+
+.locked-icon {
+  margin-left: auto;
+  color: var(--text-muted);
+}
+
+.lesson-title {
+  font-size: 1.125rem;
+  font-weight: 800;
+  color: var(--text-primary);
+  margin-bottom: 8px;
+}
+
+.lesson-desc {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  margin-bottom: 24px;
+  line-height: 1.5;
+}
+
+.lesson-footer {
+  margin-top: auto;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-color);
+}
+
+.footer-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-muted);
+}
+
+.xp-icon {
+  fill: #f59e0b;
+  color: #f59e0b;
+}
+
+.footer-item.count {
+  margin-left: auto;
+}

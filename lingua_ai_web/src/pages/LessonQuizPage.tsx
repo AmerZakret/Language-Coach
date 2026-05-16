@@ -1,182 +1,189 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { lessonsApi, type Lesson } from '../services/lessonsApi';
-import { progressApi } from '../services/progressApi';
-import { useAuth } from '../contexts/AuthContext';
-import { CheckCircle, ArrowLeft, ArrowRight, RefreshCw, Award } from 'lucide-react';
-import './Lessons.css';
+import { useLanguage } from '../context/LanguageContext';
+import { useTargetLanguage } from '../context/TargetLanguageContext';
+import { useProgress } from '../context/ProgressContext';
+import { getLessonById } from '../api/lessonsApi';
+import { fallbackLessons } from '../data/fallbackLessons';
+import type { Lesson } from '../types/lesson';
+import { Button } from '../components/common/Button';
+import { ArrowLeft, CheckCircle2, XCircle, Trophy } from 'lucide-react';
+import { soundService } from '../utils/soundService';
+import './LessonQuizPage.css';
 
 export const LessonQuizPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { user } = useAuth();
-  
+  const { t } = useLanguage();
+  const { targetLanguage } = useTargetLanguage();
+  const { completeLesson } = useProgress();
+
   const [lesson, setLesson] = useState<Lesson | null>(null);
-  const [loading, setLoading] = useState(true);
-  
-  // Quiz state
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
-  const [selectedAnswers, setSelectedAnswers] = useState<Record<string, string>>({});
-  const [showResults, setShowResults] = useState(false);
-  const [completing, setCompleting] = useState(false);
+  const [selectedOption, setSelectedOption] = useState<string | null>(null);
+  const [isAnswered, setIsAnswered] = useState(false);
+  const [score, setScore] = useState(0);
+  const [isFinished, setIsFinished] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const fetchLesson = async () => {
-      if (id) {
-        try {
-          const data = await lessonsApi.getLessonById(id);
-          setLesson(data);
-        } catch (error) {
-          console.error("Failed to fetch lesson", error);
-        } finally {
-          setLoading(false);
+    const loadLesson = async () => {
+      setLoading(true);
+      try {
+        if (id) {
+          const found = await getLessonById(id);
+          setLesson(found);
         }
+      } catch (e) {
+        console.error('Failed to load lesson by ID, trying fallback', e);
+        const fallback = fallbackLessons.find(l => l.id === id);
+        if (fallback) setLesson(fallback);
+      } finally {
+        setLoading(false);
       }
     };
-    fetchLesson();
-  }, [id]);
+    loadLesson();
+  }, [id, targetLanguage]);
 
-  const handleSelectAnswer = (questionId: string, answer: string) => {
-    if (showResults) return;
-    setSelectedAnswers(prev => ({
-      ...prev,
-      [questionId]: answer
-    }));
-  };
+  if (loading) return <div className="quiz-loading"><div className="spinner"></div></div>;
+  if (!lesson || !lesson.questions || lesson.questions.length === 0) {
+    return (
+      <div className="quiz-error animate-fade-in">
+        <div className="results-card glass-panel">
+          <h2>{t('lesson_unavailable')}</h2>
+          <p>{t('lesson_no_questions')}</p>
+          <Button variant="primary" onClick={() => navigate('/lessons')}>{t('back_to_lessons')}</Button>
+        </div>
+      </div>
+    );
+  }
 
-  const calculateScore = () => {
-    if (!lesson?.questions) return 100;
-    let correct = 0;
-    lesson.questions.forEach(q => {
-      if (selectedAnswers[q.id] === q.correctAnswer) correct++;
-    });
-    return Math.round((correct / lesson.questions.length) * 100);
-  };
+  const questions = lesson.questions;
+  const currentQuestion = questions[currentQuestionIndex];
+  const isCorrect = selectedOption === currentQuestion.correctAnswer;
 
-  const handleSubmit = async () => {
-    if (showResults) return;
-    setShowResults(true);
-    
-    if (!user || !lesson) return;
-    setCompleting(true);
-    try {
-      const score = calculateScore();
-      await progressApi.completeLesson(user.id, lesson.id, score);
-    } catch (error) {
-      console.error("Failed to complete lesson", error);
-    } finally {
-      setCompleting(false);
+  const handleOptionSelect = (option: string) => {
+    if (isAnswered) return;
+    setSelectedOption(option);
+    setIsAnswered(true);
+    if (option === currentQuestion.correctAnswer) {
+      setScore(s => s + 1);
+      soundService.playCorrect();
+    } else {
+      soundService.playWrong();
     }
   };
 
-  if (loading) return <div className="loading">Loading lesson...</div>;
-  if (!lesson) return <div className="error-state">Lesson not found.</div>;
+  const handleNext = () => {
+    if (currentQuestionIndex < questions.length - 1) {
+      setCurrentQuestionIndex(i => i + 1);
+      setSelectedOption(null);
+      setIsAnswered(false);
+    } else {
+      setIsFinished(true);
+      completeLesson(lesson.id, lesson.xpReward);
+    }
+  };
 
-  const hasQuestions = lesson.questions && lesson.questions.length > 0;
-  const currentQuestion = hasQuestions ? lesson.questions![currentQuestionIndex] : null;
-  const isLastQuestion = hasQuestions && currentQuestionIndex === lesson.questions!.length - 1;
-  const score = calculateScore();
+  if (isFinished) {
+    const percentage = (score / questions.length) * 100;
+    return (
+      <div className="quiz-results animate-fade-in">
+        <div className="results-card glass-panel">
+          <div className="results-icon">
+            <Trophy size={64} className="trophy-icon" />
+          </div>
+          <h2 className="results-title">{percentage >= 80 ? t('excellent') : t('good_job')}</h2>
+          <p className="results-subtitle">{lesson.title}</p>
+          
+          <div className="results-stats">
+            <div className="res-stat">
+              <span className="res-stat-val">{score}/{questions.length}</span>
+              <span className="res-stat-label">{t('score')}</span>
+            </div>
+            <div className="res-stat">
+              <span className="res-stat-val">+{lesson.xpReward}</span>
+              <span className="res-stat-label">{t('xp')}</span>
+            </div>
+          </div>
+
+          <Button variant="primary" size="lg" className="full-width" onClick={() => navigate('/lessons')}>
+            {t('continue')}
+          </Button>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="lessons-page animate-fade-in">
-      <button className="back-btn" onClick={() => navigate('/lessons')}>
-        <ArrowLeft size={20} /> Back to Lessons
-      </button>
+    <div className="quiz-page animate-fade-in">
+      <div className="quiz-header">
+        <Button variant="ghost" size="sm" onClick={() => navigate('/lessons')} leftIcon={<ArrowLeft size={16} />}>
+          {t('back')}
+        </Button>
+        <div className="quiz-progress">
+           <span>{t('question')} {currentQuestionIndex + 1} {t('of')} {questions.length}</span>
+           <div className="progress-bar-small">
+              <div className="fill" style={{ width: `${((currentQuestionIndex + 1) / questions.length) * 100}%` }}></div>
+           </div>
+        </div>
+      </div>
 
-      <div className="glass-panel lesson-quiz-container">
-        <div className="lesson-header">
-          <div>
-            <div className="lesson-meta">
-              <span className="badge">{lesson.level}</span>
-              <span className="points">{lesson.xpReward} XP</span>
-            </div>
-            <h1 className="page-title">{lesson.title}</h1>
-            <p className="lesson-desc">{lesson.description}</p>
-          </div>
+      <div className="quiz-content-wrapper">
+        <div className="question-container">
+          <h2 className="question-type">
+            {currentQuestion.type === 'fill_blank' ? t('fill_blank') : 
+             currentQuestion.type === 'meaning_match' ? t('match_meaning') : 
+             t('translate_sentence')}
+          </h2>
+          <div className="question-text">{currentQuestion.question}</div>
         </div>
-        
-        <div className="lesson-content">
-          {!hasQuestions ? (
-            <div className="no-questions">
-              <p>This lesson is reading-only. No questions available.</p>
-              <button className="primary" onClick={handleSubmit} disabled={completing || showResults}>
-                <CheckCircle size={20} /> {completing ? 'Completing...' : 'Mark as Completed'}
+
+        <div className="options-list">
+          {currentQuestion.options.map((option) => {
+            let state = '';
+            if (isAnswered) {
+              if (option === currentQuestion.correctAnswer) state = 'correct';
+              else if (option === selectedOption) state = 'incorrect';
+            } else if (option === selectedOption) {
+              state = 'selected';
+            }
+
+            return (
+              <button 
+                key={option} 
+                className={`option-btn ${state}`}
+                onClick={() => handleOptionSelect(option)}
+                disabled={isAnswered}
+              >
+                {option}
+                {state === 'correct' && <CheckCircle2 size={20} className="status-icon" />}
+                {state === 'incorrect' && <XCircle size={20} className="status-icon" />}
               </button>
-            </div>
-          ) : showResults ? (
-            <div className="quiz-results animate-fade-in">
-              <Award size={64} color="var(--warning)" className="award-icon" />
-              <h2>Lesson Completed!</h2>
-              <div className="score-circle">
-                <span className="score-number">{score}%</span>
-                <span className="score-label">Score</span>
-              </div>
-              <div className="results-actions">
-                <button className="secondary" onClick={() => navigate('/lessons')}>
-                  Return to Lessons
-                </button>
-                <button className="primary" onClick={() => {
-                  setShowResults(false);
-                  setSelectedAnswers({});
-                  setCurrentQuestionIndex(0);
-                }}>
-                  <RefreshCw size={18} /> Retry Quiz
-                </button>
-              </div>
-            </div>
-          ) : currentQuestion ? (
-            <div className="quiz-section animate-fade-in" key={currentQuestion.id}>
-              <div className="quiz-progress">
-                Question {currentQuestionIndex + 1} of {lesson.questions!.length}
-              </div>
-              
-              <h3 className="question-text">{currentQuestion.text}</h3>
-              
-              <div className="options-grid">
-                {currentQuestion.options.map((option, idx) => {
-                  const isSelected = selectedAnswers[currentQuestion.id] === option;
-                  return (
-                    <button 
-                      key={idx}
-                      className={`option-btn ${isSelected ? 'selected' : ''}`}
-                      onClick={() => handleSelectAnswer(currentQuestion.id, option)}
-                    >
-                      {option}
-                    </button>
-                  );
-                })}
-              </div>
-              
-              <div className="quiz-actions">
-                <button 
-                  className="secondary" 
-                  disabled={currentQuestionIndex === 0}
-                  onClick={() => setCurrentQuestionIndex(prev => prev - 1)}
-                >
-                  <ArrowLeft size={18} /> Previous
-                </button>
-                
-                {!isLastQuestion ? (
-                  <button 
-                    className="primary" 
-                    onClick={() => setCurrentQuestionIndex(prev => prev + 1)}
-                    disabled={!selectedAnswers[currentQuestion.id]}
-                  >
-                    Next <ArrowRight size={18} />
-                  </button>
-                ) : (
-                  <button 
-                    className="primary success" 
-                    onClick={handleSubmit}
-                    disabled={!selectedAnswers[currentQuestion.id] || completing}
-                  >
-                    <CheckCircle size={18} /> {completing ? 'Submitting...' : 'Submit Answers'}
-                  </button>
-                )}
-              </div>
-            </div>
-          ) : null}
+            );
+          })}
         </div>
+
+        {isAnswered && (
+          <div className={`feedback-area ${isCorrect ? 'correct' : 'incorrect'}`}>
+            <div className="feedback-content">
+              {isCorrect ? (
+                <>
+                  <CheckCircle2 size={24} />
+                  <span>{t('correct')}</span>
+                </>
+              ) : (
+                <>
+                  <XCircle size={24} />
+                  <span>{t('incorrect')}: <strong>{currentQuestion.correctAnswer}</strong></span>
+                </>
+              )}
+            </div>
+            <Button variant="primary" onClick={handleNext}>
+              {currentQuestionIndex < questions.length - 1 ? t('next') : t('finish')}
+            </Button>
+          </div>
+        )}
       </div>
     </div>
   );

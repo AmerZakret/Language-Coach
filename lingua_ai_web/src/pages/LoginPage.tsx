@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { authApi } from '../services/authApi';
-import { useAuth } from '../contexts/AuthContext';
-import { Bot } from 'lucide-react';
+import { login as apiLogin } from '../api/authApi';
+import { useAuth } from '../context/AuthContext';
+import { User } from 'lucide-react';
+import { Button } from '../components/common/Button';
 import './Auth.css';
 
 export const LoginPage: React.FC = () => {
@@ -12,7 +13,7 @@ export const LoginPage: React.FC = () => {
   const [loading, setLoading] = useState(false);
   
   const navigate = useNavigate();
-  const { login } = useAuth();
+  const { login, loginAsGuest } = useAuth();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -20,10 +21,8 @@ export const LoginPage: React.FC = () => {
     setLoading(true);
     
     try {
-      const data = await authApi.login(email, password);
-      // Fallback for mock backend
-      const fallbackUser = data.user || { id: 'user-1', email, name: 'Student' };
-      login(data.access_token || data.token || 'dummy-token', fallbackUser);
+      const data = await apiLogin(email, password);
+      login(data.user, data.access_token);
       navigate('/');
     } catch (err: any) {
       let errorMessage = 'Login failed. Please try again.';
@@ -31,8 +30,6 @@ export const LoginPage: React.FC = () => {
         errorMessage = Array.isArray(err.response.data.message) 
           ? err.response.data.message.join(', ') 
           : err.response.data.message;
-      } else if (err.message) {
-        errorMessage = err.message; // e.g. Network Error
       }
       setError(errorMessage);
     } finally {
@@ -40,12 +37,19 @@ export const LoginPage: React.FC = () => {
     }
   };
 
+  const handleGuest = () => {
+    loginAsGuest();
+    navigate('/');
+  };
+
   return (
     <div className="auth-container">
       <div className="auth-card glass-panel animate-fade-in">
         <div className="auth-header">
-          <Bot size={48} color="var(--primary-color)" />
-          <h2>Welcome Back</h2>
+          <div className="logo-container">
+            <img src="/assets/images/logo.png" alt="LinguaAI Logo" className="auth-logo-img" />
+          </div>
+          <h2>LinguaAI</h2>
           <p>Login to continue your learning journey.</p>
         </div>
         
@@ -59,6 +63,7 @@ export const LoginPage: React.FC = () => {
               value={email} 
               onChange={(e) => setEmail(e.target.value)} 
               required 
+              placeholder="admin@example.com"
             />
           </div>
           <div className="form-group">
@@ -68,12 +73,21 @@ export const LoginPage: React.FC = () => {
               value={password} 
               onChange={(e) => setPassword(e.target.value)} 
               required 
+              placeholder="••••••••"
             />
           </div>
-          <button type="submit" className="primary full-width" disabled={loading}>
-            {loading ? 'Logging in...' : 'Login'}
-          </button>
+          <Button type="submit" isLoading={loading} className="full-width">
+            Login
+          </Button>
         </form>
+
+        <div className="auth-divider">
+          <span>OR</span>
+        </div>
+
+        <Button variant="outline" className="full-width" onClick={handleGuest} leftIcon={<User size={18} />}>
+          Continue as Guest
+        </Button>
         
         <div className="auth-footer">
           Don't have an account? <Link to="/register">Register here</Link>

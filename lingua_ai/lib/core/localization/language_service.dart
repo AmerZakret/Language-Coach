@@ -24,6 +24,12 @@ class LanguageService extends ChangeNotifier {
     notifyListeners();
   }
 
+  void changeLanguage(String langCode) async {
+    _currentLanguage = langCode;
+    await _prefs.setString('currentLanguage', _currentLanguage);
+    notifyListeners();
+  }
+
   Future<void> resetLanguage() async {
     _currentLanguage = 'en';
     await _prefs.remove('currentLanguage');

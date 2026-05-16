@@ -25,9 +25,9 @@ class _LoginScreenState extends State<LoginScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
-        backgroundColor: Colors.red,
+        backgroundColor: AppTheme.errorColor,
         behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
     );
   }
@@ -94,116 +94,145 @@ class _LoginScreenState extends State<LoginScreen> {
       builder: (context, child) {
         final lang = LanguageService();
         return Scaffold(
-          body: SafeArea(
-            child: SingleChildScrollView(
-              physics: const BouncingScrollPhysics(),
-              child: Padding(
-                padding: const EdgeInsets.all(AppTheme.standardPadding),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Align(
-                      alignment: Alignment.topRight,
-                      child: IconButton(
-                        icon: const Icon(Icons.language, color: AppTheme.primaryColor),
-                        onPressed: () {
-                          lang.toggleLanguage();
-                        },
-                      ),
-                    ),
-                    const SizedBox(height: 32),
-                    const Hero(
-                      tag: 'logo',
-                      child: Icon(
-                        Icons.auto_awesome_rounded,
-                        size: 80,
-                        color: AppTheme.primaryColor,
-                      ),
-                    ),
-                    const SizedBox(height: 32),
-                    Text(
-                      lang.getString('welcome_title'),
-                      style: const TextStyle(
-                        fontSize: 32,
-                        fontWeight: FontWeight.w900,
-                        color: AppTheme.textPrimaryColor,
-                        letterSpacing: -1,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 8),
-                    Text(
-                      lang.getString('welcome_subtitle'),
-                      style: const TextStyle(
-                        fontSize: 16,
-                        color: AppTheme.textSecondaryColor,
-                        fontWeight: FontWeight.w500,
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                    const SizedBox(height: 48),
-                    CustomTextField(
-                      controller: _emailController,
-                      hintText: lang.getString('email'),
-                      prefixIcon: Icons.email_rounded,
-                    ),
-                    const SizedBox(height: 16),
-                    CustomTextField(
-                      controller: _passwordController,
-                      hintText: lang.getString('password'),
-                      prefixIcon: Icons.lock_rounded,
-                      isPassword: true,
-                    ),
-                    const SizedBox(height: 8),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: TextButton(
-                        onPressed: () {},
-                        child: Text(
-                          lang.getString('forgot_password'),
-                          style: const TextStyle(
-                            color: AppTheme.primaryColor,
-                            fontWeight: FontWeight.w600,
+          body: Container(
+            decoration: BoxDecoration(
+              gradient: AppTheme.backgroundGradient,
+            ),
+            child: SafeArea(
+              child: SingleChildScrollView(
+                physics: const BouncingScrollPhysics(),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 24),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      // Language switch
+                      Align(
+                        alignment: Alignment.topRight,
+                        child: Container(
+                          margin: const EdgeInsets.only(top: 8),
+                          decoration: BoxDecoration(
+                            color: AppTheme.primaryColor.withValues(alpha: 0.08),
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: IconButton(
+                            icon: const Icon(Icons.translate_rounded, color: AppTheme.primaryColor, size: 22),
+                            onPressed: () => lang.toggleLanguage(),
                           ),
                         ),
                       ),
-                    ),
-                    const SizedBox(height: 24),
-                    CustomButton(
-                      text: lang.getString('login'),
-                      onPressed: _isLoading ? null : () => _handleLogin(),
-                      isLoading: _isLoading,
-                    ),
-                    const SizedBox(height: 16),
-                    CustomButton(
-                      text: lang.getString('continue_as_guest'),
-                      onPressed: _handleGuestLogin,
-                      isOutlined: true,
-                    ),
-                    const SizedBox(height: 32),
 
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(
-                          lang.getString('no_account'),
-                          style: const TextStyle(color: AppTheme.textSecondaryColor),
+                      const SizedBox(height: 24),
+
+                      // Logo
+                      Center(
+                        child: Container(
+                          padding: const EdgeInsets.all(24),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            shape: BoxShape.circle,
+                            boxShadow: AppTheme.softShadow,
+                          ),
+                          child: Image.asset(
+                            'assets/images/language-learning.png',
+                            width: 80,
+                            height: 80,
+                          ),
                         ),
-                        TextButton(
-                          onPressed: () {
-                            Navigator.pushNamed(context, AppRoutes.register);
-                          },
+                      ),
+                      const SizedBox(height: 28),
+
+                      // Title
+                      Text(
+                        lang.getString('welcome_title'),
+                        style: const TextStyle(
+                          fontSize: 30,
+                          fontWeight: FontWeight.w900,
+                          color: AppTheme.textPrimaryColor,
+                          letterSpacing: -1,
+                          height: 1.2,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        lang.getString('welcome_subtitle'),
+                        style: const TextStyle(
+                          fontSize: 15,
+                          color: AppTheme.textSecondaryColor,
+                          fontWeight: FontWeight.w500,
+                        ),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 40),
+
+                      // Fields
+                      CustomTextField(
+                        controller: _emailController,
+                        hintText: lang.getString('email'),
+                        prefixIcon: Icons.email_outlined,
+                      ),
+                      const SizedBox(height: 14),
+                      CustomTextField(
+                        controller: _passwordController,
+                        hintText: lang.getString('password'),
+                        prefixIcon: Icons.lock_outline_rounded,
+                        isPassword: true,
+                      ),
+                      const SizedBox(height: 4),
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton(
+                          onPressed: () {},
                           child: Text(
-                            lang.getString('register'),
-                            style: const TextStyle(
-                              color: AppTheme.primaryColor,
-                              fontWeight: FontWeight.bold,
+                            lang.getString('forgot_password'),
+                            style: TextStyle(
+                              color: AppTheme.primaryColor.withValues(alpha: 0.8),
+                              fontWeight: FontWeight.w600,
+                              fontSize: 13,
                             ),
                           ),
                         ),
-                      ],
-                    ),
-                  ],
+                      ),
+                      const SizedBox(height: 16),
+
+                      // Buttons
+                      CustomButton(
+                        text: lang.getString('login'),
+                        onPressed: _isLoading ? null : () => _handleLogin(),
+                        isLoading: _isLoading,
+                      ),
+                      const SizedBox(height: 12),
+                      CustomButton(
+                        text: lang.getString('continue_as_guest'),
+                        onPressed: _handleGuestLogin,
+                        isOutlined: true,
+                      ),
+                      const SizedBox(height: 28),
+
+                      // Register link
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Text(
+                            lang.getString('no_account'),
+                            style: const TextStyle(color: AppTheme.textSecondaryColor, fontSize: 14),
+                          ),
+                          TextButton(
+                            onPressed: () => Navigator.pushNamed(context, AppRoutes.register),
+                            child: Text(
+                              lang.getString('register'),
+                              style: const TextStyle(
+                                color: AppTheme.primaryColor,
+                                fontWeight: FontWeight.w800,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+                    ],
+                  ),
                 ),
               ),
             ),

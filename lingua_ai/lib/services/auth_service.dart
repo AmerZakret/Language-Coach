@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'progress_service.dart';
 
 class AuthService extends ChangeNotifier {
   static final AuthService _instance = AuthService._internal();
@@ -54,6 +55,7 @@ class AuthService extends ChangeNotifier {
     _token = 'dummy-local-token';
     
     _saveSession();
+    ProgressService().reloadProgress();
     return null;
   }
 
@@ -69,6 +71,7 @@ class AuthService extends ChangeNotifier {
     _token = token;
     
     _saveSession();
+    ProgressService().reloadProgress();
   }
 
   void loginAsGuest() {
@@ -79,6 +82,7 @@ class AuthService extends ChangeNotifier {
     _token = '';
     
     _saveSession();
+    ProgressService().reloadProgress();
   }
 
   // Returns null if successful, or an error message if invalid
@@ -107,6 +111,7 @@ class AuthService extends ChangeNotifier {
     _token = 'dummy-local-token';
     
     _saveSession();
+    ProgressService().reloadProgress();
     return null;
   }
 
@@ -123,6 +128,7 @@ class AuthService extends ChangeNotifier {
     _prefs.remove('currentUserEmail');
     _prefs.remove('token');
     
+    ProgressService().reloadProgress();
     notifyListeners();
   }
 

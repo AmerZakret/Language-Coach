@@ -1,4 +1,10 @@
-import { IsIn, IsNotEmpty, IsString, MaxLength } from 'class-validator';
+import {
+  IsIn,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  MaxLength,
+} from 'class-validator';
 
 export class ChatDto {
   @IsNotEmpty()
@@ -14,4 +20,20 @@ export class ChatDto {
   @IsString()
   @IsIn(['en', 'tr'])
   language: string;
+
+  @IsOptional()
+  @IsString()
+  @IsIn([
+    'en',
+    'de',
+    'es',
+    'fr',
+    'ar',
+    'English',
+    'German',
+    'Spanish',
+    'French',
+    'Arabic',
+  ])
+  targetLanguage?: string;
 }

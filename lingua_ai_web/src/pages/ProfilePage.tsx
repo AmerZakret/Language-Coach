@@ -1,105 +1,155 @@
-import React, { useEffect, useState } from 'react';
-import { useAuth } from '../contexts/AuthContext';
-import { useLanguage } from '../contexts/LanguageContext';
-import { progressApi, type Progress } from '../services/progressApi';
-import { User, LogOut, Flame, Trophy, BookOpen, Star } from 'lucide-react';
-import './Dashboard.css';
+import React from 'react';
+import { useAuth } from '../context/AuthContext';
+import { useLanguage } from '../context/LanguageContext';
+import { useTargetLanguage } from '../context/TargetLanguageContext';
+import { useProgress } from '../context/ProgressContext';
+import { getLevelFromXp } from '../utils/levelUtils';
+import { Button } from '../components/common/Button';
+import { StatCard } from '../components/cards/StatCard';
+import { 
+  User, 
+  Mail, 
+  LogOut, 
+  Settings,
+  Languages,
+  Volume2,
+  VolumeX,
+  Zap,
+  Flame,
+  CheckSquare,
+  Globe
+} from 'lucide-react';
+import type { TargetLanguage } from '../types/language';
+import { useSound } from '../context/SoundContext';
+import './Profile.css';
 
 export const ProfilePage: React.FC = () => {
-  const { user, logout } = useAuth();
-  const { t, language, setLanguage } = useLanguage();
-  const [progress, setProgress] = useState<Progress | null>(null);
+  const { user, isGuest, logout } = useAuth();
+  const { language, setLanguage, t } = useLanguage();
+  const { targetLanguage, setTargetLanguage } = useTargetLanguage();
+  const { progress } = useProgress();
+  const { soundEnabled, toggleSound } = useSound();
 
-  useEffect(() => {
-    const fetchProgress = async () => {
-      try {
-        if (user?.id) {
-          const data = await progressApi.getUserProgress(user.id);
-          setProgress(data);
-        }
-      } catch (error) {
-        console.error("Failed to fetch progress", error);
-      }
-    };
-    fetchProgress();
-  }, [user]);
+  const currentLevel = getLevelFromXp(progress.totalXp);
+
+  const handleTargetLanguageChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    setTargetLanguage(e.target.value as TargetLanguage);
+  };
 
   return (
-    <div className="dashboard animate-fade-in">
-      <h1 className="page-title">{t('profile')}</h1>
-      
-      <div className="profile-grid">
-        <div className="glass-panel profile-header-card">
-          <div className="profile-avatar">
-            <User size={64} color="white" />
-          </div>
-          <div className="profile-info">
-            <h2>{user?.name || 'Guest User'}</h2>
-            <p>{user?.email || 'guest@example.com'}</p>
-            <span className="badge">{user ? 'Registered User' : 'Guest Mode'}</span>
-          </div>
-          <button className="secondary logout-profile-btn" onClick={logout}>
-            <LogOut size={18} /> {t('logout')}
-          </button>
+    <div className="profile-page-premium animate-fade-in">
+      <div className="profile-header-premium">
+        <div className="profile-avatar-premium">
+          <User size={56} />
         </div>
-
-        <div className="glass-panel profile-stats-card">
-          <h3>Your Statistics</h3>
-          <div className="profile-stats-grid">
-            <div className="p-stat">
-              <Star size={24} color="var(--primary-color)" />
-              <div>
-                <h4>{progress?.stats?.totalXp || 0}</h4>
-                <p>Total XP</p>
-              </div>
-            </div>
-            <div className="p-stat">
-              <Flame size={24} color="var(--warning)" />
-              <div>
-                <h4>{progress?.stats?.streak || 0}</h4>
-                <p>Day Streak</p>
-              </div>
-            </div>
-            <div className="p-stat">
-              <BookOpen size={24} color="var(--secondary-color)" />
-              <div>
-                <h4>{progress?.stats?.completedLessonsCount || 0}</h4>
-                <p>Completed Lessons</p>
-              </div>
-            </div>
-            <div className="p-stat">
-              <Trophy size={24} color="#ec4899" />
-              <div>
-                <h4>{progress?.level || 'Beginner'}</h4>
-                <p>Current Level</p>
-              </div>
-            </div>
+        <div className="profile-info-premium">
+          <h1>{user?.name || (isGuest ? 'Guest User' : 'User')}</h1>
+          <p className="profile-email-premium">
+            <Mail size={16} />
+            {user?.email || 'guest@linguaai.com'}
+          </p>
+          <div className="profile-badges-premium">
+            <span className="level-badge-premium">
+              {t('level')}: {t(currentLevel.toLowerCase().replace('-', '_'))}
+            </span>
+            <span className="target-language-badge-small">
+              {targetLanguage}
+            </span>
           </div>
         </div>
+      </div>
 
-        <div className="glass-panel settings-card">
-          <h3>Settings</h3>
+      <div className="stats-row-premium">
+        <StatCard 
+          label={t('xp')} 
+          value={progress.totalXp} 
+          icon={<Zap size={24} />} 
+          variant="accent"
+        />
+        <StatCard 
+          label={t('streak')} 
+          value={`${progress.streak}`} 
+          icon={<Flame size={24} />} 
+          variant="accent"
+        />
+        <StatCard 
+          label={t('completed')} 
+          value={progress.completedLessonIds.length} 
+          icon={<CheckSquare size={24} />} 
+          variant="secondary"
+        />
+      </div>
+
+      <div className="settings-container-premium">
+        <div className="settings-group">
+          <div className="settings-group-header">
+            <Settings size={20} />
+            <h3>Preferences</h3>
+          </div>
           <div className="settings-list">
-            <div className="setting-item">
-              <div>
-                <h4>Language</h4>
-                <p>Change your interface language</p>
+            <div className="setting-item-premium">
+              <div className="setting-label-premium">
+                <Languages size={18} />
+                <span>{t('interface_language')}</span>
               </div>
-              <div className="lang-switch-profile">
-                <button 
-                  className={`lang-btn ${language === 'en' ? 'active' : ''}`}
-                  onClick={() => setLanguage('en')}
-                >
-                  English
-                </button>
-                <button 
-                  className={`lang-btn ${language === 'tr' ? 'active' : ''}`}
-                  onClick={() => setLanguage('tr')}
-                >
-                  Türkçe
-                </button>
-              </div>
+              <select 
+                value={language} 
+                onChange={(e) => setLanguage(e.target.value as any)}
+                className="setting-select-premium"
+              >
+                <option value="en">English</option>
+                <option value="tr">Türkçe</option>
+              </select>
             </div>
+            
+            <div className="setting-divider"></div>
+
+            <div className="setting-item-premium">
+              <div className="setting-label-premium">
+                <Globe size={18} />
+                <span>{t('target_language')}</span>
+              </div>
+              <select 
+                value={targetLanguage} 
+                onChange={handleTargetLanguageChange}
+                className="setting-select-premium"
+              >
+                <option value="English">English</option>
+                <option value="German">German</option>
+                <option value="Spanish">Spanish</option>
+                <option value="French">French</option>
+                <option value="Arabic">Arabic</option>
+              </select>
+            </div>
+
+            <div className="setting-divider"></div>
+
+            <div className="setting-item-premium">
+              <div className="setting-label-premium">
+                {soundEnabled ? <Volume2 size={18} /> : <VolumeX size={18} />}
+                <span>{t('sound_effects')}</span>
+              </div>
+              <label className="toggle-switch">
+                <input 
+                  type="checkbox" 
+                  checked={soundEnabled} 
+                  onChange={toggleSound} 
+                />
+                <span className="slider round"></span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div className="settings-group">
+          <div className="settings-group-header">
+            <User size={20} />
+            <h3>Account</h3>
+          </div>
+          <div className="settings-list">
+            <Button variant="danger" onClick={logout} leftIcon={<LogOut size={18} />} className="full-width-btn">
+              {t('logout')}
+            </Button>
           </div>
         </div>
       </div>

@@ -22,5 +22,5 @@ class ApiConfig {
   static const String authRegister = '/auth/register';
   static const String authLogin = '/auth/login';
   static const String progress = '/progress';
-  static const String aiCoach = '/ai-coach/chat';
+  static const String aiCoach = '/ai-coach';
 }

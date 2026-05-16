@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/cupertino.dart';
 import '../core/theme/app_theme.dart';
 import '../core/routes/app_routes.dart';
 import '../core/localization/language_service.dart';
@@ -17,24 +16,29 @@ class BottomNavBar extends StatelessWidget {
         final lang = LanguageService();
         return Container(
           decoration: BoxDecoration(
-            color: AppTheme.surfaceColor,
+            color: Colors.white,
+            borderRadius: const BorderRadius.only(
+              topLeft: Radius.circular(32),
+              topRight: Radius.circular(32),
+            ),
             boxShadow: [
               BoxShadow(
-                color: Colors.black.withValues(alpha: 0.05),
-                blurRadius: 20,
-                offset: const Offset(0, -5),
+                color: Colors.black.withValues(alpha: 0.08),
+                blurRadius: 30,
+                offset: const Offset(0, -10),
               ),
             ],
           ),
           child: SafeArea(
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
               child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  _buildNavItem(context, icon: CupertinoIcons.home, label: lang.getString('home'), index: 0, route: AppRoutes.home),
-                  _buildNavItem(context, icon: CupertinoIcons.chat_bubble_2, label: lang.getString('ai_coach'), index: 1, route: AppRoutes.aiCoach),
-                  _buildNavItem(context, icon: CupertinoIcons.person, label: lang.getString('profile'), index: 2, route: AppRoutes.profile),
+                  _buildNavItem(context, imagePath: 'assets/images/apps.png', label: lang.getString('home'), index: 0, route: AppRoutes.home),
+                  _buildNavItem(context, imagePath: 'assets/images/writing.png', label: lang.getString('writing_practice').split(' ').first, index: 1, route: AppRoutes.writing),
+                  _buildNavItem(context, imagePath: 'assets/images/ai-coach-icon.png', label: lang.getString('ai_coach').split(' ').last, index: 2, route: AppRoutes.aiCoach),
+                  _buildNavItem(context, imagePath: 'assets/images/user.png', label: lang.getString('profile'), index: 3, route: AppRoutes.profile),
                 ],
               ),
             ),
@@ -44,7 +48,7 @@ class BottomNavBar extends StatelessWidget {
     );
   }
 
-  Widget _buildNavItem(BuildContext context, {required IconData icon, required String label, required int index, required String route}) {
+  Widget _buildNavItem(BuildContext context, {required String imagePath, required String label, required int index, required String route}) {
     final isSelected = currentIndex == index;
     
     return GestureDetector(
@@ -53,27 +57,34 @@ class BottomNavBar extends StatelessWidget {
           Navigator.pushReplacementNamed(context, route);
         }
       },
+      behavior: HitTestBehavior.opaque,
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOutBack,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         decoration: BoxDecoration(
           color: isSelected ? AppTheme.primaryColor.withValues(alpha: 0.1) : Colors.transparent,
           borderRadius: BorderRadius.circular(20),
         ),
-        child: Row(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(
-              icon,
-              color: isSelected ? AppTheme.primaryColor : AppTheme.textSecondaryColor,
-              size: 24,
+            Opacity(
+              opacity: isSelected ? 1.0 : 0.5,
+              child: Image.asset(
+                imagePath,
+                width: 24,
+                height: 24,
+              ),
             ),
             if (isSelected) ...[
-              const SizedBox(width: 8),
+              const SizedBox(height: 4),
               Text(
                 label,
                 style: const TextStyle(
                   color: AppTheme.primaryColor,
-                  fontWeight: FontWeight.bold,
+                  fontWeight: FontWeight.w800,
+                  fontSize: 12,
                 ),
               ),
             ]

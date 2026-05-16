@@ -1,124 +1,160 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
+import { useAuth } from '../context/AuthContext';
+import { useLanguage } from '../context/LanguageContext';
+import { useTargetLanguage } from '../context/TargetLanguageContext';
+import { useProgress } from '../context/ProgressContext';
+import { getProgressToNextLevel } from '../utils/levelUtils';
+import { getLessons } from '../api/lessonsApi';
+import { fallbackLessons } from '../data/fallbackLessons';
+import type { Lesson } from '../types/lesson';
+import { StatCard } from '../components/cards/StatCard';
+import { Button } from '../components/common/Button';
+import { 
+  Zap, 
+  Flame, 
+  CheckSquare, 
+  TrendingUp, 
+  ArrowRight
+} from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
-import { progressApi, type Progress } from '../services/progressApi';
-import { useLanguage } from '../contexts/LanguageContext';
-import { Flame, Trophy, BookOpen, ArrowRight, Star, CheckCircle, Bot } from 'lucide-react';
 import './Dashboard.css';
 
 export const DashboardPage: React.FC = () => {
-  const { user } = useAuth();
+  const { user, isGuest } = useAuth();
   const { t } = useLanguage();
+  const { targetLanguage } = useTargetLanguage();
+  const { progress } = useProgress();
   const navigate = useNavigate();
-  const [progress, setProgress] = useState<Progress | null>(null);
-  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    const fetchProgress = async () => {
+  const [lessons, setLessons] = React.useState<Lesson[]>([]);
+  const [loadingLessons, setLoadingLessons] = React.useState(true);
+
+  React.useEffect(() => {
+    const loadLessons = async () => {
+      setLoadingLessons(true);
       try {
-        if (user?.id) {
-          const data = await progressApi.getUserProgress(user.id);
-          setProgress(data);
-        }
-      } catch (error) {
-        console.error("Failed to fetch progress", error);
+        const data = await getLessons(targetLanguage);
+        setLessons(data);
+      } catch (e) {
+        console.error('Failed to load lessons', e);
+        setLessons(fallbackLessons.filter(l => l.targetLanguage === targetLanguage));
       } finally {
-        setLoading(false);
+        setLoadingLessons(false);
       }
     };
-    fetchProgress();
-  }, [user]);
+    loadLessons();
+  }, [targetLanguage]);
 
-  if (loading) return <div className="loading">Loading dashboard...</div>;
+  const levelInfo = getProgressToNextLevel(progress.totalXp);
+  
+  // Find recommended lesson: first incomplete in current level, or just first incomplete overall
+  const recommendedLesson = React.useMemo(() => {
+    return lessons.find(l => !progress.completedLessonIds.includes(l.id) && l.level === levelInfo.currentLevel) 
+        || lessons.find(l => !progress.completedLessonIds.includes(l.id));
+  }, [lessons, progress.completedLessonIds, levelInfo.currentLevel]);
 
   return (
-    <div className="dashboard animate-fade-in">
-      <div className="dashboard-welcome">
-        <div>
-          <h1>{t('welcome')}, {user?.name || 'Guest'}!</h1>
-          <p>Ready to continue your language journey today?</p>
+    <div className="dashboard-page animate-fade-in">
+      <section className="welcome-section">
+        <div className="welcome-content">
+          <h1 className="welcome-title">
+            {isGuest ? t('welcome_guest') : `${t('welcome_back')}, ${user?.name}`} 👋
+          </h1>
+          <p className="welcome-subtitle">
+            {t('keep_learning')} {targetLanguage} {t('today')}
+          </p>
         </div>
-        <button className="primary" onClick={() => navigate('/lessons')}>
-          Continue Learning <ArrowRight size={18} />
-        </button>
-      </div>
-      
+        <div className="target-language-badge">
+          <span>🇩🇪</span> {targetLanguage}
+        </div>
+      </section>
+
       <div className="stats-grid">
-        <div className="stat-card glass-panel">
-          <div className="stat-icon warning-bg">
-            <Flame size={28} />
-          </div>
-          <div className="stat-content">
-            <h3>{progress?.stats?.streak || 0} Days</h3>
-            <p>{t('streak')}</p>
-          </div>
-        </div>
-        
-        <div className="stat-card glass-panel">
-          <div className="stat-icon primary-bg">
-            <Trophy size={28} />
-          </div>
-          <div className="stat-content">
-            <h3>{progress?.level || 'Beginner'}</h3>
-            <p>{t('level')}</p>
-          </div>
-        </div>
-        
-        <div className="stat-card glass-panel">
-          <div className="stat-icon secondary-bg">
-            <BookOpen size={28} />
-          </div>
-          <div className="stat-content">
-            <h3>{progress?.stats?.completedLessonsCount || 0}</h3>
-            <p>Completed {t('lessons')}</p>
-          </div>
-        </div>
-        
-        <div className="stat-card glass-panel">
-          <div className="stat-icon pink-bg">
-            <Star size={28} />
-          </div>
-          <div className="stat-content">
-            <h3>{progress?.stats?.totalXp || 0}</h3>
-            <p>Total XP</p>
-          </div>
+        <StatCard 
+          label={t('xp')} 
+          value={progress.totalXp} 
+          icon={<Zap size={24} />} 
+          variant="accent"
+        />
+        <StatCard 
+          label={t('level')} 
+          value={t(levelInfo.currentLevel.toLowerCase().replace('-', '_'))} 
+          icon={<TrendingUp size={24} />} 
+          variant="primary"
+        />
+        <StatCard 
+          label={t('streak')} 
+          value={`${progress.streak}`} 
+          icon={<Flame size={24} />} 
+          variant="accent"
+        />
+        <StatCard 
+          label={t('completed')} 
+          value={progress.completedLessonIds.length} 
+          icon={<CheckSquare size={24} />} 
+          variant="secondary"
+        />
+      </div>
+
+      <div className="centered-progress-card premium-card">
+        <h3>{t('level')}: {t(levelInfo.currentLevel.toLowerCase().replace('-', '_'))}</h3>
+        <p className="xp-text">XP: {progress.totalXp} / {progress.totalXp + levelInfo.xpRemaining}</p>
+        <div className="progress-bar-container-large">
+          <div className="progress-bar-fill-large" style={{ width: `${levelInfo.progress}%` }}></div>
         </div>
       </div>
-      
-      <div className="dashboard-sections">
-        <div className="glass-panel recent-lessons">
-          <div className="section-header">
-            <h2>Recent Activity</h2>
-            <button className="text-btn" onClick={() => navigate('/lessons')}>View all</button>
-          </div>
-          {progress?.completedLessons && progress.completedLessons.length > 0 ? (
-            <div className="activity-list">
-              {progress.completedLessons.slice(0, 3).map((lesson, idx) => (
-                <div key={idx} className="activity-item">
-                  <div className="activity-icon"><CheckCircle size={20} color="var(--success)" /></div>
-                  <div className="activity-details">
-                    <h4>Lesson {lesson.lessonId}</h4>
-                    <p>Score: {lesson.score}% • {new Date(lesson.completedAt).toLocaleDateString()}</p>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="empty-activity">
-              <p>No recent activity. Start a lesson to see your progress!</p>
-            </div>
-          )}
+
+      <div className="recommended-card premium-card">
+        <div className="rec-header">
+          <h3>{t('continue_learning')}</h3>
         </div>
-        
-        <div className="glass-panel ai-promo" onClick={() => navigate('/ai-coach')}>
-          <div className="promo-content">
-            <h2>Practice speaking with AI</h2>
-            <p>Our intelligent AI coach is ready to help you practice real-world conversations and correct your grammar.</p>
-            <button className="secondary outline-btn">
-              <Bot size={18} /> Start Chatting
-            </button>
+        {loadingLessons ? (
+          <div className="loading-container"><div className="spinner"></div></div>
+        ) : recommendedLesson ? (
+          <div className="rec-lesson-content">
+            <div className="rec-lesson-details">
+              <h4>{recommendedLesson.title}</h4>
+              <p>{recommendedLesson.description}</p>
+            </div>
+            <Button variant="primary" size="lg" onClick={() => navigate(`/lessons/${recommendedLesson.id}`)}>
+              {t('start')} <ArrowRight size={20} style={{ marginLeft: 8 }} />
+            </Button>
           </div>
-        </div>
+        ) : (
+          <p className="no-lesson-text">{t('all_caught_up')}</p>
+        )}
+      </div>
+
+      <div className="lessons-section">
+        <h2 className="section-main-title">{t('your_lessons')}</h2>
+        {['Beginner', 'Elementary', 'Pre-Intermediate'].map(level => {
+          const levelLessons = lessons.filter(l => l.level === level);
+          if (levelLessons.length === 0) return null;
+          return (
+            <div key={level} className="lesson-level-group">
+              <h3 className="level-group-title">{t(level.toLowerCase().replace('-', '_'))}</h3>
+              <div className="lessons-grid">
+                {levelLessons.map(lesson => {
+                  const isCompleted = progress.completedLessonIds.includes(lesson.id);
+                  return (
+                    <div 
+                      key={lesson.id} 
+                      className={`lesson-grid-card ${isCompleted ? 'completed' : ''}`}
+                      onClick={() => navigate(`/lessons/${lesson.id}`)}
+                    >
+                      <div className="lgc-header">
+                        <span className="lgc-category">{lesson.category}</span>
+                        {isCompleted && <CheckSquare size={16} className="text-success" />}
+                      </div>
+                      <h4>{lesson.title}</h4>
+                      <p>{lesson.xpReward} XP • {lesson.duration} min</p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );

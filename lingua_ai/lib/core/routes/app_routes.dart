@@ -7,6 +7,7 @@ import '../../screens/lessons/lesson_screen.dart';
 import '../../screens/lessons/lesson_result_screen.dart';
 import '../../screens/coach/ai_coach_screen.dart';
 import '../../screens/profile/profile_screen.dart';
+import '../../screens/writing/writing_practice_screen.dart';
 
 class AppRoutes {
   static const String login = '/login';
@@ -16,6 +17,7 @@ class AppRoutes {
   static const String lessonResult = '/lesson-result';
   static const String aiCoach = '/ai-coach';
   static const String profile = '/profile';
+  static const String writing = '/writing';
 
   static Map<String, WidgetBuilder> getRoutes() {
     return {
@@ -26,6 +28,7 @@ class AppRoutes {
       lessonResult: (context) => const LessonResultScreen(),
       aiCoach: (context) => const AiCoachScreen(),
       profile: (context) => const ProfileScreen(),
+      writing: (context) => const WritingPracticeScreen(),
     };
   }
 }
