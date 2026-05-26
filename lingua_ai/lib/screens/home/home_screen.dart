@@ -10,7 +10,6 @@ import '../../services/auth_service.dart';
 import '../../services/lesson_api_service.dart';
 import '../../core/localization/target_language_service.dart';
 import '../../widgets/target_language_modal.dart';
-import '../flashcards/quick_add_flashcard_modal.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -186,88 +185,67 @@ class _HomeScreenState extends State<HomeScreen> {
                     SliverToBoxAdapter(
                       child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-                        child: Container(
-                          padding: const EdgeInsets.all(20),
-                          decoration: BoxDecoration(
-                            color: Colors.white,
-                            borderRadius: BorderRadius.circular(24),
-                            boxShadow: AppTheme.cardShadow,
-                            border: Border.all(color: Colors.grey.shade100),
-                          ),
-                          child: Row(
-                            children: [
-                              Container(
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: AppTheme.primaryColor.withValues(alpha: 0.1),
-                                  shape: BoxShape.circle,
-                                ),
-                                child: const Icon(
-                                  Icons.psychology_rounded,
-                                  color: AppTheme.primaryColor,
-                                  size: 32,
-                                ),
-                              ),
-                              const SizedBox(width: 16),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      lang.getString('flashcards'),
-                                      style: const TextStyle(
-                                        fontSize: 18,
-                                        fontWeight: FontWeight.w900,
-                                        color: AppTheme.textPrimaryColor,
-                                      ),
-                                    ),
-                                    const SizedBox(height: 4),
-                                    Text(
-                                      '${flashcards.dueCards.length} ${lang.getString('cards_due')} • ${flashcards.allCards.length} total',
-                                      style: TextStyle(
-                                        fontSize: 13,
-                                        color: flashcards.dueCards.isNotEmpty
-                                            ? AppTheme.primaryColor
-                                            : AppTheme.textSecondaryColor,
-                                        fontWeight: FontWeight.w700,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              // Quick Add Card button
-                              IconButton(
-                                onPressed: () {
-                                  showModalBottomSheet(
-                                    context: context,
-                                    backgroundColor: Colors.transparent,
-                                    isScrollControlled: true,
-                                    builder: (context) => const QuickAddFlashcardModal(),
-                                  );
-                                },
-                                icon: const Icon(Icons.add_rounded),
-                                style: IconButton.styleFrom(
-                                  backgroundColor: AppTheme.backgroundColor,
-                                  foregroundColor: AppTheme.textPrimaryColor,
+                        child: InkWell(
+                          onTap: () {
+                            Navigator.pushNamed(context, AppRoutes.flashcards);
+                          },
+                          borderRadius: BorderRadius.circular(24),
+                          child: Container(
+                            padding: const EdgeInsets.all(20),
+                            decoration: BoxDecoration(
+                              color: Colors.white,
+                              borderRadius: BorderRadius.circular(24),
+                              boxShadow: AppTheme.cardShadow,
+                              border: Border.all(color: Colors.grey.shade100),
+                            ),
+                            child: Row(
+                              children: [
+                                Container(
                                   padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: AppTheme.primaryColor.withValues(alpha: 0.1),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: const Icon(
+                                    Icons.psychology_rounded,
+                                    color: AppTheme.primaryColor,
+                                    size: 32,
+                                  ),
                                 ),
-                              ),
-                              const SizedBox(width: 8),
-                              // Start review button
-                              IconButton.filled(
-                                onPressed: () {
-                                  Navigator.pushNamed(context, AppRoutes.flashcardsReview);
-                                },
-                                icon: const Icon(Icons.play_arrow_rounded),
-                                style: IconButton.styleFrom(
-                                  backgroundColor: flashcards.dueCards.isNotEmpty
-                                      ? AppTheme.primaryColor
-                                      : Colors.grey.shade300,
-                                  foregroundColor: Colors.white,
-                                  padding: const EdgeInsets.all(12),
+                                const SizedBox(width: 16),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        lang.getString('flashcards'),
+                                        style: const TextStyle(
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.w900,
+                                          color: AppTheme.textPrimaryColor,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        '${flashcards.dueCards.length} ${lang.getString('cards_due')} • ${flashcards.allCards.length} total',
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          color: flashcards.dueCards.isNotEmpty
+                                              ? AppTheme.primaryColor
+                                              : AppTheme.textSecondaryColor,
+                                          fontWeight: FontWeight.w700,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
                                 ),
-                              ),
-                            ],
+                                const Icon(
+                                  Icons.chevron_right_rounded,
+                                  color: AppTheme.textSecondaryColor,
+                                  size: 28,
+                                ),
+                              ],
+                            ),
                           ),
                         ),
                       ),
@@ -347,7 +325,7 @@ class _HomeScreenState extends State<HomeScreen> {
                             crossAxisCount: 2,
                             mainAxisSpacing: 16,
                             crossAxisSpacing: 16,
-                            childAspectRatio: 1.8, // Much wider cards
+                            childAspectRatio: 1.3, // Taller cards to prevent text overflow
                           ),
                           delegate: SliverChildBuilderDelegate(
                             (context, index) {

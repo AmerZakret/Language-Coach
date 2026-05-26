@@ -210,48 +210,53 @@ class _LessonScreenState extends State<LessonScreen> {
           borderRadius: const BorderRadius.vertical(top: Radius.circular(32)),
           boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 20)],
         ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                Icon(
-                  isCorrect ? Icons.check_circle_rounded : Icons.error_rounded,
-                  color: isCorrect ? Colors.green : Colors.red,
-                  size: 32,
-                ),
-                const SizedBox(width: 12),
-                Text(
-                  isCorrect ? 'Excellent!' : 'Correct answer:',
-                  style: TextStyle(
-                    fontSize: 20, 
-                    fontWeight: FontWeight.w900, 
-                    color: isCorrect ? Colors.green.shade900 : Colors.red.shade900
+        child: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Icon(
+                    isCorrect ? Icons.check_circle_rounded : Icons.error_rounded,
+                    color: isCorrect ? Colors.green : Colors.red,
+                    size: 32,
                   ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Text(
+                      isCorrect ? 'Excellent!' : 'Correct answer:',
+                      style: TextStyle(
+                        fontSize: 20, 
+                        fontWeight: FontWeight.w900, 
+                        color: isCorrect ? Colors.green.shade900 : Colors.red.shade900
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              if (!isCorrect) ...[
+                const SizedBox(height: 8),
+                Text(
+                  lesson!.questions[currentQuestionIndex].correctAnswer,
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Colors.red.shade900),
                 ),
               ],
-            ),
-            if (!isCorrect) ...[
-              const SizedBox(height: 8),
-              Text(
-                lesson!.questions[currentQuestionIndex].correctAnswer,
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700, color: Colors.red.shade900),
+              const SizedBox(height: 24),
+              SizedBox(
+                width: double.infinity,
+                child: ElevatedButton(
+                  onPressed: _nextQuestion,
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: isCorrect ? Colors.green : Colors.red,
+                    padding: const EdgeInsets.symmetric(vertical: 20),
+                  ),
+                  child: const Text('CONTINUE', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16, letterSpacing: 1)),
+                ),
               ),
             ],
-            const SizedBox(height: 24),
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: _nextQuestion,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: isCorrect ? Colors.green : Colors.red,
-                  padding: const EdgeInsets.symmetric(vertical: 20),
-                ),
-                child: const Text('CONTINUE', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16, letterSpacing: 1)),
-              ),
-            ),
-          ],
+          ),
         ),
       );
     }
@@ -262,16 +267,19 @@ class _LessonScreenState extends State<LessonScreen> {
         color: Colors.white,
         border: Border(top: BorderSide(color: Color(0xFFF1F5F9))),
       ),
-      child: SizedBox(
-        width: double.infinity,
-        child: ElevatedButton(
-          onPressed: selectedAnswer == null ? null : _checkAnswer,
-          style: ElevatedButton.styleFrom(
-            padding: const EdgeInsets.symmetric(vertical: 20),
-            backgroundColor: AppTheme.primaryColor,
-            disabledBackgroundColor: Colors.grey.shade200,
+      child: SafeArea(
+        top: false,
+        child: SizedBox(
+          width: double.infinity,
+          child: ElevatedButton(
+            onPressed: selectedAnswer == null ? null : _checkAnswer,
+            style: ElevatedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 20),
+              backgroundColor: AppTheme.primaryColor,
+              disabledBackgroundColor: Colors.grey.shade200,
+            ),
+            child: const Text('CHECK', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16, letterSpacing: 1)),
           ),
-          child: const Text('CHECK', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16, letterSpacing: 1)),
         ),
       ),
     );

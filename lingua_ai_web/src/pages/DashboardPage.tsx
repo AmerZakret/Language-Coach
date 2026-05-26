@@ -18,8 +18,7 @@ export function DashboardPage() {
   const [lessons, setLessons] = useState<Lesson[]>([]);
   const [loadingLessons, setLoadingLessons] = useState(true);
 
-  const [quickWord, setQuickWord] = useState("");
-  const [quickTranslation, setQuickTranslation] = useState("");
+
 
   useEffect(() => {
     const loadLessons = async () => {
@@ -119,43 +118,28 @@ export function DashboardPage() {
 
       {/* Two-column: Quick Add + Continue Learning */}
       <div className="grid lg:grid-cols-2 gap-4">
-        {/* Quick Add Flashcard */}
-        <div className="p-5 rounded-2xl" style={{ background: "var(--l-surface)", border: "1px solid var(--l-border)" }}>
-          <div className="flex items-center gap-2 mb-4">
-            <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: "rgba(16,185,129,0.15)" }}>
-              <Plus size={14} color="#10B981" />
+        {/* Flashcards Deck Card */}
+        <div className="p-5 rounded-2xl flex flex-col justify-between" style={{ background: "var(--l-surface)", border: "1px solid var(--l-border)" }}>
+          <div>
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background: "rgba(16,185,129,0.15)" }}>
+                <Plus size={14} color="#10B981" />
+              </div>
+              <span style={{ fontSize: "14px", fontWeight: 700, color: "var(--l-text)" }}>Flashcards Deck</span>
             </div>
-            <span style={{ fontSize: "14px", fontWeight: 700, color: "var(--l-text)" }}>Quick Add Flashcard</span>
+            <p style={{ fontSize: "13px", color: "var(--l-muted)", lineHeight: 1.5, marginBottom: "16px" }}>
+              Build your custom vocabulary deck, add example sentences and notes, and study with spaced repetition.
+            </p>
           </div>
-          <div className="space-y-3">
-            <input
-              placeholder="Word (e.g. Hund)"
-              value={quickWord}
-              onChange={(e) => setQuickWord(e.target.value)}
-              className="w-full px-4 py-2.5 rounded-xl outline-none transition-all"
-              style={{ background: "var(--l-input-bg)", border: "1px solid var(--l-border)", color: "var(--l-text)", fontSize: "13px" }}
-              onFocus={(e) => { e.target.style.borderColor = "rgba(16,185,129,0.4)"; }}
-              onBlur={(e) => { e.target.style.borderColor = "var(--l-border)"; }}
-            />
-            <input
-              placeholder="Translation (e.g. Dog)"
-              value={quickTranslation}
-              onChange={(e) => setQuickTranslation(e.target.value)}
-              className="w-full px-4 py-2.5 rounded-xl outline-none transition-all"
-              style={{ background: "var(--l-input-bg)", border: "1px solid var(--l-border)", color: "var(--l-text)", fontSize: "13px" }}
-              onFocus={(e) => { e.target.style.borderColor = "rgba(16,185,129,0.4)"; }}
-              onBlur={(e) => { e.target.style.borderColor = "var(--l-border)"; }}
-            />
-            <button
-              className="w-full py-2.5 rounded-xl transition-all duration-200"
-              style={{ background: "rgba(16,185,129,0.15)", border: "1px solid rgba(16,185,129,0.25)", color: "#10B981", fontSize: "13px", fontWeight: 700 }}
-              onClick={() => { setQuickWord(""); setQuickTranslation(""); }}
-              onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(16,185,129,0.25)"; }}
-              onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(16,185,129,0.15)"; }}
-            >
-              Add to Deck
-            </button>
-          </div>
+          <button
+            onClick={() => navigate("/flashcards")}
+            className="w-full py-2.5 rounded-xl transition-all duration-200 text-center"
+            style={{ background: "rgba(16,185,129,0.12)", border: "1px solid rgba(16,185,129,0.2)", color: "#10B981", fontSize: "13px", fontWeight: 700 }}
+            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(16,185,129,0.22)"; }}
+            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "rgba(16,185,129,0.12)"; }}
+          >
+            Manage & Study Cards
+          </button>
         </div>
 
         {/* Continue Learning */}

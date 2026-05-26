@@ -1,11 +1,11 @@
 {
-    "name": "lingua_ai",
-    "short_name": "lingua_ai",
+    "name": "LinguAi",
+    "short_name": "LinguAi",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "description": "An AI-supported language learning app.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

@@ -5,7 +5,13 @@ import '../models/flashcard.dart';
 import 'auth_service.dart';
 
 class FlashcardApiService {
-  Future<Flashcard> createFlashcard(String userId, String word, String translation) async {
+  Future<Flashcard> createFlashcard(
+    String userId,
+    String targetWord,
+    String turkishTranslation, {
+    String? exampleSentence,
+    String? note,
+  }) async {
     try {
       final headers = <String, String>{
         'Content-Type': 'application/json',
@@ -20,8 +26,10 @@ class FlashcardApiService {
         headers: headers,
         body: json.encode({
           'userId': userId,
-          'word': word,
-          'translation': translation,
+          'targetWord': targetWord,
+          'turkishTranslation': turkishTranslation,
+          if (exampleSentence != null && exampleSentence.isNotEmpty) 'exampleSentence': exampleSentence,
+          if (note != null && note.isNotEmpty) 'note': note,
         }),
       );
 
@@ -29,6 +37,64 @@ class FlashcardApiService {
         return Flashcard.fromJson(json.decode(response.body));
       } else {
         throw Exception('Failed to create flashcard: ${response.body}');
+      }
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  Future<Flashcard> updateFlashcard(
+    String cardId,
+    String targetWord,
+    String turkishTranslation, {
+    String? exampleSentence,
+    String? note,
+  }) async {
+    try {
+      final headers = <String, String>{
+        'Content-Type': 'application/json',
+      };
+      final token = AuthService().token;
+      if (token.isNotEmpty) {
+        headers['Authorization'] = 'Bearer $token';
+      }
+
+      final response = await http.put(
+        Uri.parse('${ApiConfig.baseUrl}${ApiConfig.flashcards}/$cardId'),
+        headers: headers,
+        body: json.encode({
+          'targetWord': targetWord,
+          'turkishTranslation': turkishTranslation,
+          if (exampleSentence != null && exampleSentence.isNotEmpty) 'exampleSentence': exampleSentence,
+          if (note != null && note.isNotEmpty) 'note': note,
+        }),
+      );
+
+      if (response.statusCode == 200) {
+        return Flashcard.fromJson(json.decode(response.body));
+      } else {
+        throw Exception('Failed to update flashcard: ${response.body}');
+      }
+    } catch (e) {
+      rethrow;
+    }
+  }
+
+  Future<void> deleteFlashcard(String cardId) async {
+    try {
+      final headers = <String, String>{};
+      final token = AuthService().token;
+      if (token.isNotEmpty) {
+        headers['Authorization'] = 'Bearer $token';
+      }
+
+      final response = await http.delete(
+        Uri.parse('${ApiConfig.baseUrl}${ApiConfig.flashcards}/$cardId'),
+        headers: headers,
+      );
+
+      if (response.statusCode != 200) {
+        throw Exception('Failed to delete flashcard: ${response.body}');
       }
     } catch (e) {
       rethrow;

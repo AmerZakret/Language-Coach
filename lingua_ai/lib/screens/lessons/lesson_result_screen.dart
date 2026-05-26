@@ -36,103 +36,113 @@ class LessonResultScreen extends StatelessWidget {
                 ),
               ),
               SafeArea(
-                child: Padding(
-                  padding: const EdgeInsets.all(24.0),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      const Spacer(),
-
-                      // Celebrate / Replay Icon
-                      Center(
-                        child: Container(
-                          padding: const EdgeInsets.all(32),
-                          decoration: BoxDecoration(
-                            color: isSuccess ? const Color(0xFFF0FDF4) : const Color(0xFFFEF2F2),
-                            shape: BoxShape.circle,
-                            border: Border.all(color: (isSuccess ? Colors.green : Colors.red).withValues(alpha: 0.1), width: 8),
-                          ),
-                          child: Image.asset(
-                            'assets/images/language-learning.png',
-                            width: 80,
-                            height: 80,
-                          ),
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    return SingleChildScrollView(
+                      physics: const BouncingScrollPhysics(),
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                        constraints: BoxConstraints(
+                          minHeight: constraints.maxHeight,
                         ),
-                      ),
-                      
-                      const SizedBox(height: 32),
-                      
-                      Text(
-                        isSuccess ? 'Great Job!' : 'Keep Practicing!',
-                        style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w900, color: AppTheme.textPrimary, letterSpacing: -1),
-                        textAlign: TextAlign.center,
-                      ),
-                      
-                      const SizedBox(height: 12),
-                      
-                      Text(
-                        isSuccess 
-                          ? 'You\'ve mastered this lesson and earned some serious XP!'
-                          : 'Don\'t give up! Every mistake is a step closer to fluency.',
-                        style: const TextStyle(fontSize: 16, color: AppTheme.textSecondary, fontWeight: FontWeight.w500, height: 1.4),
-                        textAlign: TextAlign.center,
-                      ),
-
-                      const SizedBox(height: 48),
-
-                      // Score & XP Tiles
-                      Row(
-                        children: [
-                          Expanded(
-                            child: _buildResultTile(
-                              'SCORE', 
-                              '$score/$total', 
-                              Icons.analytics_rounded, 
-                              AppTheme.primaryColor
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            const SizedBox(height: 16),
+                            // Celebrate / Replay Icon
+                            Center(
+                              child: Container(
+                                padding: const EdgeInsets.all(32),
+                                decoration: BoxDecoration(
+                                  color: isSuccess ? const Color(0xFFF0FDF4) : const Color(0xFFFEF2F2),
+                                  shape: BoxShape.circle,
+                                  border: Border.all(color: (isSuccess ? Colors.green : Colors.red).withValues(alpha: 0.1), width: 8),
+                                ),
+                                child: Image.asset(
+                                  'assets/images/language-learning.png',
+                                  width: 80,
+                                  height: 80,
+                                ),
+                              ),
                             ),
-                          ),
-                          const SizedBox(width: 16),
-                          Expanded(
-                            child: _buildResultTile(
-                              'XP EARNED', 
-                              '+$xp', 
-                              Icons.bolt_rounded, 
-                              Colors.orange
+                            
+                            const SizedBox(height: 32),
+                            
+                            Text(
+                              isSuccess ? 'Great Job!' : 'Keep Practicing!',
+                              style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w900, color: AppTheme.textPrimary, letterSpacing: -1),
+                              textAlign: TextAlign.center,
                             ),
-                          ),
-                        ],
-                      ),
+                            
+                            const SizedBox(height: 12),
+                            
+                            Text(
+                              isSuccess 
+                                ? 'You\'ve mastered this lesson and earned some serious XP!'
+                                : 'Don\'t give up! Every mistake is a step closer to fluency.',
+                              style: const TextStyle(fontSize: 16, color: AppTheme.textSecondary, fontWeight: FontWeight.w500, height: 1.4),
+                              textAlign: TextAlign.center,
+                            ),
 
-                      const Spacer(),
+                            const SizedBox(height: 32),
 
-                      // Actions
-                      if (!isSuccess) ...[
-                        ElevatedButton(
-                          onPressed: () => Navigator.pop(context),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: AppTheme.primaryColor,
-                            padding: const EdgeInsets.symmetric(vertical: 20),
-                          ),
-                          child: const Text('RETRY LESSON', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
-                        ),
-                        const SizedBox(height: 16),
-                      ],
-                      
-                      TextButton(
-                        onPressed: () {
-                          Navigator.pushNamedAndRemoveUntil(context, AppRoutes.home, (route) => false);
-                        },
-                        style: TextButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 20),
-                        ),
-                        child: Text(
-                          'CONTINUE TO HOME', 
-                          style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: AppTheme.textSecondary.withValues(alpha: 0.7)),
+                            // Score & XP Tiles
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: _buildResultTile(
+                                    'SCORE', 
+                                    '$score/$total', 
+                                    Icons.analytics_rounded, 
+                                    AppTheme.primaryColor
+                                  ),
+                                ),
+                                const SizedBox(width: 16),
+                                Expanded(
+                                  child: _buildResultTile(
+                                    'XP EARNED', 
+                                    '+$xp', 
+                                    Icons.bolt_rounded, 
+                                    Colors.orange
+                                  ),
+                                ),
+                              ],
+                            ),
+
+                            const SizedBox(height: 32),
+
+                            // Actions
+                            if (!isSuccess) ...[
+                              ElevatedButton(
+                                onPressed: () => Navigator.pop(context),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: AppTheme.primaryColor,
+                                  padding: const EdgeInsets.symmetric(vertical: 18),
+                                ),
+                                child: const Text('RETRY LESSON', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16)),
+                              ),
+                              const SizedBox(height: 12),
+                            ],
+                            
+                            TextButton(
+                              onPressed: () {
+                                Navigator.pushNamedAndRemoveUntil(context, AppRoutes.home, (route) => false);
+                              },
+                              style: TextButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(vertical: 18),
+                              ),
+                              child: Text(
+                                'CONTINUE TO HOME', 
+                                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: AppTheme.textSecondary.withValues(alpha: 0.7)),
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                          ],
                         ),
                       ),
-                    ],
-                  ),
+                    );
+                  }
                 ),
               ),
             ],
@@ -144,7 +154,7 @@ class LessonResultScreen extends StatelessWidget {
 
   Widget _buildResultTile(String label, String value, IconData icon, Color color) {
     return Container(
-      padding: const EdgeInsets.all(24),
+      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(24),
@@ -153,10 +163,16 @@ class LessonResultScreen extends StatelessWidget {
       ),
       child: Column(
         children: [
-          Icon(icon, color: color, size: 28),
-          const SizedBox(height: 12),
-          Text(value, style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: AppTheme.textPrimary)),
-          Text(label, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w800, color: AppTheme.textSecondary, letterSpacing: 1)),
+          Icon(icon, color: color, size: 24),
+          const SizedBox(height: 8),
+          Text(value, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: AppTheme.textPrimary)),
+          Text(
+            label, 
+            style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: AppTheme.textSecondary, letterSpacing: 0.5),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            textAlign: TextAlign.center,
+          ),
         ],
       ),
     );

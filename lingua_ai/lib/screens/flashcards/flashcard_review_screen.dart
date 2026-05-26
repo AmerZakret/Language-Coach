@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import '../../core/theme/app_theme.dart';
@@ -5,6 +6,7 @@ import '../../core/localization/language_service.dart';
 import '../../core/localization/target_language_service.dart';
 import '../../models/flashcard.dart';
 import '../../services/flashcard_service.dart';
+import 'package:flutter_tts/flutter_tts.dart';
 
 class FlashcardReviewScreen extends StatefulWidget {
   const FlashcardReviewScreen({super.key});
@@ -23,6 +25,15 @@ class _FlashcardReviewScreenState extends State<FlashcardReviewScreen> with Sing
   
   final List<int> _results = [];
   List<Flashcard> _dueCards = [];
+  List<Flashcard> _originalCards = [];
+
+  // Play/Shuffle/Star/Hint states
+  bool _isPlaying = false;
+  bool _isShuffled = false;
+  Timer? _slideshowTimer;
+  final Set<String> _starredCardIds = {};
+  bool _hintVisible = false;
+  final FlutterTts _flutterTts = FlutterTts();
 
   @override
   void initState() {
@@ -35,14 +46,27 @@ class _FlashcardReviewScreenState extends State<FlashcardReviewScreen> with Sing
       CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
     );
     
-    // Get due cards from the service
-    _dueCards = FlashcardService().dueCards;
+    // Get due cards from service
+    _dueCards = List.from(FlashcardService().dueCards);
+    _originalCards = List.from(FlashcardService().dueCards);
   }
 
   @override
   void dispose() {
     _controller.dispose();
+    _slideshowTimer?.cancel();
     super.dispose();
+  }
+
+  Future<void> _speak(String text, String langCode) async {
+    try {
+      await _flutterTts.setLanguage(langCode);
+      await _flutterTts.setPitch(1.0);
+      await _flutterTts.setSpeechRate(0.5);
+      await _flutterTts.speak(text);
+    } catch (e) {
+      debugPrint('Error using TTS: $e');
+    }
   }
 
   void _toggleCard() {
@@ -56,16 +80,15 @@ class _FlashcardReviewScreenState extends State<FlashcardReviewScreen> with Sing
     });
   }
 
-  Future<void> _handleScore(int score) async {
+  Future<void> _handleScore(int score, {bool manual = true}) async {
     final currentCard = _dueCards[_currentIndex];
-    
-    // Record score
     _results.add(score);
 
     // Call service to update SRS parameters
     await FlashcardService().reviewCard(currentCard, score);
 
     if (_currentIndex + 1 >= _dueCards.length) {
+      _stopSlideshow();
       setState(() {
         _isDone = true;
       });
@@ -73,79 +96,182 @@ class _FlashcardReviewScreenState extends State<FlashcardReviewScreen> with Sing
       setState(() {
         _currentIndex++;
         _isFlipped = false;
+        _hintVisible = false;
       });
       _controller.reset();
     }
   }
 
+  void _startSlideshow() {
+    setState(() {
+      _isPlaying = true;
+    });
+    _slideshowTimer = Timer.periodic(const Duration(seconds: 4), (timer) {
+      if (!_isFlipped) {
+        _toggleCard();
+      } else {
+        // Auto pass with score 4
+        _handleScore(4, manual: false);
+      }
+    });
+  }
+
+  void _stopSlideshow() {
+    _slideshowTimer?.cancel();
+    setState(() {
+      _isPlaying = false;
+    });
+  }
+
+  void _toggleShuffle() {
+    setState(() {
+      if (_isShuffled) {
+        _dueCards = List.from(_originalCards);
+        _isShuffled = false;
+      } else {
+        _dueCards.shuffle();
+        _isShuffled = true;
+      }
+      _currentIndex = 0;
+      _isFlipped = false;
+      _hintVisible = false;
+      _controller.reset();
+    });
+  }
+
+  void _toggleStar(String cardId) {
+    setState(() {
+      if (_starredCardIds.contains(cardId)) {
+        _starredCardIds.remove(cardId);
+      } else {
+        _starredCardIds.add(cardId);
+      }
+    });
+  }
+
+  void _goNextCard() {
+    if (_currentIndex + 1 < _dueCards.length) {
+      setState(() {
+        _currentIndex++;
+        _isFlipped = false;
+        _hintVisible = false;
+      });
+      _controller.reset();
+    }
+  }
+
+  void _goPrevCard() {
+    if (_currentIndex > 0) {
+      setState(() {
+        _currentIndex--;
+        _isFlipped = false;
+        _hintVisible = false;
+      });
+      _controller.reset();
+    }
+  }
+
+  String _getHintText(Flashcard card) {
+    if (card.note != null && card.note!.isNotEmpty) {
+      return 'Note: ${card.note}';
+    }
+    if (card.turkishTranslation.isNotEmpty) {
+      final len = card.turkishTranslation.length;
+      final showLen = len > 2 ? 2 : len;
+      return 'Starts with: "${card.turkishTranslation.substring(0, showLen)}..."';
+    }
+    return 'No hint available';
+  }
+
   Widget _buildCardFront(Flashcard card, String targetLang) {
+    final isStarred = _starredCardIds.contains(card.id);
     return Container(
       key: const ValueKey('front'),
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            AppTheme.primaryColor.withValues(alpha: 0.15),
-            AppTheme.secondaryColor.withValues(alpha: 0.1),
-          ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
+        color: Colors.white,
         borderRadius: BorderRadius.circular(32),
-        border: Border.all(color: AppTheme.primaryColor.withValues(alpha: 0.25), width: 1.5),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.08),
-            blurRadius: 24,
-            offset: const Offset(0, 12),
-          ),
-        ],
+        border: Border.all(color: Colors.grey.shade200, width: 1),
+        boxShadow: AppTheme.cardShadow,
       ),
       child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
-            decoration: BoxDecoration(
-              color: AppTheme.primaryColor.withValues(alpha: 0.2),
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: Text(
-              targetLang.toUpperCase(),
-              style: const TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w800,
-                color: AppTheme.primaryColor,
-                letterSpacing: 1.5,
-              ),
-            ),
-          ),
-          const SizedBox(height: 32),
-          Text(
-            card.targetWord,
-            style: const TextStyle(
-              fontSize: 36,
-              fontWeight: FontWeight.w900,
-              color: AppTheme.textPrimaryColor,
-              letterSpacing: -0.5,
-            ),
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 32),
-          const Row(
-            mainAxisAlignment: MainAxisAlignment.center,
+          // Header inside card
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Icon(Icons.touch_app_rounded, color: AppTheme.textSecondaryColor, size: 18),
-              SizedBox(width: 8),
-              Text(
-                'Tap to flip',
-                style: TextStyle(
-                  fontSize: 13,
-                  color: AppTheme.textSecondaryColor,
-                  fontWeight: FontWeight.w600,
+              TextButton.icon(
+                onPressed: () {
+                  setState(() {
+                    _hintVisible = !_hintVisible;
+                  });
+                },
+                icon: const Icon(Icons.lightbulb_outline_rounded, color: Colors.orange, size: 16),
+                label: const Text(
+                  'Get a hint',
+                  style: TextStyle(color: AppTheme.textSecondaryColor, fontSize: 13, fontWeight: FontWeight.bold),
                 ),
+                style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: Size.zero),
+              ),
+              Row(
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.volume_up_rounded, color: AppTheme.textSecondaryColor, size: 20),
+                    onPressed: () => _speak(card.targetWord, 'en-US'),
+                  ),
+                  IconButton(
+                    icon: Icon(
+                      isStarred ? Icons.star_rounded : Icons.star_outline_rounded,
+                      color: isStarred ? Colors.amber : AppTheme.textSecondaryColor,
+                      size: 20,
+                    ),
+                    onPressed: () => _toggleStar(card.id),
+                  ),
+                ],
               ),
             ],
+          ),
+
+          // Central target word
+          Expanded(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  card.targetWord,
+                  style: const TextStyle(
+                    fontSize: 34,
+                    fontWeight: FontWeight.w900,
+                    color: AppTheme.textPrimaryColor,
+                    letterSpacing: -0.5,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+                if (_hintVisible) ...[
+                  const SizedBox(height: 16),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: Colors.orange.withValues(alpha: 0.08),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: Colors.orange.withValues(alpha: 0.15)),
+                    ),
+                    child: Text(
+                      _getHintText(card),
+                      style: const TextStyle(color: Colors.orange, fontSize: 12, fontWeight: FontWeight.bold),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+
+          // Tap feedback
+          const Text(
+            'Tap card to flip',
+            style: TextStyle(fontSize: 11, color: AppTheme.textSecondaryColor, fontWeight: FontWeight.w600),
           ),
         ],
       ),
@@ -153,128 +279,127 @@ class _FlashcardReviewScreenState extends State<FlashcardReviewScreen> with Sing
   }
 
   Widget _buildCardBack(Flashcard card) {
-    final translation = card.turkishTranslation.isNotEmpty
-        ? card.turkishTranslation
-        : 'No translation';
-    final example = card.aiContext.sentences.isNotEmpty
-        ? card.aiContext.sentences[0]
-        : 'No example available.';
-    final mnemonic = card.aiContext.mnemonic.isNotEmpty
-        ? card.aiContext.mnemonic
-        : 'No mnemonic available.';
+    final translation = card.turkishTranslation.isNotEmpty ? card.turkishTranslation : 'No translation';
+    final isStarred = _starredCardIds.contains(card.id);
 
     return Container(
       key: const ValueKey('back'),
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [
-            AppTheme.accentColor.withValues(alpha: 0.12),
-            Colors.teal.withValues(alpha: 0.08),
-          ],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
+        color: Colors.white,
         borderRadius: BorderRadius.circular(32),
-        border: Border.all(color: AppTheme.accentColor.withValues(alpha: 0.25), width: 1.5),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.08),
-            blurRadius: 24,
-            offset: const Offset(0, 12),
-          ),
-        ],
+        border: Border.all(color: Colors.grey.shade200, width: 1),
+        boxShadow: AppTheme.cardShadow,
       ),
-      child: SingleChildScrollView(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Center(
-              child: Text(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          // Header inside card
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              const Text(
                 'TRANSLATION',
                 style: TextStyle(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w800,
-                  color: AppTheme.accentColor,
-                  letterSpacing: 1.5,
+                  fontSize: 10,
+                  fontWeight: FontWeight.w900,
+                  color: AppTheme.primaryColor,
+                  letterSpacing: 1.2,
                 ),
               ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              translation,
-              style: const TextStyle(
-                fontSize: 28,
-                fontWeight: FontWeight.w900,
-                color: AppTheme.textPrimaryColor,
-              ),
-              textAlign: TextAlign.center,
-            ),
-            const SizedBox(height: 20),
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.white.withValues(alpha: 0.6),
-                borderRadius: BorderRadius.circular(16),
-              ),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              Row(
                 children: [
-                  const Text(
-                    'Example',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      color: AppTheme.textSecondaryColor,
-                    ),
+                  IconButton(
+                    icon: const Icon(Icons.volume_up_rounded, color: AppTheme.textSecondaryColor, size: 20),
+                    onPressed: () => _speak(translation, 'tr-TR'),
                   ),
-                  const SizedBox(height: 4),
-                  Text(
-                    '"$example"',
-                    style: const TextStyle(
-                      fontSize: 14,
-                      color: AppTheme.textPrimaryColor,
-                      fontStyle: FontStyle.italic,
-                      height: 1.4,
+                  IconButton(
+                    icon: Icon(
+                      isStarred ? Icons.star_rounded : Icons.star_outline_rounded,
+                      color: isStarred ? Colors.amber : AppTheme.textSecondaryColor,
+                      size: 20,
                     ),
+                    onPressed: () => _toggleStar(card.id),
                   ),
                 ],
               ),
-            ),
-            const SizedBox(height: 12),
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.orange.withValues(alpha: 0.06),
-                border: Border.all(color: Colors.orange.withValues(alpha: 0.15)),
-                borderRadius: BorderRadius.circular(16),
-              ),
+            ],
+          ),
+
+          // Central translation
+          Expanded(
+            child: SingleChildScrollView(
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const Text(
-                    '💡 Mnemonic',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      color: Colors.orange,
-                    ),
-                  ),
-                  const SizedBox(height: 4),
+                  const SizedBox(height: 12),
                   Text(
-                    mnemonic,
+                    translation,
                     style: const TextStyle(
-                      fontSize: 13,
+                      fontSize: 28,
+                      fontWeight: FontWeight.w900,
                       color: AppTheme.textPrimaryColor,
-                      height: 1.4,
                     ),
+                    textAlign: TextAlign.center,
                   ),
+                  const SizedBox(height: 16),
+                  if (card.exampleSentence != null && card.exampleSentence!.isNotEmpty)
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: AppTheme.backgroundColor,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Example',
+                            style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: AppTheme.textSecondaryColor),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            '"${card.exampleSentence}"',
+                            style: const TextStyle(fontSize: 12, fontStyle: FontStyle.italic, color: AppTheme.textPrimaryColor),
+                          ),
+                        ],
+                      ),
+                    ),
+                  if (card.note != null && card.note!.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Container(
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: AppTheme.backgroundColor,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          const Text(
+                            'Note',
+                            style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: AppTheme.textSecondaryColor),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            card.note!,
+                            style: const TextStyle(fontSize: 12, color: AppTheme.textPrimaryColor),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
-          ],
-        ),
+          ),
+
+          // Tap feedback
+          const Text(
+            'Tap card to flip',
+            style: TextStyle(fontSize: 11, color: AppTheme.textSecondaryColor, fontWeight: FontWeight.w600),
+          ),
+        ],
       ),
     );
   }
@@ -347,9 +472,7 @@ class _FlashcardReviewScreenState extends State<FlashcardReviewScreen> with Sing
     }
 
     if (_isDone) {
-      final avgScore = _results.isEmpty
-          ? 0.0
-          : _results.reduce((a, b) => a + b) / _results.length;
+      final avgScore = _results.isEmpty ? 0.0 : _results.reduce((a, b) => a + b) / _results.length;
 
       return Scaffold(
         body: SafeArea(
@@ -368,29 +491,17 @@ class _FlashcardReviewScreenState extends State<FlashcardReviewScreen> with Sing
                     ),
                     shape: BoxShape.circle,
                   ),
-                  child: const Icon(
-                    Icons.check_rounded,
-                    color: Colors.white,
-                    size: 40,
-                  ),
+                  child: const Icon(Icons.check_rounded, color: Colors.white, size: 40),
                 ),
                 const SizedBox(height: 32),
                 const Text(
                   'Great Job!',
-                  style: TextStyle(
-                    fontSize: 28,
-                    fontWeight: FontWeight.w900,
-                    color: AppTheme.textPrimaryColor,
-                  ),
+                  style: TextStyle(fontSize: 28, fontWeight: FontWeight.w900, color: AppTheme.textPrimaryColor),
                 ),
                 const SizedBox(height: 8),
                 Text(
                   "You've reviewed all ${_dueCards.length} cards for today.",
-                  style: const TextStyle(
-                    fontSize: 15,
-                    color: AppTheme.textSecondaryColor,
-                    fontWeight: FontWeight.w600,
-                  ),
+                  style: const TextStyle(fontSize: 15, color: AppTheme.textSecondaryColor, fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 32),
                 Container(
@@ -404,20 +515,12 @@ class _FlashcardReviewScreenState extends State<FlashcardReviewScreen> with Sing
                     children: [
                       Text(
                         '${avgScore.toStringAsFixed(1)} / 5',
-                        style: const TextStyle(
-                          fontSize: 36,
-                          fontWeight: FontWeight.w900,
-                          color: AppTheme.accentColor,
-                        ),
+                        style: const TextStyle(fontSize: 36, fontWeight: FontWeight.w900, color: AppTheme.accentColor),
                       ),
                       const SizedBox(height: 4),
                       const Text(
                         'Average Score',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: AppTheme.textSecondaryColor,
-                          fontWeight: FontWeight.w700,
-                        ),
+                        style: TextStyle(fontSize: 12, color: AppTheme.textSecondaryColor, fontWeight: FontWeight.w700),
                       ),
                     ],
                   ),
@@ -442,6 +545,7 @@ class _FlashcardReviewScreenState extends State<FlashcardReviewScreen> with Sing
     }
 
     final card = _dueCards[_currentIndex];
+    final progressVal = _dueCards.isNotEmpty ? _currentIndex / _dueCards.length : 0.0;
 
     return Scaffold(
       appBar: AppBar(
@@ -452,64 +556,19 @@ class _FlashcardReviewScreenState extends State<FlashcardReviewScreen> with Sing
               style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 20),
             ),
             Text(
-              '${_dueCards.length} ${lang.getString('cards_due')}',
-              style: const TextStyle(fontSize: 12, color: AppTheme.textSecondaryColor, fontWeight: FontWeight.w600),
+              '${_dueCards.length} due today',
+              style: const TextStyle(fontSize: 11, color: AppTheme.textSecondaryColor, fontWeight: FontWeight.w600),
             ),
           ],
         ),
-        actions: [
-          Padding(
-            padding: const EdgeInsets.only(right: 16),
-            child: Center(
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: AppTheme.primaryColor.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: AppTheme.primaryColor.withValues(alpha: 0.2)),
-                ),
-                child: Text(
-                  '${_currentIndex + 1} / ${_dueCards.length}',
-                  style: const TextStyle(
-                    color: AppTheme.primaryColor,
-                    fontWeight: FontWeight.w800,
-                    fontSize: 13,
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ],
       ),
       body: SafeArea(
         child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              // Progress indicators
-              Row(
-                children: List.generate(_dueCards.length, (i) {
-                  final isDone = i < _currentIndex;
-                  final isCurrent = i == _currentIndex;
-                  return Expanded(
-                    child: Container(
-                      height: 6,
-                      margin: const EdgeInsets.symmetric(horizontal: 2),
-                      decoration: BoxDecoration(
-                        color: isDone
-                            ? AppTheme.primaryColor
-                            : isCurrent
-                                ? AppTheme.primaryColor.withValues(alpha: 0.5)
-                                : Colors.grey.shade200,
-                        borderRadius: BorderRadius.circular(3),
-                      ),
-                    ),
-                  );
-                }),
-              ),
-              const SizedBox(height: 32),
-              // Flip Card Container
+              // Study Card Container
               Expanded(
                 child: Center(
                   child: GestureDetector(
@@ -543,9 +602,82 @@ class _FlashcardReviewScreenState extends State<FlashcardReviewScreen> with Sing
                   ),
                 ),
               ),
-              const SizedBox(height: 32),
-              // Buttons panel
-              _buildControlPanel(lang),
+              const SizedBox(height: 16),
+
+              // Rating Panel - Visible only when flipped
+              AnimatedSize(
+                duration: const Duration(milliseconds: 250),
+                child: Container(
+                  child: _isFlipped ? _buildRatingPanel(lang) : const SizedBox.shrink(),
+                ),
+              ),
+
+              // Controls Bar (Play, Shuffle, Prev, Next, Star)
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(
+                    children: [
+                      IconButton(
+                        icon: Icon(
+                          _isShuffled ? Icons.shuffle_on_rounded : Icons.shuffle_rounded,
+                          color: _isShuffled ? AppTheme.primaryColor : AppTheme.textSecondaryColor,
+                        ),
+                        onPressed: _toggleShuffle,
+                      ),
+                      IconButton(
+                        icon: Icon(
+                          _isPlaying ? Icons.pause_circle_filled_rounded : Icons.play_circle_fill_rounded,
+                          color: _isPlaying ? AppTheme.primaryColor : AppTheme.textSecondaryColor,
+                        ),
+                        onPressed: () {
+                          if (_isPlaying) {
+                            _stopSlideshow();
+                          } else {
+                            _startSlideshow();
+                          }
+                        },
+                      ),
+                    ],
+                  ),
+                  
+                  // Centered Navigation Controls
+                  Row(
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.arrow_back_rounded),
+                        onPressed: _currentIndex > 0 ? _goPrevCard : null,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        '${_currentIndex + 1} / ${_dueCards.length}',
+                        style: const TextStyle(fontWeight: FontWeight.bold, color: AppTheme.textPrimaryColor),
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton(
+                        icon: const Icon(Icons.arrow_forward_rounded),
+                        onPressed: _currentIndex + 1 < _dueCards.length ? _goNextCard : null,
+                      ),
+                    ],
+                  ),
+
+                  // Empty slot to keep balance
+                  const SizedBox(width: 48),
+                ],
+              ),
+              const SizedBox(height: 12),
+
+              // Linear Progress Bar
+              ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: LinearProgressIndicator(
+                  value: progressVal,
+                  minHeight: 6,
+                  backgroundColor: Colors.grey.shade200,
+                  valueColor: const AlwaysStoppedAnimation<Color>(AppTheme.primaryColor),
+                ),
+              ),
+              const SizedBox(height: 8),
             ],
           ),
         ),
@@ -553,49 +685,7 @@ class _FlashcardReviewScreenState extends State<FlashcardReviewScreen> with Sing
     );
   }
 
-  Widget _buildControlPanel(LanguageService lang) {
-    if (!_isFlipped) {
-      return Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-        children: [
-          // Forgot button
-          _buildActionButton(
-            label: lang.getString('forgot'),
-            icon: Icons.arrow_back_rounded,
-            color: AppTheme.errorColor,
-            onPressed: () => _handleScore(1),
-          ),
-          // Flip button
-          ElevatedButton.icon(
-            onPressed: _toggleCard,
-            icon: const Icon(Icons.rotate_right_rounded),
-            label: Text(
-              lang.getString('show_answer'),
-              style: const TextStyle(fontWeight: FontWeight.w800),
-            ),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: AppTheme.primaryColor.withValues(alpha: 0.12),
-              foregroundColor: AppTheme.primaryColor,
-              elevation: 0,
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(16),
-                side: const BorderSide(color: AppTheme.primaryColor, width: 1.5),
-              ),
-            ),
-          ),
-          // Got it button
-          _buildActionButton(
-            label: lang.getString('got_it'),
-            icon: Icons.arrow_forward_rounded,
-            color: AppTheme.accentColor,
-            onPressed: () => _handleScore(4),
-          ),
-        ],
-      );
-    }
-
-    // Flipped state: show full 0-5 rating buttons
+  Widget _buildRatingPanel(LanguageService lang) {
     final labels = ["Forgot", "Hard", "Okay", "Easy", "Very Easy", "Perfect"];
     final colors = [
       AppTheme.errorColor,
@@ -606,101 +696,59 @@ class _FlashcardReviewScreenState extends State<FlashcardReviewScreen> with Sing
       AppTheme.primaryColor,
     ];
 
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Text(
-          lang.getString('how_well_knew'),
-          style: const TextStyle(
-            fontSize: 13,
-            color: AppTheme.textSecondaryColor,
-            fontWeight: FontWeight.w700,
+    return Container(
+      margin: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: AppTheme.cardShadow,
+      ),
+      child: Column(
+        children: [
+          const Text(
+            'How well did you know this word?',
+            style: TextStyle(fontSize: 12, color: AppTheme.textSecondaryColor, fontWeight: FontWeight.bold),
           ),
-          textAlign: TextAlign.center,
-        ),
-        const SizedBox(height: 16),
-        GridView.count(
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          crossAxisCount: 3,
-          crossAxisSpacing: 10,
-          mainAxisSpacing: 10,
-          childAspectRatio: 1.5,
-          children: List.generate(6, (index) {
-            final color = colors[index];
-            final label = labels[index];
-            return InkWell(
-              onTap: () => _handleScore(index),
-              borderRadius: BorderRadius.circular(16),
-              child: Container(
-                decoration: BoxDecoration(
-                  color: color.withValues(alpha: 0.08),
-                  border: Border.all(color: color.withValues(alpha: 0.2), width: 1.5),
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(
-                      '$index',
-                      style: TextStyle(
-                        fontSize: 18,
-                        fontWeight: FontWeight.w900,
-                        color: color,
+          const SizedBox(height: 10),
+          GridView.count(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            crossAxisCount: 3,
+            crossAxisSpacing: 8,
+            mainAxisSpacing: 8,
+            childAspectRatio: 1.6,
+            children: List.generate(6, (index) {
+              final color = colors[index];
+              final label = labels[index];
+              return InkWell(
+                onTap: () => _handleScore(index),
+                borderRadius: BorderRadius.circular(12),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.08),
+                    border: Border.all(color: color.withValues(alpha: 0.15), width: 1.2),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        '$index',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w900, color: color),
                       ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      label,
-                      style: TextStyle(
-                        fontSize: 9,
-                        fontWeight: FontWeight.w800,
-                        color: color,
+                      Text(
+                        label,
+                        style: TextStyle(fontSize: 8, fontWeight: FontWeight.w800, color: color),
+                        textAlign: TextAlign.center,
                       ),
-                      textAlign: TextAlign.center,
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-            );
-          }),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildActionButton({
-    required String label,
-    required IconData icon,
-    required Color color,
-    required VoidCallback onPressed,
-  }) {
-    return InkWell(
-      onTap: onPressed,
-      borderRadius: BorderRadius.circular(20),
-      child: Container(
-        width: 100,
-        padding: const EdgeInsets.symmetric(vertical: 16),
-        decoration: BoxDecoration(
-          color: color.withValues(alpha: 0.08),
-          border: Border.all(color: color.withValues(alpha: 0.15), width: 1.5),
-          borderRadius: BorderRadius.circular(20),
-        ),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(icon, color: color, size: 20),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w800,
-                color: color,
-              ),
-            ),
-          ],
-        ),
+              );
+            }),
+          ),
+        ],
       ),
     );
   }

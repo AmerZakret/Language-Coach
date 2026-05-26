@@ -12,7 +12,7 @@ class LinguaAIApp extends StatelessWidget {
     final String initial = (auth.isLoggedIn || auth.isGuest) ? AppRoutes.home : AppRoutes.login;
 
     return MaterialApp(
-      title: 'LinguaAI',
+      title: 'LinguAi',
       debugShowCheckedModeBanner: false,
       theme: AppTheme.lightTheme,
       initialRoute: initial,

@@ -12,6 +12,12 @@ export class Flashcard extends Document {
   @Prop({ required: true })
   turkishTranslation: string;
 
+  @Prop({ required: false })
+  exampleSentence?: string;
+
+  @Prop({ required: false })
+  note?: string;
+
   @Prop({ default: 0 })
   interval: number;
 
@@ -21,11 +27,14 @@ export class Flashcard extends Document {
   @Prop({ default: Date.now })
   nextReviewDate: Date;
 
+  @Prop({ default: 0 })
+  reviewCount: number;
+
   @Prop({ type: [{ date: Date, score: Number }] })
   history: { date: Date; score: number }[];
 
-  @Prop({ type: Object })
-  aiContext: {
+  @Prop({ type: Object, required: false })
+  aiContext?: {
     sentences: string[];
     mnemonic: string;
   };

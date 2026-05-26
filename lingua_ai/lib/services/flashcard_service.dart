@@ -109,44 +109,126 @@ class FlashcardService extends ChangeNotifier {
     }
   }
 
-  Future<void> createFlashcard(String word, String translation) async {
+  Future<void> createFlashcard(
+    String targetWord,
+    String turkishTranslation, {
+    String? exampleSentence,
+    String? note,
+  }) async {
     final auth = AuthService();
     final userId = auth.currentUserId.isNotEmpty ? auth.currentUserId : auth.currentUserEmail;
 
     if (auth.isLoggedIn && !auth.isGuest) {
       try {
-        final newCard = await _apiService.createFlashcard(userId, word, translation);
+        final newCard = await _apiService.createFlashcard(
+          userId,
+          targetWord,
+          turkishTranslation,
+          exampleSentence: exampleSentence,
+          note: note,
+        );
         _cards.add(newCard);
         await _saveLocal();
       } catch (e) {
         debugPrint('Failed to create flashcard on backend: $e. Falling back to local.');
-        _createLocalCard(userId, word, translation);
+        _createLocalCard(userId, targetWord, turkishTranslation, exampleSentence, note);
       }
     } else {
-      _createLocalCard(userId, word, translation);
+      _createLocalCard(userId, targetWord, turkishTranslation, exampleSentence, note);
     }
   }
 
-  void _createLocalCard(String userId, String word, String translation) {
+  void _createLocalCard(
+    String userId,
+    String targetWord,
+    String turkishTranslation,
+    String? exampleSentence,
+    String? note,
+  ) {
     final localId = 'local_${DateTime.now().millisecondsSinceEpoch}';
     final newCard = Flashcard(
       id: localId,
       userId: userId,
-      targetWord: word,
-      turkishTranslation: translation,
+      targetWord: targetWord,
+      turkishTranslation: turkishTranslation,
+      exampleSentence: exampleSentence,
+      note: note,
       interval: 0,
       easinessFactor: 2.5,
       nextReviewDate: DateTime.now(),
+      reviewCount: 0,
       history: [],
       aiContext: FlashcardAiContext(
-        sentences: [
-          'This is a local example sentence using "$word".',
-        ],
-        mnemonic: 'Local association: "$word" means "$translation".',
+        sentences: exampleSentence != null && exampleSentence.isNotEmpty ? [exampleSentence] : ['Local example sentence.'],
+        mnemonic: note != null && note.isNotEmpty ? note : 'Local association.',
       ),
     );
     _cards.add(newCard);
     _saveLocal();
+  }
+
+  Future<void> updateFlashcard(
+    String cardId,
+    String targetWord,
+    String turkishTranslation, {
+    String? exampleSentence,
+    String? note,
+  }) async {
+    final auth = AuthService();
+    final isLocal = cardId.startsWith('local_') || auth.isGuest || !auth.isLoggedIn;
+
+    if (!isLocal) {
+      try {
+        final updatedCard = await _apiService.updateFlashcard(
+          cardId,
+          targetWord,
+          turkishTranslation,
+          exampleSentence: exampleSentence,
+          note: note,
+        );
+        final index = _cards.indexWhere((c) => c.id == cardId);
+        if (index != -1) {
+          _cards[index] = updatedCard;
+        }
+        await _saveLocal();
+        return;
+      } catch (e) {
+        debugPrint('Failed to update flashcard on backend: $e. Falling back to local update.');
+      }
+    }
+
+    // Local update
+    final index = _cards.indexWhere((c) => c.id == cardId);
+    if (index != -1) {
+      final oldCard = _cards[index];
+      _cards[index] = oldCard.copyWith(
+        targetWord: targetWord,
+        turkishTranslation: turkishTranslation,
+        exampleSentence: exampleSentence,
+        note: note,
+      );
+      await _saveLocal();
+    }
+  }
+
+  Future<void> deleteFlashcard(String cardId) async {
+    final auth = AuthService();
+    final isLocal = cardId.startsWith('local_') || auth.isGuest || !auth.isLoggedIn;
+
+    if (!isLocal) {
+      try {
+        await _apiService.deleteFlashcard(cardId);
+        _cards.removeWhere((c) => c.id == cardId);
+        await _saveLocal();
+        return;
+      } catch (e) {
+        debugPrint('Failed to delete flashcard on backend: $e. Falling back to local delete.');
+      }
+    }
+
+    // Local delete
+    _cards.removeWhere((c) => c.id == cardId);
+    await _saveLocal();
   }
 
   Future<void> reviewCard(Flashcard card, int score) async {
@@ -177,6 +259,7 @@ class FlashcardService extends ChangeNotifier {
       interval: srsResult.newInterval,
       easinessFactor: srsResult.newEf,
       nextReviewDate: srsResult.nextReviewDate,
+      reviewCount: card.reviewCount + 1,
       history: [...card.history, historyItem],
     );
 

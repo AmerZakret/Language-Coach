@@ -25,7 +25,13 @@ export class FlashcardsService {
     }).exec();
   }
 
-  async create(userId: string, targetWord: string, turkishTranslation: string) {
+  async create(
+    userId: string,
+    targetWord: string,
+    turkishTranslation: string,
+    exampleSentence?: string,
+    note?: string,
+  ) {
     let user = await this.findUser(userId);
     if (!user) {
       // Create user if not exists to ensure guest/local flows function gracefully
@@ -47,6 +53,8 @@ export class FlashcardsService {
 
     if (existing) {
       existing.turkishTranslation = turkishTranslation;
+      if (exampleSentence !== undefined) existing.exampleSentence = exampleSentence;
+      if (note !== undefined) existing.note = note;
       existing.nextReviewDate = new Date();
       existing.aiContext = await this.aiContext.generateContext(targetWord, turkishTranslation);
       return existing.save();
@@ -58,11 +66,50 @@ export class FlashcardsService {
       userId: user._id.toString(),
       targetWord,
       turkishTranslation,
+      exampleSentence,
+      note,
       aiContext,
       nextReviewDate: new Date(), // Review immediately
     });
 
     return flashcard.save();
+  }
+
+  async update(
+    cardId: string,
+    targetWord: string,
+    turkishTranslation: string,
+    exampleSentence?: string,
+    note?: string,
+    authenticatedUserId?: string,
+  ) {
+    const card = await this.flashcardModel.findById(cardId);
+    if (!card) throw new NotFoundException('Flashcard not found');
+
+    if (authenticatedUserId && card.userId.toString() !== authenticatedUserId) {
+      throw new ForbiddenException('Access denied: Cannot edit another user\'s flashcards');
+    }
+
+    card.targetWord = targetWord;
+    card.turkishTranslation = turkishTranslation;
+    card.exampleSentence = exampleSentence;
+    card.note = note;
+
+    card.aiContext = await this.aiContext.generateContext(targetWord, turkishTranslation);
+
+    return card.save();
+  }
+
+  async delete(cardId: string, authenticatedUserId: string) {
+    const card = await this.flashcardModel.findById(cardId);
+    if (!card) throw new NotFoundException('Flashcard not found');
+
+    if (card.userId.toString() !== authenticatedUserId) {
+      throw new ForbiddenException('Access denied: Cannot delete another user\'s flashcards');
+    }
+
+    await this.flashcardModel.deleteOne({ _id: card._id }).exec();
+    return { message: 'Flashcard deleted successfully' };
   }
 
   async getDueCards(userId: string) {
@@ -92,6 +139,7 @@ export class FlashcardsService {
     card.easinessFactor = newEf;
     card.interval = newInterval;
     card.nextReviewDate = nextReviewDate;
+    card.reviewCount = (card.reviewCount || 0) + 1;
     card.history.push({ date: new Date(), score });
 
     return card.save();

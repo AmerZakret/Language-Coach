@@ -1,10 +1,6 @@
 import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 
-export class CreateFlashcardDto {
-  @IsNotEmpty()
-  @IsString()
-  userId: string;
-
+export class UpdateFlashcardDto {
   @IsNotEmpty()
   @IsString()
   @MaxLength(100)
