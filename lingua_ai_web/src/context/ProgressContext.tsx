@@ -4,14 +4,15 @@ import { DEFAULT_PROGRESS } from '../types/progress';
 import { useAuth } from './AuthContext';
 import { useTargetLanguage } from './TargetLanguageContext';
 import { getUserProgressKey } from '../utils/userKey';
-import { loadProgress, saveProgress } from '../utils/progressStorage';
-import { fetchProgress, saveProgressToBackend } from '../api/progressApi';
+import { loadProgress, saveProgress, resetProgress as resetLocalProgress } from '../utils/progressStorage';
+import { fetchProgress, saveProgressToBackend, resetProgressInBackend } from '../api/progressApi';
 
 interface ProgressContextType {
   progress: ProgressState;
   addXp: (amount: number) => void;
-  completeLesson: (lessonId: string, xpReward: number) => void;
+  completeLesson: (lessonId: string, xpReward: number, score: number) => void;
   reloadProgress: () => void;
+  resetProgress: () => Promise<void>;
 }
 
 const ProgressContext = createContext<ProgressContextType | undefined>(undefined);
@@ -28,8 +29,9 @@ export const ProgressProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     let current = loadProgress(userKey, targetLanguage);
 
     // 2. If logged in and NOT guest, try to sync with backend
-    if (user && !isGuest && user.email) {
-      const backendData = await fetchProgress(user.email);
+    const identifier = user?.id || user?.email;
+    if (user && !isGuest && identifier) {
+      const backendData = await fetchProgress(identifier);
       if (backendData) {
         // Simple merge: remote wins for simplicity or higher XP wins
         current = {
@@ -56,7 +58,7 @@ export const ProgressProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     });
   };
 
-  const completeLesson = async (lessonId: string, xpReward: number) => {
+  const completeLesson = async (lessonId: string, xpReward: number, score: number = 100) => {
     // Check if already completed in the current progress state
     if (progress.completedLessonIds.includes(lessonId)) {
        // Optional: Still allow XP if we want, but instructions say mark as completed
@@ -72,18 +74,38 @@ export const ProgressProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setProgress(updated);
     saveProgress(userKey, targetLanguage, updated);
 
-    // Sync to backend if logged in
-    if (user && !isGuest && user.email) {
+    // Sync to backend if logged in (also for guests with a token)
+    const identifier = user?.id || user?.email;
+    const hasToken = !!localStorage.getItem('linguaai_token');
+    if (user && identifier && ((!isGuest) || hasToken)) {
       try {
-        await saveProgressToBackend(user.email, lessonId, xpReward);
+        await saveProgressToBackend(identifier, lessonId, score);
       } catch (e) {
         console.error('Failed to sync lesson completion to backend', e);
       }
     }
   };
 
+  const handleResetProgress = async () => {
+    // 1. Clear local progress storage
+    resetLocalProgress(userKey, targetLanguage);
+
+    // 2. If logged in and NOT guest, notify backend
+    const identifier = user?.id || user?.email;
+    if (user && !isGuest && identifier) {
+      try {
+        await resetProgressInBackend(identifier);
+      } catch (e) {
+        console.error('Failed to reset progress in backend', e);
+      }
+    }
+
+    // 3. Reset in-memory state
+    setProgress(DEFAULT_PROGRESS);
+  };
+
   return (
-    <ProgressContext.Provider value={{ progress, addXp, completeLesson, reloadProgress: loadCurrentProgress }}>
+    <ProgressContext.Provider value={{ progress, addXp, completeLesson, reloadProgress: loadCurrentProgress, resetProgress: handleResetProgress }}>
       {children}
     </ProgressContext.Provider>
   );

@@ -47,4 +47,21 @@ class AuthApiService {
       rethrow;
     }
   }
+
+  Future<Map<String, dynamic>> loginGuest() async {
+    try {
+      final response = await http.post(
+        Uri.parse('${ApiConfig.baseUrl}${ApiConfig.authGuest}'),
+        headers: {'Content-Type': 'application/json'},
+      );
+
+      if (response.statusCode == 201 || response.statusCode == 200) {
+        return json.decode(response.body);
+      } else {
+        throw Exception('Failed to login as guest');
+      }
+    } catch (e) {
+      rethrow;
+    }
+  }
 }

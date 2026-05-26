@@ -55,11 +55,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
     try {
       final response = await _apiService.register(name, email, password);
       
+      final userData = response['user'] ?? {};
       // Update session with backend data
       auth.setBackendSession(
-        name: name,
-        email: email,
+        name: userData['name'] ?? name,
+        email: userData['email'] ?? email,
         token: response['access_token'] ?? 'placeholder-token',
+        id: userData['id'] ?? '',
       );
 
       // Sync progress

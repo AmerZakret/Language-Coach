@@ -1,11 +1,11 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document } from 'mongoose';
+import { Document, Schema as MongooseSchema } from 'mongoose';
 
 export type ChatMessageDocument = ChatMessage & Document;
 
 @Schema({ timestamps: true })
 export class ChatMessage {
-  @Prop({ required: true, index: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true, index: true })
   userId: string;
 
   @Prop({ required: true, index: true })

@@ -6,7 +6,7 @@ export class Progress extends Document {
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
   userId: string;
 
-  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Lesson', required: true })
+  @Prop({ required: true })
   lessonId: string;
 
   @Prop({ default: 'completed' })
@@ -17,3 +17,4 @@ export class Progress extends Document {
 }
 
 export const ProgressSchema = SchemaFactory.createForClass(Progress);
+ProgressSchema.index({ userId: 1, lessonId: 1 }, { unique: true });

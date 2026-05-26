@@ -7,7 +7,7 @@ interface AuthContextType {
   isGuest: boolean;
   loading: boolean;
   login: (user: User, token: string) => void;
-  loginAsGuest: () => void;
+  loginAsGuest: () => Promise<void>;
   logout: () => void;
 }
 
@@ -27,6 +27,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (storedIsGuest) {
       setIsGuest(true);
       setUser({ id: 'guest', name: 'Guest User', email: 'guest@lingua.ai', isGuest: true });
+      if (storedToken) {
+        setToken(storedToken);
+      }
     } else if (storedUser) {
       try {
         setUser(JSON.parse(storedUser));
@@ -48,13 +51,36 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setIsGuest(false);
   };
 
-  const loginAsGuest = () => {
+  const loginAsGuest = async () => {
     const guestUser: User = { id: 'guest', name: 'Guest User', email: 'guest@lingua.ai', isGuest: true };
     localStorage.setItem('linguaai_is_guest', 'true');
     localStorage.removeItem('linguaai_user');
-    localStorage.removeItem('linguaai_token');
+
+    // Try to get a real guest token from the backend
+    try {
+      const response = await fetch(
+        `${import.meta.env.VITE_API_URL || 'http://localhost:3000'}/auth/guest`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' } }
+      );
+      if (response.ok) {
+        const data = await response.json();
+        const guestToken = data.access_token || '';
+        const backendUser = data.user || {};
+        guestUser.id = backendUser.id || 'guest';
+        localStorage.setItem('linguaai_token', guestToken);
+        setToken(guestToken);
+      } else {
+        // Server returned error — fall back to local guest
+        localStorage.removeItem('linguaai_token');
+        setToken(null);
+      }
+    } catch {
+      // Server unreachable — fall back to local guest
+      localStorage.removeItem('linguaai_token');
+      setToken(null);
+    }
+
     setUser(guestUser);
-    setToken(null);
     setIsGuest(true);
   };
 

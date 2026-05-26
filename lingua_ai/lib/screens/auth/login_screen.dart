@@ -51,11 +51,13 @@ class _LoginScreenState extends State<LoginScreen> {
     try {
       final response = await _apiService.login(email, password);
       
+      final userData = response['user'] ?? {};
       // Update session with backend data
       auth.setBackendSession(
-        name: email.split('@')[0].toUpperCase(),
-        email: email,
+        name: userData['name'] ?? email.split('@')[0].toUpperCase(),
+        email: userData['email'] ?? email,
         token: response['access_token'] ?? '',
+        id: userData['id'] ?? '',
       );
 
       // Sync progress from backend
@@ -75,9 +77,27 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
-  void _handleGuestLogin() {
-    AuthService().loginAsGuest();
-    Navigator.pushNamedAndRemoveUntil(context, AppRoutes.home, (route) => false);
+  Future<void> _handleGuestLogin() async {
+    setState(() => _isLoading = true);
+    final auth = AuthService();
+
+    try {
+      final response = await _apiService.loginGuest();
+      final userData = response['user'] ?? {};
+      auth.setGuestSession(
+        token: response['access_token'] ?? '',
+        id: userData['id'] ?? 'guest',
+      );
+    } catch (e) {
+      // Server unreachable — fall back to local guest mode
+      debugPrint('Guest login backend failed, falling back to local: $e');
+      auth.loginAsGuest();
+    }
+
+    if (mounted) {
+      setState(() => _isLoading = false);
+      Navigator.pushNamedAndRemoveUntil(context, AppRoutes.home, (route) => false);
+    }
   }
 
   @override

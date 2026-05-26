@@ -86,6 +86,13 @@ const translations: Record<InterfaceLanguage, Record<string, string>> = {
     next: 'Next',
     complete_previous_to_unlock: 'Complete previous level to unlock',
     progress: 'Progress',
+    flashcards: 'Flashcards',
+    quick_add_card: 'Quick Add Card',
+    add: 'Add',
+    added: 'Added!',
+    start: 'Start',
+    keep_learning: 'Keep learning',
+    today: 'today',
   },
   tr: {
     dashboard: 'Panel',
@@ -163,6 +170,13 @@ const translations: Record<InterfaceLanguage, Record<string, string>> = {
     next: 'Sıradaki',
     complete_previous_to_unlock: 'Önceki seviyeyi tamamla',
     progress: 'İlerleme',
+    flashcards: 'Kartlar',
+    quick_add_card: 'Hızlı Kart Ekle',
+    add: 'Ekle',
+    added: 'Eklendi!',
+    start: 'Başla',
+    keep_learning: 'Öğrenmeye devam et:',
+    today: 'bugün',
   },
 };
 

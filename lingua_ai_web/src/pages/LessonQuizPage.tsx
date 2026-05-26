@@ -1,29 +1,29 @@
-import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { useLanguage } from '../context/LanguageContext';
-import { useTargetLanguage } from '../context/TargetLanguageContext';
-import { useProgress } from '../context/ProgressContext';
-import { getLessonById } from '../api/lessonsApi';
-import { fallbackLessons } from '../data/fallbackLessons';
-import type { Lesson } from '../types/lesson';
-import { Button } from '../components/common/Button';
-import { ArrowLeft, CheckCircle2, XCircle, Trophy } from 'lucide-react';
-import { soundService } from '../utils/soundService';
-import './LessonQuizPage.css';
+import { useState, useEffect } from "react";
+import { useParams, useNavigate } from "react-router-dom";
+import { ArrowLeft, ArrowRight, CheckCircle2, XCircle, Trophy, Zap } from "lucide-react";
 
-export const LessonQuizPage: React.FC = () => {
+import { useTargetLanguage } from "../context/TargetLanguageContext";
+import { useProgress } from "../context/ProgressContext";
+import { getLessonById } from "../api/lessonsApi";
+import { fallbackLessons } from "../data/fallbackLessons";
+import type { Lesson } from "../types/lesson";
+import { soundService } from "../utils/soundService";
+
+type AnswerState = "idle" | "correct" | "incorrect";
+
+export function LessonQuizPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { t } = useLanguage();
+
   const { targetLanguage } = useTargetLanguage();
   const { completeLesson } = useProgress();
 
   const [lesson, setLesson] = useState<Lesson | null>(null);
-  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
-  const [selectedOption, setSelectedOption] = useState<string | null>(null);
-  const [isAnswered, setIsAnswered] = useState(false);
+  const [current, setCurrent] = useState(0);
+  const [selected, setSelected] = useState<number | null>(null);
+  const [answerState, setAnswerState] = useState<AnswerState>("idle");
   const [score, setScore] = useState(0);
-  const [isFinished, setIsFinished] = useState(false);
+  const [done, setDone] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -35,8 +35,8 @@ export const LessonQuizPage: React.FC = () => {
           setLesson(found);
         }
       } catch (e) {
-        console.error('Failed to load lesson by ID, trying fallback', e);
-        const fallback = fallbackLessons.find(l => l.id === id);
+        console.error("Failed to load lesson by ID, trying fallback", e);
+        const fallback = fallbackLessons.find((l) => l.id === id);
         if (fallback) setLesson(fallback);
       } finally {
         setLoading(false);
@@ -45,146 +45,172 @@ export const LessonQuizPage: React.FC = () => {
     loadLesson();
   }, [id, targetLanguage]);
 
-  if (loading) return <div className="quiz-loading"><div className="spinner"></div></div>;
+  if (loading) return <div className="min-h-screen flex items-center justify-center" style={{ background: "var(--l-bg)", color: "var(--l-text)" }}>Loading...</div>;
   if (!lesson || !lesson.questions || lesson.questions.length === 0) {
     return (
-      <div className="quiz-error animate-fade-in">
-        <div className="results-card glass-panel">
-          <h2>{t('lesson_unavailable')}</h2>
-          <p>{t('lesson_no_questions')}</p>
-          <Button variant="primary" onClick={() => navigate('/lessons')}>{t('back_to_lessons')}</Button>
+      <div className="min-h-screen flex items-center justify-center p-6" style={{ background: "var(--l-bg)" }}>
+        <div className="w-full max-w-sm text-center">
+          <h2 style={{ fontSize: "28px", fontWeight: 800, color: "var(--l-text)", marginBottom: "8px" }}>Lesson Unavailable</h2>
+          <p style={{ fontSize: "14px", color: "var(--l-muted)", marginBottom: "32px" }}>No questions found for this lesson.</p>
+          <button onClick={() => navigate("/lessons")} className="w-full py-3 rounded-xl" style={{ background: "var(--l-card-hover)", color: "var(--l-text)", border: "1px solid var(--l-border)", fontSize: "14px", fontWeight: 700 }}>
+            Back to Lessons
+          </button>
         </div>
       </div>
     );
   }
 
-  const questions = lesson.questions;
-  const currentQuestion = questions[currentQuestionIndex];
-  const isCorrect = selectedOption === currentQuestion.correctAnswer;
+  const q = lesson.questions[current];
+  const progress = (current / lesson.questions.length) * 100;
 
-  const handleOptionSelect = (option: string) => {
-    if (isAnswered) return;
-    setSelectedOption(option);
-    setIsAnswered(true);
-    if (option === currentQuestion.correctAnswer) {
-      setScore(s => s + 1);
+  const handleSelect = (idx: number) => {
+    if (answerState !== "idle") return;
+    setSelected(idx);
+    const isCorrect = q.options[idx] === q.correctAnswer;
+    if (isCorrect) {
+      setAnswerState("correct");
+      setScore((s) => s + 1);
       soundService.playCorrect();
     } else {
+      setAnswerState("incorrect");
       soundService.playWrong();
     }
   };
 
   const handleNext = () => {
-    if (currentQuestionIndex < questions.length - 1) {
-      setCurrentQuestionIndex(i => i + 1);
-      setSelectedOption(null);
-      setIsAnswered(false);
+    if (current + 1 >= (lesson.questions?.length || 0)) {
+      setDone(true);
+      const totalQuestions = lesson.questions?.length || 1;
+      // score is current correct count; +1 if the final answer was also correct
+      // but score state is already updated by handleSelect before handleNext is called
+      const pct = Math.round((score / totalQuestions) * 100);
+      completeLesson(lesson.id, lesson.xpReward, pct);
     } else {
-      setIsFinished(true);
-      completeLesson(lesson.id, lesson.xpReward);
+      setCurrent((c) => c + 1);
+      setSelected(null);
+      setAnswerState("idle");
     }
   };
 
-  if (isFinished) {
-    const percentage = (score / questions.length) * 100;
+  if (done) {
+    const pct = Math.round((score / lesson.questions.length) * 100);
+    const msg = pct >= 80 ? "Excellent! 🎉" : pct >= 60 ? "Good job! 👍" : "Keep practicing! 💪";
     return (
-      <div className="quiz-results animate-fade-in">
-        <div className="results-card glass-panel">
-          <div className="results-icon">
-            <Trophy size={64} className="trophy-icon" />
+      <div className="min-h-screen flex items-center justify-center p-6 animate-fade-in" style={{ background: "var(--l-bg)" }}>
+        <div className="w-full max-w-sm text-center">
+          <div className="w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-6" style={{ background: "linear-gradient(135deg, #F59E0B, #EF4444)", boxShadow: "0 0 40px rgba(245,158,11,0.3)" }}>
+            <Trophy size={36} color="white" />
           </div>
-          <h2 className="results-title">{percentage >= 80 ? t('excellent') : t('good_job')}</h2>
-          <p className="results-subtitle">{lesson.title}</p>
-          
-          <div className="results-stats">
-            <div className="res-stat">
-              <span className="res-stat-val">{score}/{questions.length}</span>
-              <span className="res-stat-label">{t('score')}</span>
+          <h2 style={{ fontSize: "28px", fontWeight: 800, color: "var(--l-text)", marginBottom: "8px" }}>{msg}</h2>
+          <p style={{ fontSize: "14px", color: "var(--l-muted)", marginBottom: "32px" }}>{lesson.title}</p>
+          <div className="grid grid-cols-2 gap-4 mb-8">
+            <div className="p-4 rounded-2xl" style={{ background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.2)" }}>
+              <div style={{ fontSize: "28px", fontWeight: 800, color: "#6366F1" }}>{score}/{lesson.questions.length}</div>
+              <div style={{ fontSize: "12px", color: "var(--l-muted)" }}>Score</div>
             </div>
-            <div className="res-stat">
-              <span className="res-stat-val">+{lesson.xpReward}</span>
-              <span className="res-stat-label">{t('xp')}</span>
+            <div className="p-4 rounded-2xl" style={{ background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.2)" }}>
+              <div style={{ fontSize: "28px", fontWeight: 800, color: "#F59E0B" }}>+{lesson.xpReward}</div>
+              <div style={{ fontSize: "12px", color: "var(--l-muted)" }}>XP Earned</div>
             </div>
           </div>
-
-          <Button variant="primary" size="lg" className="full-width" onClick={() => navigate('/lessons')}>
-            {t('continue')}
-          </Button>
+          <button onClick={() => navigate("/lessons")} className="w-full py-3 rounded-xl transition-transform hover:scale-105" style={{ background: "linear-gradient(135deg, #6366F1, #8B5CF6)", color: "white", fontSize: "14px", fontWeight: 700, boxShadow: "0 4px 20px rgba(99,102,241,0.4)" }}>
+            Continue
+          </button>
         </div>
       </div>
     );
   }
 
+  const correctOptionIndex = q.options.indexOf(q.correctAnswer);
+
   return (
-    <div className="quiz-page animate-fade-in">
-      <div className="quiz-header">
-        <Button variant="ghost" size="sm" onClick={() => navigate('/lessons')} leftIcon={<ArrowLeft size={16} />}>
-          {t('back')}
-        </Button>
-        <div className="quiz-progress">
-           <span>{t('question')} {currentQuestionIndex + 1} {t('of')} {questions.length}</span>
-           <div className="progress-bar-small">
-              <div className="fill" style={{ width: `${((currentQuestionIndex + 1) / questions.length) * 100}%` }}></div>
-           </div>
+    <div className="min-h-screen p-6 animate-fade-in" style={{ background: "var(--l-bg)" }}>
+      <div className="max-w-xl mx-auto">
+        {/* Header */}
+        <div className="flex items-center gap-4 mb-8">
+          <button
+            onClick={() => navigate("/lessons")}
+            className="w-9 h-9 rounded-xl flex items-center justify-center transition-colors"
+            style={{ background: "var(--l-card-hover)", border: "1px solid var(--l-border)", color: "var(--l-muted)" }}
+          >
+            <ArrowLeft size={16} />
+          </button>
+          <div className="flex-1">
+            <div className="flex items-center justify-between mb-1.5">
+              <span style={{ fontSize: "12px", color: "var(--l-muted)" }}>Question {current + 1} of {lesson.questions.length}</span>
+              <div className="flex items-center gap-1"><Zap size={12} color="#F59E0B" /><span style={{ fontSize: "12px", color: "#F59E0B", fontWeight: 600 }}>XP Points</span></div>
+            </div>
+            <div className="h-2 rounded-full overflow-hidden" style={{ background: "var(--l-surface3)" }}>
+              <div className="h-full rounded-full transition-all duration-500" style={{ width: `${progress}%`, background: "linear-gradient(90deg, #6366F1, #8B5CF6)" }} />
+            </div>
+          </div>
         </div>
-      </div>
 
-      <div className="quiz-content-wrapper">
-        <div className="question-container">
-          <h2 className="question-type">
-            {currentQuestion.type === 'fill_blank' ? t('fill_blank') : 
-             currentQuestion.type === 'meaning_match' ? t('match_meaning') : 
-             t('translate_sentence')}
-          </h2>
-          <div className="question-text">{currentQuestion.question}</div>
+        {/* Question card */}
+        <div className="p-6 rounded-2xl mb-6" style={{ background: "var(--l-surface)", border: "1px solid var(--l-border)" }}>
+          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full mb-4" style={{ background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.2)" }}>
+            <span style={{ fontSize: "11px", fontWeight: 700, color: "#6366F1" }}>
+              {q.type === 'fill_blank' ? 'Fill in the blank' : q.type === 'meaning_match' ? 'Match meaning' : 'Translate'}
+            </span>
+          </div>
+          <p style={{ fontSize: "20px", fontWeight: 700, color: "var(--l-text)", lineHeight: 1.4 }}>{q.question}</p>
         </div>
 
-        <div className="options-list">
-          {currentQuestion.options.map((option) => {
-            let state = '';
-            if (isAnswered) {
-              if (option === currentQuestion.correctAnswer) state = 'correct';
-              else if (option === selectedOption) state = 'incorrect';
-            } else if (option === selectedOption) {
-              state = 'selected';
+        {/* Options */}
+        <div className="space-y-3 mb-8">
+          {q.options.map((opt, idx) => {
+            let bg = "var(--l-card-hover)";
+            let border = "var(--l-border)";
+            let color = "var(--l-text2)";
+            let icon = null;
+            if (answerState !== "idle") {
+              if (idx === correctOptionIndex) { bg = "rgba(16,185,129,0.12)"; border = "rgba(16,185,129,0.4)"; color = "#10B981"; icon = <CheckCircle2 size={18} color="#10B981" />; }
+              else if (idx === selected && answerState === "incorrect") { bg = "rgba(239,68,68,0.12)"; border = "rgba(239,68,68,0.4)"; color = "#F87171"; icon = <XCircle size={18} color="#F87171" />; }
+              else { color = "var(--l-subtle)"; }
             }
-
             return (
-              <button 
-                key={option} 
-                className={`option-btn ${state}`}
-                onClick={() => handleOptionSelect(option)}
-                disabled={isAnswered}
+              <button
+                key={idx}
+                onClick={() => handleSelect(idx)}
+                className="w-full text-left px-5 py-4 rounded-xl flex items-center justify-between transition-all duration-200"
+                style={{ background: bg, border: `1px solid ${border}`, color }}
+                onMouseEnter={(e) => { if (answerState === "idle") { (e.currentTarget as HTMLButtonElement).style.background = "rgba(99,102,241,0.08)"; (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(99,102,241,0.25)"; } }}
+                onMouseLeave={(e) => { if (answerState === "idle") { (e.currentTarget as HTMLButtonElement).style.background = "var(--l-card-hover)"; (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--l-border)"; } }}
               >
-                {option}
-                {state === 'correct' && <CheckCircle2 size={20} className="status-icon" />}
-                {state === 'incorrect' && <XCircle size={20} className="status-icon" />}
+                <div className="flex items-center gap-3">
+                  <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0" style={{ background: "var(--l-input-bg)", fontSize: "12px", fontWeight: 700 }}>
+                    {String.fromCharCode(65 + idx)}
+                  </div>
+                  <span style={{ fontSize: "14px", fontWeight: 500 }}>{opt}</span>
+                </div>
+                {icon}
               </button>
             );
           })}
         </div>
 
-        {isAnswered && (
-          <div className={`feedback-area ${isCorrect ? 'correct' : 'incorrect'}`}>
-            <div className="feedback-content">
-              {isCorrect ? (
-                <>
-                  <CheckCircle2 size={24} />
-                  <span>{t('correct')}</span>
-                </>
-              ) : (
-                <>
-                  <XCircle size={24} />
-                  <span>{t('incorrect')}: <strong>{currentQuestion.correctAnswer}</strong></span>
-                </>
-              )}
+        {/* Feedback */}
+        {answerState !== "idle" && (
+          <div
+            className="p-4 rounded-2xl flex items-center justify-between animate-fade-in"
+            style={{ background: answerState === "correct" ? "rgba(16,185,129,0.1)" : "rgba(239,68,68,0.1)", border: `1px solid ${answerState === "correct" ? "rgba(16,185,129,0.3)" : "rgba(239,68,68,0.3)"}` }}
+          >
+            <div>
+              <div style={{ fontSize: "14px", fontWeight: 700, color: answerState === "correct" ? "#10B981" : "#F87171" }}>
+                {answerState === "correct" ? "Correct!" : "Incorrect!"}
+              </div>
+              {answerState === "incorrect" && <div style={{ fontSize: "12px", color: "var(--l-muted)", marginTop: "2px" }}>Correct: {q.correctAnswer}</div>}
             </div>
-            <Button variant="primary" onClick={handleNext}>
-              {currentQuestionIndex < questions.length - 1 ? t('next') : t('finish')}
-            </Button>
+            <button
+              onClick={handleNext}
+              className="flex items-center gap-2 px-5 py-2.5 rounded-xl transition-all duration-200 hover:scale-105"
+              style={{ background: answerState === "correct" ? "rgba(16,185,129,0.2)" : "rgba(99,102,241,0.2)", color: answerState === "correct" ? "#10B981" : "#6366F1", fontSize: "13px", fontWeight: 700, border: `1px solid ${answerState === "correct" ? "rgba(16,185,129,0.3)" : "rgba(99,102,241,0.3)"}` }}
+            >
+              {current + 1 >= lesson.questions.length ? "See Results" : "Next"} <ArrowRight size={14} />
+            </button>
           </div>
         )}
       </div>
     </div>
   );
-};
+}

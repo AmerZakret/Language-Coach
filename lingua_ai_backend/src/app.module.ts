@@ -8,6 +8,7 @@ import { UsersModule } from './users/users.module';
 import { LessonsModule } from './lessons/lessons.module';
 import { ProgressModule } from './progress/progress.module';
 import { AiCoachModule } from './ai-coach/ai-coach.module';
+import { FlashcardsModule } from './flashcards/flashcards.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { AiCoachModule } from './ai-coach/ai-coach.module';
     LessonsModule,
     ProgressModule,
     AiCoachModule,
+    FlashcardsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

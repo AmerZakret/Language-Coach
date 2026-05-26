@@ -49,9 +49,11 @@ export const LessonCard: React.FC<LessonCardProps> = ({ lesson, isCompleted, isL
           <Star size={16} className="xp-icon" />
           <span>{lesson.xpReward} XP</span>
         </div>
-        <div className="footer-item count">
-          <span>{(lesson.questions || []).length} {t('questions')}</span>
-        </div>
+        {((lesson.questions || []).length > 0) && (
+          <div className="footer-item count">
+            <span>{(lesson.questions || []).length} {t('questions')}</span>
+          </div>
+        )}
       </div>
     </div>
   );

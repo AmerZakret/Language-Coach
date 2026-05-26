@@ -49,9 +49,13 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
 
     try {
       final auth = AuthService();
-      final userId = auth.isGuest || auth.currentUserEmail.isEmpty
+      final userId = auth.isGuest
           ? 'guest'
-          : auth.currentUserEmail;
+          : (auth.currentUserId.isNotEmpty
+              ? auth.currentUserId
+              : (auth.currentUserEmail.isNotEmpty
+                  ? auth.currentUserEmail
+                  : 'guest'));
       final targetLanguage = TargetLanguageService().getLanguageName(TargetLanguageService().currentLanguage);
 
       final history = await _apiService.getHistory(
@@ -108,9 +112,13 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
 
     try {
       final auth = AuthService();
-      final userId = auth.isGuest || auth.currentUserEmail.isEmpty
+      final userId = auth.isGuest
           ? 'guest'
-          : auth.currentUserEmail;
+          : (auth.currentUserId.isNotEmpty
+              ? auth.currentUserId
+              : (auth.currentUserEmail.isNotEmpty
+                  ? auth.currentUserEmail
+                  : 'guest'));
       final language = LanguageService().currentLanguage;
       final targetLanguageCode = TargetLanguageService().currentLanguage;
       final targetLanguageName = TargetLanguageService().getLanguageName(targetLanguageCode);

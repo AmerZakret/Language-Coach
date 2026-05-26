@@ -29,9 +29,13 @@ class WritingApiService {
     required String targetLanguage,
   }) async {
     final auth = AuthService();
-    final userId = auth.isGuest || auth.currentUserEmail.isEmpty
+    final userId = auth.isGuest
         ? 'guest'
-        : auth.currentUserEmail;
+        : (auth.currentUserId.isNotEmpty
+            ? auth.currentUserId
+            : (auth.currentUserEmail.isNotEmpty
+                ? auth.currentUserEmail
+                : 'guest'));
     final language = LanguageService().currentLanguage;
 
     // Craft a compact prompt that fits within the 500-char backend limit.

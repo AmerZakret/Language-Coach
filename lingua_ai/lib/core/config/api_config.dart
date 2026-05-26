@@ -5,6 +5,10 @@ class ApiConfig {
   // Use 10.0.2.2 for Android Emulator, localhost for iOS/Web/Desktop
   // For real device, replace with your computer's local IP (e.g., 192.168.1.100)
   static String get baseUrl {
+    const envUrl = String.fromEnvironment('API_URL');
+    if (envUrl.isNotEmpty) {
+      return envUrl;
+    }
     if (kIsWeb) {
       return 'http://localhost:3000';
     }
@@ -21,6 +25,8 @@ class ApiConfig {
   static const String lessons = '/lessons';
   static const String authRegister = '/auth/register';
   static const String authLogin = '/auth/login';
+  static const String authGuest = '/auth/guest';
   static const String progress = '/progress';
   static const String aiCoach = '/ai-coach';
+  static const String flashcards = '/flashcards';
 }

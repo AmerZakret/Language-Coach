@@ -1,11 +1,25 @@
 import axios from 'axios';
 
 const apiClient = axios.create({
-  baseURL: 'http://localhost:3000',
+  baseURL: import.meta.env.VITE_API_URL || 'http://localhost:3000',
   headers: {
     'Content-Type': 'application/json',
   },
 });
+
+// Add a request interceptor for attaching the JWT token
+apiClient.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('linguaai_token');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
 
 // Add a response interceptor for logging errors
 apiClient.interceptors.response.use(

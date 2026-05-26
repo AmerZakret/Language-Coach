@@ -101,7 +101,6 @@ LinguaAI is explicitly tailored for Turkish speakers learning English:
 
 ## 7. Future Roadmap
 
-- [ ] **Web Application:** Build a responsive web client using Next.js/React to complement the mobile app.
 - [ ] **Production Authentication:** Replace the current dummy tokens with real JWT-based authentication and secure password hashing (e.g., bcrypt).
 - [ ] **Expanded Curriculum:** Populate the database with hundreds of structured lessons across different CEFR levels (A1 to C2).
 - [ ] **Speech & Pronunciation:** Integrate speech-to-text (STT) and text-to-speech (TTS) so users can practice speaking directly to the AI Coach.

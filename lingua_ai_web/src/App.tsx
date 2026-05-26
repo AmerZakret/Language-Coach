@@ -4,6 +4,7 @@ import { LanguageProvider } from './context/LanguageContext';
 import { TargetLanguageProvider } from './context/TargetLanguageContext';
 import { ProgressProvider } from './context/ProgressContext';
 import { SoundProvider } from './context/SoundContext';
+import { ThemeProvider } from './context/ThemeContext';
 import { AppLayout } from './components/layout/AppLayout';
 import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
@@ -13,6 +14,7 @@ import { LessonQuizPage } from './pages/LessonQuizPage';
 import { AiCoachPage } from './pages/AiCoachPage';
 import { WritingPracticePage } from './pages/WritingPracticePage';
 import { ProfilePage } from './pages/ProfilePage';
+import { FlashcardsPage } from './pages/FlashcardsPage';
 
 function AppRoutes() {
   const { user, loading } = useAuth();
@@ -32,6 +34,7 @@ function AppRoutes() {
         <Route path="lessons/:id" element={<LessonQuizPage />} />
         <Route path="writing" element={<WritingPracticePage />} />
         <Route path="ai-coach" element={<AiCoachPage />} />
+        <Route path="flashcards" element={<FlashcardsPage />} />
         <Route path="profile" element={<ProfilePage />} />
       </Route>
       
@@ -47,9 +50,11 @@ export default function App() {
         <TargetLanguageProvider>
           <ProgressProvider>
             <LanguageProvider>
-              <Router>
-                <AppRoutes />
-              </Router>
+              <ThemeProvider>
+                <Router>
+                  <AppRoutes />
+                </Router>
+              </ThemeProvider>
             </LanguageProvider>
           </ProgressProvider>
         </TargetLanguageProvider>

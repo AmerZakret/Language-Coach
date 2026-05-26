@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../core/config/api_config.dart';
+import 'auth_service.dart';
 
 class AiCoachApiService {
   Future<Map<String, dynamic>> sendMessage({
@@ -19,9 +20,17 @@ class AiCoachApiService {
         body['targetLanguage'] = targetLanguage;
       }
 
+      final headers = <String, String>{
+        'Content-Type': 'application/json',
+      };
+      final token = AuthService().token;
+      if (token.isNotEmpty) {
+        headers['Authorization'] = 'Bearer $token';
+      }
+
       final response = await http.post(
         Uri.parse('${ApiConfig.baseUrl}${ApiConfig.aiCoach}/chat'),
-        headers: {'Content-Type': 'application/json'},
+        headers: headers,
         body: json.encode(body),
       );
 
@@ -40,11 +49,19 @@ class AiCoachApiService {
     required String targetLanguage,
   }) async {
     try {
+      final headers = <String, String>{
+        'Content-Type': 'application/json',
+      };
+      final token = AuthService().token;
+      if (token.isNotEmpty) {
+        headers['Authorization'] = 'Bearer $token';
+      }
+
       final response = await http.get(
         Uri.parse(
           '${ApiConfig.baseUrl}${ApiConfig.aiCoach}/history?userId=$userId&targetLanguage=$targetLanguage',
         ),
-        headers: {'Content-Type': 'application/json'},
+        headers: headers,
       );
 
       if (response.statusCode == 200) {

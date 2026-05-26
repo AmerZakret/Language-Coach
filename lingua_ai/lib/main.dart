@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'app.dart';
 import 'services/progress_service.dart';
+import 'services/flashcard_service.dart';
 import 'core/localization/language_service.dart';
 import 'core/localization/target_language_service.dart';
 import 'services/auth_service.dart';
@@ -14,6 +15,7 @@ void main() async {
   await ProgressService().init();
   await AuthService().init();
   await SoundService().init();
+  await FlashcardService().init();
   
   runApp(const LinguaAIApp());
 }

@@ -1,6 +1,7 @@
 import React from 'react';
 import { NavLink } from 'react-router-dom';
 import { useLanguage } from '../../context/LanguageContext';
+import { Brain } from 'lucide-react';
 import './Sidebar.css';
 
 const aiCoachIcon = '/assets/images/ai-coach-icon.png';
@@ -18,6 +19,11 @@ export const Sidebar: React.FC = () => {
       path: '/lessons', 
       icon: <img src="/assets/images/lesson.png" alt="" className="nav-custom-icon" />, 
       label: t('lessons') 
+    },
+    { 
+      path: '/flashcards', 
+      icon: <Brain size={24} className="nav-custom-icon" />, 
+      label: t('flashcards') 
     },
     { 
       path: '/writing', 

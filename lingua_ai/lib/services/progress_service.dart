@@ -96,7 +96,7 @@ class ProgressService extends ChangeNotifier {
     if (!auth.isLoggedIn || auth.isGuest) return;
 
     try {
-      final response = await _apiService.getProgress(auth.currentUserEmail);
+      final response = await _apiService.getProgress(auth.currentUserId.isNotEmpty ? auth.currentUserId : auth.currentUserEmail);
       final stats = response['stats'];
 
       if (stats != null) {
@@ -125,7 +125,7 @@ class ProgressService extends ChangeNotifier {
     }
   }
 
-  void completeLesson(String lessonId, int xpReward) async {
+  void completeLesson(String lessonId, int xpReward, {int score = 100}) async {
     final auth = AuthService();
 
     // Always update local state first for instant feedback
@@ -135,13 +135,14 @@ class ProgressService extends ChangeNotifier {
       _saveLocalData();
       notifyListeners();
 
-      // If logged in and NOT guest, sync to backend (fire-and-forget)
-      if (auth.isLoggedIn && !auth.isGuest) {
+      // If logged in and NOT guest, or if guest WITH a token, sync to backend
+      final hasToken = auth.token.isNotEmpty;
+      if ((auth.isLoggedIn && !auth.isGuest) || (auth.isGuest && hasToken)) {
         try {
           await _apiService.completeLesson(
-            auth.currentUserEmail,
+            auth.currentUserId.isNotEmpty ? auth.currentUserId : auth.currentUserEmail,
             lessonId,
-            100,
+            score,
           );
         } catch (e) {
           debugPrint('Backend progress update failed: $e');

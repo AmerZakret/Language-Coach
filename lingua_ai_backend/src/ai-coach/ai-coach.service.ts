@@ -1,8 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { ChatMessage } from './schemas/chat-message.schema';
+import { User } from '../users/schemas/user.schema';
 
 interface GeminiResponse {
   candidates?: Array<{
@@ -38,7 +39,19 @@ export class AiCoachService {
     private configService: ConfigService,
     @InjectModel(ChatMessage.name)
     private chatMessageModel: Model<ChatMessage>,
+    @InjectModel(User.name)
+    private userModel: Model<User>,
   ) {}
+
+  private async findUser(userId: string): Promise<User | null> {
+    const isObjectId = Types.ObjectId.isValid(userId);
+    return this.userModel.findOne({
+      $or: [
+        { email: userId },
+        ...(isObjectId ? [{ _id: new Types.ObjectId(userId) }] : []),
+      ],
+    }).exec();
+  }
 
   async sendMessage(
     userId: string,
@@ -46,6 +59,19 @@ export class AiCoachService {
     language: string,
     targetLanguage?: string,
   ) {
+    let user = await this.findUser(userId);
+    if (!user) {
+      // Create user if not exists to ensure guest/local flows function gracefully
+      user = await this.userModel.create({
+        name: userId.split('@')[0].toUpperCase(),
+        email: userId,
+        passwordHash: 'placeholder-hash',
+        totalXp: 0,
+        streak: 0,
+        level: 'Beginner',
+      });
+    }
+
     const apiKey = this.configService.get<string>('GEMINI_API_KEY')?.trim();
     const model = (
       this.configService.get<string>('GEMINI_MODEL') || 'gemini-flash-latest'
@@ -136,7 +162,7 @@ Do not include markdown code block formatting like \`\`\`json. Return pure JSON.
 
       // 1. Save user message
       await new this.chatMessageModel({
-        userId,
+        userId: user._id.toString(),
         targetLanguage: targetLangName,
         role: 'user',
         message,
@@ -144,7 +170,7 @@ Do not include markdown code block formatting like \`\`\`json. Return pure JSON.
 
       // 2. Save assistant response
       await new this.chatMessageModel({
-        userId,
+        userId: user._id.toString(),
         targetLanguage: targetLangName,
         role: 'assistant',
         message: parsedResponse.reply,
@@ -168,26 +194,32 @@ Do not include markdown code block formatting like \`\`\`json. Return pure JSON.
   }
 
   async getHistory(userId: string, targetLanguage: string) {
+    const user = await this.findUser(userId);
+    if (!user) return [];
+
     const targetLangName =
       LANGUAGE_NAMES[targetLanguage?.toLowerCase() || ''] ||
       targetLanguage ||
       'English';
 
     return this.chatMessageModel
-      .find({ userId, targetLanguage: targetLangName })
+      .find({ userId: user._id.toString(), targetLanguage: targetLangName })
       .sort({ createdAt: 1 })
       .limit(50)
       .exec();
   }
 
   async clearHistory(userId: string, targetLanguage: string) {
+    const user = await this.findUser(userId);
+    if (!user) return { deletedCount: 0 };
+
     const targetLangName =
       LANGUAGE_NAMES[targetLanguage?.toLowerCase() || ''] ||
       targetLanguage ||
       'English';
 
     return this.chatMessageModel
-      .deleteMany({ userId, targetLanguage: targetLangName })
+      .deleteMany({ userId: user._id.toString(), targetLanguage: targetLangName })
       .exec();
   }
 }
