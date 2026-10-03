@@ -16,6 +16,14 @@ node_modules/
 npm-debug.log
 yarn-error.log
 
+# Python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
 # Flutter/Dart
 .dart_tool/
 .packages
