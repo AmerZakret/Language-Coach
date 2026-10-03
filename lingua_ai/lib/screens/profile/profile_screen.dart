@@ -6,11 +6,71 @@ import '../../core/localization/language_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/progress_service.dart';
 import '../../services/sound_service.dart';
+import '../../services/theme_service.dart';
 import '../../core/localization/target_language_service.dart';
 import '../../widgets/target_language_modal.dart';
+import '../../core/routes/app_routes.dart';
+import '../../services/user_api_service.dart';
 
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
+
+  void _showEditNameDialog(BuildContext context, AuthService auth, LanguageService lang) {
+    if (auth.isGuest) return;
+
+    final controller = TextEditingController(text: auth.currentUserName);
+
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          backgroundColor: ThemeService().isDarkMode ? const Color(0xFF1E293B) : Colors.white,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+          title: Text(
+            lang.getString('full_name'),
+            style: TextStyle(color: AppTheme.textPrimaryColor, fontWeight: FontWeight.w900),
+          ),
+          content: TextField(
+            controller: controller,
+            style: TextStyle(color: AppTheme.textPrimaryColor),
+            decoration: InputDecoration(
+              hintText: lang.getString('full_name'),
+              hintStyle: const TextStyle(color: Colors.grey),
+              enabledBorder: UnderlineInputBorder(
+                borderSide: BorderSide(color: AppTheme.primaryColor.withValues(alpha: 0.3)),
+              ),
+              focusedBorder: const UnderlineInputBorder(
+                borderSide: BorderSide(color: AppTheme.primaryColor),
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text(lang.getString('cancel'), style: const TextStyle(color: Colors.grey)),
+            ),
+            TextButton(
+              onPressed: () async {
+                final newName = controller.text.trim();
+                if (newName.isNotEmpty && newName != auth.currentUserName) {
+                  try {
+                    await UserApiService().updateProfile(name: newName);
+                    auth.updateName(newName);
+                  } catch (e) {
+                    debugPrint('Failed to update name: $e');
+                  }
+                }
+                if (context.mounted) {
+                  Navigator.pop(context);
+                }
+              },
+              child: Text(lang.getString('save'), style: const TextStyle(color: AppTheme.primaryColor, fontWeight: FontWeight.bold)),
+            ),
+          ],
+        );
+      },
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -20,7 +80,8 @@ class ProfileScreen extends StatelessWidget {
         TargetLanguageService(),
         AuthService(),
         ProgressService(),
-        SoundService()
+        SoundService(),
+        ThemeService()
       ]),
       builder: (context, child) {
         final lang = LanguageService();
@@ -52,7 +113,7 @@ class ProfileScreen extends StatelessWidget {
                     children: [
                       _buildHeader(lang),
                       const SizedBox(height: 32),
-                      _buildUserCard(auth, targetLang, lang),
+                      _buildUserCard(context, auth, targetLang, lang),
                       const SizedBox(height: 24),
                       _buildStatsRow(progress, lang),
                       const SizedBox(height: 32),
@@ -63,7 +124,7 @@ class ProfileScreen extends StatelessWidget {
               ),
             ],
           ),
-          bottomNavigationBar: const BottomNavBar(currentIndex: 3),
+          bottomNavigationBar: const BottomNavBar(currentIndex: 4),
         );
       },
     );
@@ -72,39 +133,41 @@ class ProfileScreen extends StatelessWidget {
   Widget _buildHeader(LanguageService lang) {
     return Text(
       lang.getString('profile'),
-      style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: AppTheme.textPrimary),
+      style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: AppTheme.textPrimary),
     );
   }
 
-  Widget _buildUserCard(AuthService auth, TargetLanguageService targetLang, LanguageService lang) {
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        gradient: AppTheme.premiumGradient,
-        borderRadius: BorderRadius.circular(32),
-        boxShadow: [
-          BoxShadow(color: AppTheme.primaryColor.withValues(alpha: 0.3), blurRadius: 20, offset: const Offset(0, 10)),
-        ],
-      ),
-      child: Row(
-        children: [
-          CircleAvatar(
-            radius: 35,
-            backgroundColor: Colors.white24,
-            child: Text(
-              auth.currentUserName.isNotEmpty ? auth.currentUserName[0].toUpperCase() : 'G',
-              style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w900, color: Colors.white),
+  Widget _buildUserCard(BuildContext context, AuthService auth, TargetLanguageService targetLang, LanguageService lang) {
+    return GestureDetector(
+      onTap: () => _showEditNameDialog(context, auth, lang),
+      child: Container(
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          gradient: AppTheme.premiumGradient,
+          borderRadius: BorderRadius.circular(32),
+          boxShadow: [
+            BoxShadow(color: AppTheme.primaryColor.withValues(alpha: 0.3), blurRadius: 20, offset: const Offset(0, 10)),
+          ],
+        ),
+        child: Row(
+          children: [
+            CircleAvatar(
+              radius: 35,
+              backgroundColor: Colors.white24,
+              child: Text(
+                auth.currentUserName.isNotEmpty ? auth.currentUserName[0].toUpperCase() : 'G',
+                style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w900, color: Colors.white),
+              ),
             ),
-          ),
-          const SizedBox(width: 20),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  auth.isGuest ? lang.getString('guest_user') : auth.currentUserName,
-                  style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: Colors.white),
-                ),
+            const SizedBox(width: 20),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    auth.isGuest ? lang.getString('guest_user') : auth.currentUserName,
+                    style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: Colors.white),
+                  ),
                 Text(
                   auth.currentUserEmail,
                   style: const TextStyle(fontSize: 14, color: Colors.white70, fontWeight: FontWeight.w500),
@@ -123,8 +186,9 @@ class ProfileScreen extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
+    ),
+  );
+}
 
   Widget _buildStatsRow(ProgressService progress, LanguageService lang) {
     return Row(
@@ -142,17 +206,21 @@ class ProfileScreen extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppTheme.surfaceColor,
         borderRadius: BorderRadius.circular(24),
         boxShadow: AppTheme.glassShadow,
-        border: Border.all(color: Colors.grey.shade100),
+        border: Border.all(
+          color: ThemeService().isDarkMode
+              ? Colors.white.withValues(alpha: 0.08)
+              : Colors.grey.shade100,
+        ),
       ),
       child: Column(
         children: [
           Icon(icon, color: color, size: 24),
           const SizedBox(height: 8),
-          Text(value, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: AppTheme.textPrimary)),
-          Text(label, style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
+          Text(value, style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: AppTheme.textPrimary)),
+          Text(label, style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppTheme.textSecondary)),
         ],
       ),
     );
@@ -187,6 +255,15 @@ class ProfileScreen extends StatelessWidget {
           ),
         ),
         _buildSettingTile(
+          icon: ThemeService().isDarkMode ? Icons.dark_mode_rounded : Icons.light_mode_rounded,
+          title: lang.getString('dark_mode'),
+          trailing: CupertinoSwitch(
+            activeTrackColor: AppTheme.primaryColor,
+            value: ThemeService().isDarkMode,
+            onChanged: (v) => ThemeService().toggleTheme(),
+          ),
+        ),
+        _buildSettingTile(
           icon: Icons.translate_rounded,
           title: lang.getString('target_language'),
           onTap: () => showModalBottomSheet(
@@ -196,12 +273,24 @@ class ProfileScreen extends StatelessWidget {
             builder: (context) => const TargetLanguageModal(),
           ),
         ),
+        _buildSettingTile(
+          icon: Icons.mic_rounded,
+          title: lang.getString('pronunciation_practice'),
+          onTap: () => Navigator.pushNamed(context, AppRoutes.pronunciationPractice),
+        ),
         const SizedBox(height: 32),
         _buildSettingTile(
           icon: Icons.logout_rounded,
           title: lang.getString('logout'),
           color: Colors.redAccent,
-          onTap: () => auth.logout(),
+          onTap: () {
+            auth.logout();
+            Navigator.pushNamedAndRemoveUntil(
+              context,
+              AppRoutes.login,
+              (route) => false,
+            );
+          },
         ),
       ],
     );
@@ -210,7 +299,7 @@ class ProfileScreen extends StatelessWidget {
   Widget _buildSectionTitle(String title) {
     return Text(
       title.toUpperCase(),
-      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: AppTheme.textSecondary, letterSpacing: 1.5),
+      style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: AppTheme.textSecondary, letterSpacing: 1.5),
     );
   }
 
@@ -219,16 +308,20 @@ class ProfileScreen extends StatelessWidget {
       padding: const EdgeInsets.only(bottom: 12),
       child: Container(
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: AppTheme.surfaceColor,
           borderRadius: BorderRadius.circular(20),
           boxShadow: AppTheme.glassShadow,
-          border: Border.all(color: Colors.grey.shade100),
+          border: Border.all(
+            color: ThemeService().isDarkMode
+                ? Colors.white.withValues(alpha: 0.08)
+                : Colors.grey.shade100,
+          ),
         ),
         child: ListTile(
           onTap: onTap,
           leading: Icon(icon, color: color ?? AppTheme.primaryColor),
           title: Text(title, style: TextStyle(fontWeight: FontWeight.w700, color: color ?? AppTheme.textPrimary)),
-          trailing: trailing ?? const Icon(Icons.chevron_right_rounded, color: AppTheme.textSecondary),
+          trailing: trailing ?? Icon(Icons.chevron_right_rounded, color: AppTheme.textSecondary),
         ),
       ),
     );

@@ -51,6 +51,9 @@ class Flashcard {
   final String userId;
   final String targetWord;
   final String turkishTranslation;
+  final String targetLanguage;
+  final String? nativeLanguage;
+  final String? nativeTranslation;
   final String? exampleSentence;
   final String? note;
   final int interval;
@@ -65,6 +68,9 @@ class Flashcard {
     required this.userId,
     required this.targetWord,
     required this.turkishTranslation,
+    required this.targetLanguage,
+    this.nativeLanguage,
+    this.nativeTranslation,
     this.exampleSentence,
     this.note,
     required this.interval,
@@ -81,6 +87,9 @@ class Flashcard {
       userId: json['userId']?.toString() ?? '',
       targetWord: json['targetWord'] ?? '',
       turkishTranslation: json['turkishTranslation'] ?? json['translation'] ?? '',
+      targetLanguage: json['targetLanguage'] ?? 'English',
+      nativeLanguage: json['nativeLanguage'] ?? 'Turkish',
+      nativeTranslation: json['nativeTranslation'] ?? json['turkishTranslation'] ?? json['translation'] ?? '',
       exampleSentence: json['exampleSentence'],
       note: json['note'],
       interval: json['interval'] ?? 0,
@@ -105,6 +114,9 @@ class Flashcard {
       'userId': userId,
       'targetWord': targetWord,
       'turkishTranslation': turkishTranslation,
+      'targetLanguage': targetLanguage,
+      'nativeLanguage': nativeLanguage ?? 'Turkish',
+      'nativeTranslation': nativeTranslation ?? turkishTranslation,
       if (exampleSentence != null) 'exampleSentence': exampleSentence,
       if (note != null) 'note': note,
       'interval': interval,
@@ -121,6 +133,9 @@ class Flashcard {
     String? userId,
     String? targetWord,
     String? turkishTranslation,
+    String? targetLanguage,
+    String? nativeLanguage,
+    String? nativeTranslation,
     String? exampleSentence,
     String? note,
     int? interval,
@@ -135,6 +150,9 @@ class Flashcard {
       userId: userId ?? this.userId,
       targetWord: targetWord ?? this.targetWord,
       turkishTranslation: turkishTranslation ?? this.turkishTranslation,
+      targetLanguage: targetLanguage ?? this.targetLanguage,
+      nativeLanguage: nativeLanguage ?? this.nativeLanguage,
+      nativeTranslation: nativeTranslation ?? this.nativeTranslation,
       exampleSentence: exampleSentence ?? this.exampleSentence,
       note: note ?? this.note,
       interval: interval ?? this.interval,

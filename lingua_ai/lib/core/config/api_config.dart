@@ -3,8 +3,8 @@ import 'dart:io' show Platform;
 
 class ApiConfig {
   // Set this to your computer's local IP address when testing on a physical device.
-  // You can find your computer's IP address by running 'ipconfig' (currently 192.168.1.100).
-  static const String localComputerIp = '192.168.1.100';
+  // You can find your computer's IP address by running 'ipconfig' (currently 192.168.1.102).
+  static const String localComputerIp = '192.168.1.102';
 
   // Set this to true if testing on an emulator, or false for a physical device.
   // Since you are running on your physical phone, we set this to false so it connects to your PC.
@@ -40,4 +40,6 @@ class ApiConfig {
   static const String progress = '/progress';
   static const String aiCoach = '/ai-coach';
   static const String flashcards = '/flashcards';
+  static const String pronunciationAssess = '/pronunciation/assess';
+  static const String communityPosts = '/community/posts';
 }

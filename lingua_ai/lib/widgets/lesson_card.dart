@@ -4,6 +4,7 @@ import '../core/theme/app_theme.dart';
 import '../core/routes/app_routes.dart';
 import '../services/progress_service.dart';
 import '../core/localization/language_service.dart';
+import '../services/theme_service.dart';
 
 class LessonCard extends StatelessWidget {
   final Lesson lesson;
@@ -13,7 +14,7 @@ class LessonCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: Listenable.merge([ProgressService(), LanguageService()]),
+      listenable: Listenable.merge([ProgressService(), LanguageService(), ThemeService()]),
       builder: (context, child) {
         final isCompleted = ProgressService().isLessonCompleted(lesson.id);
         final displayProgress = isCompleted ? 1.0 : lesson.progress;
@@ -127,11 +128,11 @@ class LessonCard extends StatelessWidget {
                               Row(
                                 mainAxisSize: MainAxisSize.min,
                                 children: [
-                                  const Icon(Icons.schedule_rounded, color: AppTheme.textSecondaryColor, size: 16),
+                                  Icon(Icons.schedule_rounded, color: AppTheme.textSecondaryColor, size: 16),
                                   const SizedBox(width: 4),
                                   Text(
                                     '${lesson.duration} ${lang.getString('min')}',
-                                    style: const TextStyle(
+                                    style: TextStyle(
                                       color: AppTheme.textSecondaryColor,
                                       fontSize: 13,
                                       fontWeight: FontWeight.w600,
@@ -144,7 +145,7 @@ class LessonCard extends StatelessWidget {
                         const SizedBox(height: 16),
                         Text(
                           lesson.title,
-                          style: const TextStyle(
+                          style: TextStyle(
                             color: AppTheme.textPrimaryColor,
                             fontSize: 22,
                             fontWeight: FontWeight.w900,
@@ -154,7 +155,7 @@ class LessonCard extends StatelessWidget {
                         const SizedBox(height: 8),
                         Text(
                           lesson.description,
-                          style: const TextStyle(
+                          style: TextStyle(
                             color: AppTheme.textSecondaryColor,
                             fontSize: 14,
                             height: 1.4,

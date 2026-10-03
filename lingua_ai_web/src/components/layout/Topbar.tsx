@@ -21,7 +21,7 @@ export const Topbar: React.FC = () => {
       <div className="topbar-left">
         <div className="target-lang-badge">
           <Globe size={16} />
-          <span>{t('learning')}: {targetLanguage}</span>
+          <span>{t('learning')}: {t('lang_' + targetLanguage.toLowerCase())}</span>
         </div>
       </div>
       

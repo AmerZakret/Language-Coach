@@ -35,20 +35,30 @@ class SoundService extends ChangeNotifier {
   Future<void> playCorrect() async {
     if (!_isSoundEnabled) return;
     try {
-      await _correctPlayer.stop();
-      await _correctPlayer.play(AssetSource('sounds/correct.wav'));
+      if (_correctPlayer.state == PlayerState.playing) {
+        await _correctPlayer.stop();
+      }
+      await _correctPlayer.resume();
     } catch (e) {
       debugPrint('Error playing correct sound: $e');
+      try {
+        await _correctPlayer.play(AssetSource('sounds/correct.wav'));
+      } catch (_) {}
     }
   }
 
   Future<void> playWrong() async {
     if (!_isSoundEnabled) return;
     try {
-      await _wrongPlayer.stop();
-      await _wrongPlayer.play(AssetSource('sounds/wrong.wav'));
+      if (_wrongPlayer.state == PlayerState.playing) {
+        await _wrongPlayer.stop();
+      }
+      await _wrongPlayer.resume();
     } catch (e) {
       debugPrint('Error playing wrong sound: $e');
+      try {
+        await _wrongPlayer.play(AssetSource('sounds/wrong.wav'));
+      } catch (_) {}
     }
   }
 }

@@ -17,6 +17,8 @@ interface ChatRequest {
 interface ChatResponse {
   reply: string;
   correction?: string;
+  userMessage?: ChatMessage;
+  assistantMessage?: ChatMessage;
 }
 
 export const sendMessage = async (data: ChatRequest): Promise<ChatResponse> => {
@@ -35,4 +37,27 @@ export const clearChatHistory = async (userId: string, targetLanguage: TargetLan
   await apiClient.delete(`/ai-coach/clear`, {
     params: { userId, targetLanguage }
   });
+};
+
+export interface WritingCorrectionRequest {
+  userId: string;
+  topic: string;
+  text: string;
+  language: InterfaceLanguage;
+  targetLanguage: TargetLanguage;
+}
+
+export interface WritingCorrectionResponse {
+  grammarScore: number;
+  vocabularyScore: number;
+  clarityScore: number;
+  overallScore: number;
+  corrections: { original: string; correction: string; explanation: string }[];
+  feedback: string;
+  improvedVersion: string;
+}
+
+export const checkWriting = async (data: WritingCorrectionRequest): Promise<WritingCorrectionResponse> => {
+  const response = await apiClient.post<WritingCorrectionResponse>('/ai-coach/writing-check', data);
+  return response.data;
 };

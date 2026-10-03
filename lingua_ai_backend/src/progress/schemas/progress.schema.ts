@@ -14,6 +14,9 @@ export class Progress extends Document {
 
   @Prop({ required: true })
   score: number;
+
+  @Prop({ required: true })
+  targetLanguage: string;
 }
 
 export const ProgressSchema = SchemaFactory.createForClass(Progress);

@@ -21,7 +21,20 @@ export class UsersService {
       level: 'Beginner',
       totalXp: 0,
       streak: 0,
+      targetLanguage: 'English',
     });
+    return user.save();
+  }
+
+  async findById(id: string): Promise<User | null> {
+    return this.userModel.findById(id).exec();
+  }
+
+  async updateProfile(userId: string, name?: string, targetLanguage?: string): Promise<User | null> {
+    const user = await this.userModel.findById(userId).exec();
+    if (!user) return null;
+    if (name !== undefined) user.name = name;
+    if (targetLanguage !== undefined) user.targetLanguage = targetLanguage;
     return user.save();
   }
 }

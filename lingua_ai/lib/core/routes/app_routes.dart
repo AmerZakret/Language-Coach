@@ -10,6 +10,8 @@ import '../../screens/profile/profile_screen.dart';
 import '../../screens/writing/writing_practice_screen.dart';
 import '../../screens/flashcards/flashcard_review_screen.dart';
 import '../../screens/flashcards/flashcards_screen.dart';
+import '../../screens/pronunciation/pronunciation_practice_screen.dart';
+import '../../screens/community/community_screen.dart';
 
 class AppRoutes {
   static const String login = '/login';
@@ -22,6 +24,8 @@ class AppRoutes {
   static const String writing = '/writing';
   static const String flashcards = '/flashcards';
   static const String flashcardsReview = '/flashcards-review';
+  static const String pronunciationPractice = '/pronunciation-practice';
+  static const String community = '/community';
 
   static Map<String, WidgetBuilder> getRoutes() {
     return {
@@ -35,6 +39,8 @@ class AppRoutes {
       writing: (context) => const WritingPracticeScreen(),
       flashcards: (context) => const FlashcardsScreen(),
       flashcardsReview: (context) => const FlashcardReviewScreen(),
+      pronunciationPractice: (context) => const PronunciationPracticeScreen(),
+      community: (context) => const CommunityScreen(),
     };
   }
 }

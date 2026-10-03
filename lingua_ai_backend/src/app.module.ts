@@ -9,6 +9,8 @@ import { LessonsModule } from './lessons/lessons.module';
 import { ProgressModule } from './progress/progress.module';
 import { AiCoachModule } from './ai-coach/ai-coach.module';
 import { FlashcardsModule } from './flashcards/flashcards.module';
+import { PronunciationModule } from './pronunciation/pronunciation.module';
+import { CommunityModule } from './community/community.module';
 
 @Module({
   imports: [
@@ -28,6 +30,8 @@ import { FlashcardsModule } from './flashcards/flashcards.module';
     ProgressModule,
     AiCoachModule,
     FlashcardsModule,
+    PronunciationModule,
+    CommunityModule,
   ],
   controllers: [AppController],
   providers: [AppService],

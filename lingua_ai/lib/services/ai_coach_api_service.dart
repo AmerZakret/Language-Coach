@@ -37,7 +37,12 @@ class AiCoachApiService {
       if (response.statusCode == 200 || response.statusCode == 201) {
         return json.decode(response.body);
       } else {
-        throw Exception('Failed to communicate with AI Coach');
+        try {
+          final errorData = json.decode(response.body);
+          throw Exception(errorData['message'] ?? 'Failed to communicate with AI Coach');
+        } catch (_) {
+          throw Exception('Failed to communicate with AI Coach');
+        }
       }
     } catch (e) {
       throw Exception('Network error or server offline: $e');
@@ -68,6 +73,72 @@ class AiCoachApiService {
         return json.decode(response.body);
       } else {
         throw Exception('Failed to load chat history');
+      }
+    } catch (e) {
+      throw Exception('Network error or server offline: $e');
+    }
+  }
+
+  Future<void> clearHistory({
+    required String userId,
+    required String targetLanguage,
+  }) async {
+    try {
+      final headers = <String, String>{};
+      final token = AuthService().token;
+      if (token.isNotEmpty) {
+        headers['Authorization'] = 'Bearer $token';
+      }
+
+      final response = await http.delete(
+        Uri.parse(
+          '${ApiConfig.baseUrl}${ApiConfig.aiCoach}/clear?userId=$userId&targetLanguage=$targetLanguage',
+        ),
+        headers: headers,
+      );
+
+      if (response.statusCode != 200 && response.statusCode != 204) {
+        throw Exception('Failed to clear chat history: ${response.body}');
+      }
+    } catch (e) {
+      throw Exception('Network error or server offline: $e');
+    }
+  }
+
+  Future<Map<String, dynamic>> checkWriting({
+    required String userId,
+    required String topic,
+    required String text,
+    required String language,
+    required String targetLanguage,
+  }) async {
+    try {
+      final body = <String, dynamic>{
+        'userId': userId,
+        'topic': topic,
+        'text': text,
+        'language': language,
+        'targetLanguage': targetLanguage,
+      };
+
+      final headers = <String, String>{
+        'Content-Type': 'application/json',
+      };
+      final token = AuthService().token;
+      if (token.isNotEmpty) {
+        headers['Authorization'] = 'Bearer $token';
+      }
+
+      final response = await http.post(
+        Uri.parse('${ApiConfig.baseUrl}${ApiConfig.aiCoach}/writing-check'),
+        headers: headers,
+        body: json.encode(body),
+      );
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        return json.decode(response.body);
+      } else {
+        throw Exception('Failed to get writing assessment');
       }
     } catch (e) {
       throw Exception('Network error or server offline: $e');

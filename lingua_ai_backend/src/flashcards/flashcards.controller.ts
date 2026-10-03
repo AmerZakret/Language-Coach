@@ -9,34 +9,37 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 export class FlashcardsController {
   constructor(private readonly flashcardsService: FlashcardsService) {}
 
-  private validateUserAccess(userId: string, req: any) {
-    if (req.user.id !== userId && req.user.email !== userId) {
-      throw new ForbiddenException('Access denied: Cannot access another user\'s flashcards');
-    }
-  }
-
   @Post()
   async create(@Body() createFlashcardDto: CreateFlashcardDto, @Req() req: any) {
-    this.validateUserAccess(createFlashcardDto.userId, req);
+    const userId = req.user._id.toString();
     return this.flashcardsService.create(
-      createFlashcardDto.userId,
+      userId,
       createFlashcardDto.targetWord,
       createFlashcardDto.turkishTranslation,
+      createFlashcardDto.targetLanguage,
+      createFlashcardDto.nativeLanguage,
+      createFlashcardDto.nativeTranslation,
       createFlashcardDto.exampleSentence,
       createFlashcardDto.note,
     );
   }
 
   @Get('due')
-  async getDue(@Query('userId') userId: string, @Req() req: any) {
-    this.validateUserAccess(userId, req);
-    return this.flashcardsService.getDueCards(userId);
+  async getDue(
+    @Query('targetLanguage') targetLanguage: string,
+    @Req() req: any,
+  ) {
+    const userId = req.user._id.toString();
+    return this.flashcardsService.getDueCards(userId, targetLanguage);
   }
 
   @Get('all')
-  async getAll(@Query('userId') userId: string, @Req() req: any) {
-    this.validateUserAccess(userId, req);
-    return this.flashcardsService.getAll(userId);
+  async getAll(
+    @Query('targetLanguage') targetLanguage: string,
+    @Req() req: any,
+  ) {
+    const userId = req.user._id.toString();
+    return this.flashcardsService.getAll(userId, targetLanguage);
   }
 
   @Put(':id')
@@ -45,19 +48,24 @@ export class FlashcardsController {
     @Body() updateFlashcardDto: UpdateFlashcardDto,
     @Req() req: any,
   ) {
+    const userId = req.user._id.toString();
     return this.flashcardsService.update(
       id,
       updateFlashcardDto.targetWord,
       updateFlashcardDto.turkishTranslation,
+      updateFlashcardDto.targetLanguage,
+      updateFlashcardDto.nativeLanguage,
+      updateFlashcardDto.nativeTranslation,
       updateFlashcardDto.exampleSentence,
       updateFlashcardDto.note,
-      req.user.id,
+      userId,
     );
   }
 
   @Delete(':id')
   async delete(@Param('id') id: string, @Req() req: any) {
-    return this.flashcardsService.delete(id, req.user.id);
+    const userId = req.user._id.toString();
+    return this.flashcardsService.delete(id, userId);
   }
 
   @Put(':id/review')
@@ -69,6 +77,7 @@ export class FlashcardsController {
     if (score === undefined || score < 0 || score > 5) {
       throw new BadRequestException('Review score must be between 0 and 5');
     }
-    return this.flashcardsService.review(id, score, req.user.id);
+    const userId = req.user._id.toString();
+    return this.flashcardsService.review(id, score, userId);
   }
 }

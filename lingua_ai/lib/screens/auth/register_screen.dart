@@ -7,6 +7,7 @@ import '../../core/localization/language_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/auth_api_service.dart';
 import '../../services/progress_service.dart';
+import '../../services/theme_service.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -62,6 +63,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
         email: userData['email'] ?? email,
         token: response['access_token'] ?? 'placeholder-token',
         id: userData['id'] ?? '',
+        targetLanguage: userData['targetLanguage'],
       );
 
       // Sync progress
@@ -93,7 +95,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: LanguageService(),
+      listenable: Listenable.merge([LanguageService(), ThemeService()]),
       builder: (context, child) {
         final lang = LanguageService();
         return Scaffold(
@@ -114,7 +116,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
             ],
           ),
           body: Container(
-            decoration: const BoxDecoration(gradient: AppTheme.backgroundGradient),
+            decoration: BoxDecoration(gradient: AppTheme.backgroundGradient),
             child: SafeArea(
             child: SingleChildScrollView(
               physics: const BouncingScrollPhysics(),
@@ -141,7 +143,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     const SizedBox(height: 20),
                     Text(
                       lang.getString('start_journey'),
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 28,
                         fontWeight: FontWeight.w900,
                         color: AppTheme.textPrimaryColor,
@@ -152,7 +154,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                     const SizedBox(height: 8),
                     Text(
                       lang.getString('signup_ai'),
-                      style: const TextStyle(
+                      style: TextStyle(
                         fontSize: 16,
                         color: AppTheme.textSecondaryColor,
                         fontWeight: FontWeight.w500,
@@ -196,7 +198,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
                       children: [
                         Text(
                           lang.getString('already_account'),
-                          style: const TextStyle(color: AppTheme.textSecondaryColor),
+                          style: TextStyle(color: AppTheme.textSecondaryColor),
                         ),
                         TextButton(
                           onPressed: () {

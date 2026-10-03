@@ -9,7 +9,7 @@ export class AiContextService {
 
   async generateContext(word: string, translation: string) {
     const apiKey = this.configService.get<string>('GEMINI_API_KEY')?.trim();
-    const model = (this.configService.get<string>('GEMINI_MODEL') || 'gemini-flash-latest').trim();
+    const model = (this.configService.get<string>('GEMINI_MODEL') || 'gemini-2.5-flash').trim();
 
     if (!apiKey) {
       this.logger.warn('GEMINI_API_KEY not found, returning placeholder context');

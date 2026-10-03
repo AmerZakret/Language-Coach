@@ -6,14 +6,18 @@ import 'core/localization/language_service.dart';
 import 'core/localization/target_language_service.dart';
 import 'services/auth_service.dart';
 import 'services/sound_service.dart';
+import 'services/theme_service.dart';
+import 'services/connectivity_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
+  await ConnectivityService().init();
+  await ThemeService().init();
   await LanguageService().init();
   await TargetLanguageService().init();
-  await ProgressService().init();
   await AuthService().init();
+  await ProgressService().init();
   await SoundService().init();
   await FlashcardService().init();
   

@@ -3,6 +3,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_service.dart';
 import 'progress_api_service.dart';
 import '../core/localization/target_language_service.dart';
+import 'connectivity_service.dart';
+import 'offline_queue_service.dart';
 
 class ProgressService extends ChangeNotifier {
   static final ProgressService _instance = ProgressService._internal();
@@ -54,6 +56,25 @@ class ProgressService extends ChangeNotifier {
   Future<void> init() async {
     _prefs = await SharedPreferences.getInstance();
     await reloadProgress();
+    ConnectivityService().addListener(_onConnectivityChanged);
+    AuthService().addListener(_onAuthChanged);
+  }
+
+  void _onConnectivityChanged() {
+    if (ConnectivityService().isOnline) {
+      syncWithBackend();
+    }
+  }
+
+  void _onAuthChanged() {
+    reloadProgress();
+  }
+
+  @override
+  void dispose() {
+    ConnectivityService().removeListener(_onConnectivityChanged);
+    AuthService().removeListener(_onAuthChanged);
+    super.dispose();
   }
 
   // Resets in-memory state and reloads from SharedPreferences for current user/language
@@ -95,27 +116,60 @@ class ProgressService extends ChangeNotifier {
     final auth = AuthService();
     if (!auth.isLoggedIn || auth.isGuest) return;
 
+    final userId = auth.currentUserId.isNotEmpty ? auth.currentUserId : auth.currentUserEmail;
+
+    // Drain the offline queue first
+    await OfflineQueueService().processQueue(userId);
+
     try {
-      final response = await _apiService.getProgress(auth.currentUserId.isNotEmpty ? auth.currentUserId : auth.currentUserEmail);
+      final targetLang = TargetLanguageService();
+      final langFullName = TargetLanguageService.toFullName(targetLang.currentLanguage);
+      
+      final response = await _apiService.getProgress(userId, langFullName);
       final stats = response['stats'];
 
-      if (stats != null) {
-        // Take the HIGHER value so local progress is never lost
-        final backendXp = stats['totalXp'] as int? ?? 0;
-        if (backendXp > _totalXp) {
-          _totalXp = backendXp;
-        }
-        final backendStreak = stats['streak'] as int? ?? 0;
-        if (backendStreak > _streak) {
-          _streak = backendStreak;
+      final completed = response['completedLessons'] as List?;
+      final backendIds = <String>{};
+      if (completed != null) {
+        for (var item in completed) {
+          backendIds.add(item['lessonId'].toString());
         }
       }
 
-      final completed = response['completedLessons'] as List?;
-      if (completed != null) {
-        for (var item in completed) {
-          _completedLessonIds.add(item['lessonId'].toString());
+      // Sync any local offline completed lessons that are missing on the backend
+      bool syncedAny = false;
+      for (var localId in _completedLessonIds) {
+        if (!backendIds.contains(localId)) {
+          try {
+            await _apiService.completeLesson(userId, localId, 100);
+            syncedAny = true;
+            debugPrint('Synced offline completion for lesson: $localId');
+          } catch (err) {
+            debugPrint('Failed to sync offline lesson $localId to backend: $err');
+          }
         }
+      }
+
+      if (syncedAny) {
+        final updatedResponse = await _apiService.getProgress(userId, langFullName);
+        final updatedStats = updatedResponse['stats'];
+        if (updatedStats != null) {
+          _totalXp = updatedStats['totalXp'] as int? ?? 0;
+          _streak = updatedStats['streak'] as int? ?? 0;
+        }
+        final updatedCompleted = updatedResponse['completedLessons'] as List?;
+        _completedLessonIds.clear();
+        if (updatedCompleted != null) {
+          for (var item in updatedCompleted) {
+            _completedLessonIds.add(item['lessonId'].toString());
+          }
+        }
+      } else {
+        if (stats != null) {
+          _totalXp = stats['totalXp'] as int? ?? 0;
+          _streak = stats['streak'] as int? ?? 0;
+        }
+        _completedLessonIds = backendIds;
       }
 
       _saveLocalData();
@@ -128,25 +182,49 @@ class ProgressService extends ChangeNotifier {
   void completeLesson(String lessonId, int xpReward, {int score = 100}) async {
     final auth = AuthService();
 
-    // Always update local state first for instant feedback
     if (!_completedLessonIds.contains(lessonId)) {
-      _completedLessonIds.add(lessonId);
-      _totalXp += xpReward;
-      _saveLocalData();
-      notifyListeners();
-
-      // If logged in and NOT guest, or if guest WITH a token, sync to backend
       final hasToken = auth.token.isNotEmpty;
       if ((auth.isLoggedIn && !auth.isGuest) || (auth.isGuest && hasToken)) {
         try {
-          await _apiService.completeLesson(
-            auth.currentUserId.isNotEmpty ? auth.currentUserId : auth.currentUserEmail,
-            lessonId,
-            score,
-          );
+          final userId = auth.currentUserId.isNotEmpty ? auth.currentUserId : auth.currentUserEmail;
+          if (ConnectivityService().isOffline) {
+            throw Exception('Device is offline');
+          }
+          await _apiService.completeLesson(userId, lessonId, score);
+          
+          final targetLang = TargetLanguageService();
+          final langFullName = TargetLanguageService.toFullName(targetLang.currentLanguage);
+          final response = await _apiService.getProgress(userId, langFullName);
+          final stats = response['stats'];
+          if (stats != null) {
+            _totalXp = stats['totalXp'] as int? ?? 0;
+            _streak = stats['streak'] as int? ?? 0;
+          }
+          final completed = response['completedLessons'] as List?;
+          _completedLessonIds.clear();
+          if (completed != null) {
+            for (var item in completed) {
+              _completedLessonIds.add(item['lessonId'].toString());
+            }
+          }
+          _saveLocalData();
+          notifyListeners();
         } catch (e) {
-          debugPrint('Backend progress update failed: $e');
+          debugPrint('Backend progress update failed, falling back to local: $e');
+          await OfflineQueueService().pushAction('complete-lesson', {
+            'lessonId': lessonId,
+            'score': score,
+          });
+          _completedLessonIds.add(lessonId);
+          _totalXp += xpReward;
+          _saveLocalData();
+          notifyListeners();
         }
+      } else {
+        _completedLessonIds.add(lessonId);
+        _totalXp += xpReward;
+        _saveLocalData();
+        notifyListeners();
       }
     }
   }

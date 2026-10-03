@@ -1,10 +1,11 @@
 import { useState, useEffect } from "react";
-import { PenLine, ChevronDown, AlertCircle, CheckCircle2, Sparkles } from "lucide-react";
+import { AlertCircle, CheckCircle2, Sparkles, WifiOff } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useLanguage } from "../context/LanguageContext";
 import { useTargetLanguage } from "../context/TargetLanguageContext";
 import { useProgress } from "../context/ProgressContext";
-import { sendMessage } from "../api/aiCoachApi";
+import { useNetwork } from "../context/NetworkContext";
+import { checkWriting } from "../api/aiCoachApi";
 import { writingTopics } from "../data/writingTopics";
 
 interface Feedback {
@@ -41,80 +42,75 @@ export function WritingPracticePage() {
   const { language, t } = useLanguage();
   const { targetLanguage } = useTargetLanguage();
   const { addXp } = useProgress();
+  const { isOffline } = useNetwork();
 
   const [topic, setTopic] = useState("");
-  const [topicOpen, setTopicOpen] = useState(false);
   const [text, setText] = useState("");
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const topics = writingTopics[targetLanguage] || writingTopics["English"];
+  if (isOffline) {
+    return (
+      <div className="flex flex-col items-center justify-center text-center p-8 border rounded-2xl h-[450px]" style={{ background: "var(--l-surface)", borderColor: "var(--l-border)", color: "var(--l-text)" }}>
+        <WifiOff size={48} className="text-amber-500 mb-4 animate-bounce" />
+        <h2 style={{ fontSize: "20px", fontWeight: 800 }}>{t("offline_only_title")}</h2>
+        <p style={{ fontSize: "14px", color: "var(--l-muted)", marginTop: "8px", maxWidth: "340px" }}>{t("offline_only_desc")}</p>
+      </div>
+    );
+  }
+
+  const LANGUAGE_CODES: Record<string, string> = {
+    English: 'en',
+    German: 'de',
+    Spanish: 'es',
+    French: 'fr',
+    Arabic: 'ar',
+    Turkish: 'tr',
+  };
+
+  const targetCode = LANGUAGE_CODES[targetLanguage] || 'en';
+  const topicsMap = writingTopics[language] || writingTopics['en'];
+  const topics = topicsMap[targetCode] || topicsMap['en'];
 
   useEffect(() => {
-    setTopic(topics[0]);
+    setTopic("");
     setFeedback(null);
     setText("");
   }, [targetLanguage, topics]);
+
+  const handleSuggestTopic = () => {
+    if (topics.length === 0) return;
+    const randomIndex = Math.floor(Math.random() * topics.length);
+    setTopic(topics[randomIndex]);
+    setFeedback(null);
+  };
 
   const wordCount = text.trim() ? text.trim().split(/\s+/).length : 0;
   const charCount = text.length;
 
   const handleSubmit = async () => {
-    if (!text.trim() || text.length < 20 || loading) return;
+    if (!topic.trim() || !text.trim() || text.length < 20 || loading) return;
 
     setLoading(true);
     setFeedback(null);
 
     try {
-      const prompt = `Writing correction request. 
-      Topic: ${topic}
-      Target Language: ${targetLanguage}
-      User Text: ${text}
-      
-      Please return a JSON-style response with EXACTLY this structure:
-      {
-        "score": 85,
-        "grammar": 80,
-        "vocabulary": 90,
-        "clarity": 85,
-        "corrected": "The fully corrected text goes here.",
-        "mistakes": [
-          {
-            "original": "mistaken word/phrase",
-            "correction": "corrected word/phrase",
-            "explanation": "Brief explanation of the mistake"
-          }
-        ]
-      }
-      All scores should be out of 100. Provide the JSON only, no markdown formatting if possible.`;
-
-      const response = await sendMessage({
+      const response = await checkWriting({
         userId: user?.id || (isGuest ? 'guest' : 'unknown'),
-        message: prompt,
+        topic: topic,
+        text: text,
         language: language,
         targetLanguage: targetLanguage
       });
 
-      let finalResult: Feedback;
-      try {
-        const jsonMatch = response.reply.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          finalResult = JSON.parse(jsonMatch[0]);
-        } else {
-          finalResult = {
-            score: 0, grammar: 0, vocabulary: 0, clarity: 0,
-            corrected: response.reply,
-            mistakes: []
-          };
-        }
-      } catch (e) {
-        console.warn('Failed to parse AI response as JSON', e);
-        finalResult = {
-          score: 0, grammar: 0, vocabulary: 0, clarity: 0,
-          corrected: response.correction || response.reply,
-          mistakes: []
-        };
-      }
+      const finalResult: Feedback = {
+        score: response.overallScore,
+        grammar: response.grammarScore,
+        vocabulary: response.vocabularyScore,
+        clarity: response.clarityScore,
+        corrected: response.improvedVersion,
+        mistakes: response.corrections
+      };
 
       setFeedback(finalResult);
       addXp(10);
@@ -129,63 +125,57 @@ export function WritingPracticePage() {
     <div className="p-6 max-w-3xl mx-auto space-y-6 animate-fade-in" style={{ background: "var(--l-bg)", minHeight: "100vh" }}>
       <div>
         <h1 style={{ color: "var(--l-text)", fontWeight: 800, fontSize: "26px", letterSpacing: "-0.02em" }}>{t('writing_practice')}</h1>
-        <p style={{ fontSize: "14px", color: "var(--l-muted)", marginTop: "4px" }}>Write in {targetLanguage} and get instant AI feedback</p>
+        <p style={{ fontSize: "14px", color: "var(--l-muted)", marginTop: "4px" }}>{t('writing_subtitle').replace('{lang}', t('lang_' + targetLanguage.toLowerCase()))}</p>
       </div>
 
       {/* Topic selector */}
-      <div className="relative">
+      <div>
         <label style={{ fontSize: "12px", fontWeight: 700, color: "var(--l-muted)", textTransform: "uppercase", letterSpacing: "0.05em", display: "block", marginBottom: "8px" }}>{t('topic')}</label>
-        <button
-          onClick={() => setTopicOpen(!topicOpen)}
-          className="w-full flex items-center justify-between px-4 py-3 rounded-xl transition-all"
-          style={{ background: "var(--l-input-bg)", border: topicOpen ? "1px solid rgba(99,102,241,0.4)" : "1px solid var(--l-border)", color: "var(--l-text)", fontSize: "14px" }}
-        >
-          <div className="flex items-center gap-2"><PenLine size={15} color="#6366F1" />{topic}</div>
-          <ChevronDown size={15} color="var(--l-muted)" style={{ transform: topicOpen ? "rotate(180deg)" : "rotate(0)", transition: "transform 0.2s" }} />
-        </button>
-        {topicOpen && (
-          <div className="absolute top-full left-0 right-0 mt-2 rounded-xl overflow-hidden z-10 animate-fade-in" style={{ background: "var(--l-surface)", border: "1px solid var(--l-border)", boxShadow: "0 16px 40px rgba(0,0,0,0.2)" }}>
-            {topics.map((tItem) => (
-              <button key={tItem} onClick={() => { setTopic(tItem); setTopicOpen(false); setText(""); setFeedback(null); }} className="w-full text-left px-4 py-3 transition-colors flex items-center gap-2" style={{ color: tItem === topic ? "#6366F1" : "var(--l-text2)", fontSize: "13px", background: tItem === topic ? "rgba(99,102,241,0.08)" : "transparent" }}
-                onMouseEnter={(e) => { if (tItem !== topic) (e.currentTarget as HTMLButtonElement).style.background = "var(--l-card-hover)"; }}
-                onMouseLeave={(e) => { if (tItem !== topic) (e.currentTarget as HTMLButtonElement).style.background = "transparent"; }}
-              >
-                {tItem === topic && <CheckCircle2 size={13} color="#6366F1" />}{tItem}
-              </button>
-            ))}
+        <div className="flex gap-2">
+          <div className="relative flex-1">
+            <input
+              type="text"
+              value={topic}
+              onChange={(e) => setTopic(e.target.value)}
+              placeholder={t('topic_placeholder')}
+              className="form-input"
+            />
           </div>
-        )}
+          <button
+            onClick={handleSuggestTopic}
+            className="btn-secondary flex items-center gap-2 font-bold shrink-0"
+          >
+            <Sparkles size={14} color="#6366F1" />
+            {t('suggest_topic')}
+          </button>
+        </div>
       </div>
 
       {/* Writing area */}
       <div>
         <div className="flex items-center justify-between mb-2">
-          <label style={{ fontSize: "12px", fontWeight: 700, color: "var(--l-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Your Writing</label>
+          <label style={{ fontSize: "12px", fontWeight: 700, color: "var(--l-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>{t('your_writing')}</label>
           <div className="flex items-center gap-3">
-            <span style={{ fontSize: "11px", color: wordCount >= 50 ? "#10B981" : "var(--l-muted)" }}>{wordCount} words</span>
-            <span style={{ fontSize: "11px", color: "var(--l-subtle)" }}>{charCount} chars</span>
+            <span style={{ fontSize: "11px", color: wordCount >= 50 ? "#10B981" : "var(--l-muted)" }}>{wordCount} {t('words')}</span>
+            <span style={{ fontSize: "11px", color: "var(--l-subtle)" }}>{charCount} {t('chars')}</span>
           </div>
         </div>
         <textarea
           value={text}
           onChange={(e) => setText(e.target.value)}
-          placeholder={`Write about "${topic}" in ${targetLanguage}... (aim for 50+ words)`}
+          placeholder={topic.trim() 
+            ? t('write_about_topic').replace('{topic}', topic).replace('{lang}', t('lang_' + targetLanguage.toLowerCase())) 
+            : t('write_about_your_topic').replace('{lang}', t('lang_' + targetLanguage.toLowerCase()))}
           rows={8}
-          className="w-full px-4 py-3 rounded-xl outline-none transition-all resize-none"
-          style={{ background: "var(--l-input-bg)", border: "1px solid var(--l-border)", color: "var(--l-text)", fontSize: "14px", lineHeight: 1.8 }}
-          onFocus={(e) => { e.target.style.borderColor = "rgba(99,102,241,0.4)"; }}
-          onBlur={(e) => { e.target.style.borderColor = "var(--l-border)"; }}
+          className="form-textarea resize-none"
           disabled={loading}
         />
         <button
           onClick={handleSubmit}
-          disabled={!text.trim() || text.length < 20 || loading}
-          className="mt-3 flex items-center gap-2 px-6 py-3 rounded-xl transition-all duration-200"
-          style={{ background: text.trim() && text.length >= 20 && !loading ? "linear-gradient(135deg, #6366F1, #8B5CF6)" : "var(--l-card-hover)", color: text.trim() && text.length >= 20 && !loading ? "white" : "var(--l-subtle)", fontSize: "14px", fontWeight: 700, boxShadow: text.trim() && text.length >= 20 && !loading ? "0 4px 20px rgba(99,102,241,0.4)" : "none", border: text.trim() && text.length >= 20 && !loading ? "none" : "1px solid var(--l-border)" }}
-          onMouseEnter={(e) => { if (text.trim() && text.length >= 20 && !loading) (e.currentTarget as HTMLButtonElement).style.transform = "translateY(-1px)"; }}
-          onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.transform = "translateY(0)"; }}
+          disabled={!topic.trim() || !text.trim() || text.length < 20 || loading}
+          className="btn-primary mt-3"
         >
-          {loading ? (<><div className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin" />Analyzing...</>) : (<><Sparkles size={15} />{t('check_writing')}</>)}
+          {loading ? (<><div className="w-4 h-4 rounded-full border-2 border-white/30 border-t-white animate-spin" />{t('analyzing')}</>) : (<><Sparkles size={15} />{t('check_writing')}</>)}
         </button>
       </div>
 
@@ -195,8 +185,8 @@ export function WritingPracticePage() {
           <div className="p-5 rounded-2xl" style={{ background: "linear-gradient(135deg, rgba(99,102,241,0.1), rgba(139,92,246,0.08))", border: "1px solid rgba(99,102,241,0.2)" }}>
             <div className="flex items-center justify-between mb-4">
               <div>
-                <div style={{ fontSize: "14px", fontWeight: 700, color: "var(--l-text)" }}>AI Feedback</div>
-                <div style={{ fontSize: "12px", color: "var(--l-muted)" }}>Overall Assessment</div>
+                <div style={{ fontSize: "14px", fontWeight: 700, color: "var(--l-text)" }}>{t('ai_feedback_label')}</div>
+                <div style={{ fontSize: "12px", color: "var(--l-muted)" }}>{t('overall_assessment')}</div>
               </div>
               <div className="text-right">
                 <div style={{ fontSize: "38px", fontWeight: 900, color: "#6366F1", lineHeight: 1 }}>{feedback.score || Math.round((feedback.grammar + feedback.vocabulary + feedback.clarity)/3) || 0}</div>

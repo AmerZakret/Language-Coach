@@ -7,6 +7,7 @@ import '../../services/progress_service.dart';
 import '../../services/flashcard_service.dart';
 import '../../core/localization/language_service.dart';
 import '../../services/auth_service.dart';
+import '../../services/theme_service.dart';
 import '../../services/lesson_api_service.dart';
 import '../../core/localization/target_language_service.dart';
 import '../../widgets/target_language_modal.dart';
@@ -43,6 +44,35 @@ class _HomeScreenState extends State<HomeScreen> {
     super.dispose();
   }
 
+  bool _isLessonLocked(Lesson lesson, List<Lesson> allLessons, Set<String> completedLessonIds) {
+    final level = lesson.difficulty;
+    if (level == 'Beginner') return false;
+
+    bool isLevelCompleted(String lvl) {
+      final lvlLessons = allLessons.where((l) => l.difficulty == lvl).toList();
+      if (lvlLessons.isEmpty) return false;
+      return lvlLessons.every((l) => completedLessonIds.contains(l.id));
+    }
+
+    if (level == 'Elementary') {
+      return !isLevelCompleted('Beginner');
+    }
+    if (level == 'Pre-Intermediate') {
+      return !isLevelCompleted('Beginner') || !isLevelCompleted('Elementary');
+    }
+    if (level == 'Intermediate') {
+      return !isLevelCompleted('Beginner') || !isLevelCompleted('Elementary') || !isLevelCompleted('Pre-Intermediate');
+    }
+    if (level == 'Upper-Intermediate') {
+      return !isLevelCompleted('Beginner') || !isLevelCompleted('Elementary') || !isLevelCompleted('Pre-Intermediate') || !isLevelCompleted('Intermediate');
+    }
+    if (level == 'Advanced') {
+      return !isLevelCompleted('Beginner') || !isLevelCompleted('Elementary') || !isLevelCompleted('Pre-Intermediate') || !isLevelCompleted('Intermediate') || !isLevelCompleted('Upper-Intermediate');
+    }
+
+    return false;
+  }
+
   Map<String, dynamic> _getLevelInfo(int xp) {
     if (xp >= 2200) return {'level': 'Advanced', 'progress': 1.0, 'nextXp': 2200};
     if (xp >= 1400) return {'level': 'Upper-Intermediate', 'progress': (xp - 1400) / (2200 - 1400), 'nextXp': 2200};
@@ -61,6 +91,7 @@ class _HomeScreenState extends State<HomeScreen> {
         AuthService(),
         TargetLanguageService(),
         FlashcardService(),
+        ThemeService(),
       ]),
       builder: (context, child) {
         final progress = ProgressService();
@@ -84,9 +115,9 @@ class _HomeScreenState extends State<HomeScreen> {
                 Lesson? recommendedLesson;
                 if (lessons.isNotEmpty) {
                   recommendedLesson = lessons.cast<Lesson?>().firstWhere(
-                    (l) => l != null && !progress.completedLessonIds.contains(l.id) && (l.difficulty == currentLevel),
+                    (l) => l != null && !progress.completedLessonIds.contains(l.id) && (l.difficulty == currentLevel) && !_isLessonLocked(l, lessons, progress.completedLessonIds),
                     orElse: () => lessons.cast<Lesson?>().firstWhere(
-                      (l) => l != null && !progress.completedLessonIds.contains(l.id),
+                      (l) => l != null && !progress.completedLessonIds.contains(l.id) && !_isLessonLocked(l, lessons, progress.completedLessonIds),
                       orElse: () => null,
                     ),
                   );
@@ -102,20 +133,29 @@ class _HomeScreenState extends State<HomeScreen> {
                         child: Row(
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
-                            Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    auth.isGuest ? lang.getString('welcome_guest') : '${lang.getString('welcome_back')}, ${auth.currentUserName.split(' ').first}',
+                                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: AppTheme.textPrimary),
+                                  ),
+                                  Text(
+                                    '${lang.getString('keep_learning')} ${targetLang.currentLanguage} ${lang.getString('today')}',
+                                    style: TextStyle(fontSize: 15, color: AppTheme.textSecondary, fontWeight: FontWeight.w500),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Row(
                               children: [
-                                Text(
-                                  auth.isGuest ? lang.getString('welcome_guest') : '${lang.getString('welcome_back')}, ${auth.currentUserName.split(' ').first} 👋',
-                                  style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w900, color: AppTheme.textPrimary),
-                                ),
-                                Text(
-                                  '${lang.getString('keep_learning')} ${targetLang.currentLanguage} ${lang.getString('today')}',
-                                  style: const TextStyle(fontSize: 15, color: AppTheme.textSecondary, fontWeight: FontWeight.w500),
-                                ),
+                                _buildThemeToggleButton(),
+                                const SizedBox(width: 8),
+                                _buildLanguageBadge(targetLang),
                               ],
                             ),
-                            _buildLanguageBadge(targetLang),
                           ],
                         ),
                       ),
@@ -131,7 +171,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           crossAxisCount: 2,
                           mainAxisSpacing: 16,
                           crossAxisSpacing: 16,
-                          childAspectRatio: 1.6,
+                          childAspectRatio: 1.45,
                           children: [
                             _buildStatCard(lang.getString('xp'), '${progress.totalXp}', Icons.bolt_rounded, Colors.orange),
                             _buildStatCard(lang.getString('level'), lang.getString(currentLevel), Icons.trending_up_rounded, AppTheme.primaryColor),
@@ -149,21 +189,25 @@ class _HomeScreenState extends State<HomeScreen> {
                         child: Container(
                           padding: const EdgeInsets.all(24),
                           decoration: BoxDecoration(
-                            color: Colors.white,
+                            color: AppTheme.surfaceColor,
                             borderRadius: BorderRadius.circular(24),
                             boxShadow: AppTheme.cardShadow,
-                            border: Border.all(color: Colors.grey.shade100),
+                            border: Border.all(
+                              color: ThemeService().isDarkMode
+                                  ? Colors.white.withValues(alpha: 0.08)
+                                  : Colors.grey.shade100,
+                            ),
                           ),
                           child: Column(
                             children: [
                               Text(
                                 '${lang.getString('level')}: ${lang.getString(currentLevel)}',
-                                style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppTheme.textPrimary),
+                                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppTheme.textPrimary),
                               ),
                               const SizedBox(height: 8),
                               Text(
                                 'XP: ${progress.totalXp} / $nextXp',
-                                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppTheme.textSecondary),
+                                style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppTheme.textSecondary),
                               ),
                               const SizedBox(height: 20),
                               ClipRRect(
@@ -193,10 +237,14 @@ class _HomeScreenState extends State<HomeScreen> {
                           child: Container(
                             padding: const EdgeInsets.all(20),
                             decoration: BoxDecoration(
-                              color: Colors.white,
+                              color: AppTheme.surfaceColor,
                               borderRadius: BorderRadius.circular(24),
                               boxShadow: AppTheme.cardShadow,
-                              border: Border.all(color: Colors.grey.shade100),
+                              border: Border.all(
+                                color: ThemeService().isDarkMode
+                                    ? Colors.white.withValues(alpha: 0.08)
+                                    : Colors.grey.shade100,
+                              ),
                             ),
                             child: Row(
                               children: [
@@ -206,10 +254,10 @@ class _HomeScreenState extends State<HomeScreen> {
                                     color: AppTheme.primaryColor.withValues(alpha: 0.1),
                                     shape: BoxShape.circle,
                                   ),
-                                  child: const Icon(
-                                    Icons.psychology_rounded,
-                                    color: AppTheme.primaryColor,
-                                    size: 32,
+                                  child: Image.asset(
+                                    'assets/images/apps.png',
+                                    width: 32,
+                                    height: 32,
                                   ),
                                 ),
                                 const SizedBox(width: 16),
@@ -219,7 +267,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                     children: [
                                       Text(
                                         lang.getString('flashcards'),
-                                        style: const TextStyle(
+                                        style: TextStyle(
                                           fontSize: 18,
                                           fontWeight: FontWeight.w900,
                                           color: AppTheme.textPrimaryColor,
@@ -227,7 +275,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                       ),
                                       const SizedBox(height: 4),
                                       Text(
-                                        '${flashcards.dueCards.length} ${lang.getString('cards_due')} • ${flashcards.allCards.length} total',
+                                        '${flashcards.dueCards.length} ${lang.getString('cards_due')} • ${flashcards.allCards.length} ${lang.getString('total')}',
                                         style: TextStyle(
                                           fontSize: 13,
                                           color: flashcards.dueCards.isNotEmpty
@@ -239,7 +287,79 @@ class _HomeScreenState extends State<HomeScreen> {
                                     ],
                                   ),
                                 ),
-                                const Icon(
+                                Icon(
+                                  Icons.chevron_right_rounded,
+                                  color: AppTheme.textSecondaryColor,
+                                  size: 28,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+
+                    // --- Pronunciation Practice Card ---
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+                        child: InkWell(
+                          onTap: () {
+                            Navigator.pushNamed(context, AppRoutes.pronunciationPractice);
+                          },
+                          borderRadius: BorderRadius.circular(24),
+                          child: Container(
+                            padding: const EdgeInsets.all(20),
+                            decoration: BoxDecoration(
+                              color: AppTheme.surfaceColor,
+                              borderRadius: BorderRadius.circular(24),
+                              boxShadow: AppTheme.cardShadow,
+                              border: Border.all(
+                                color: ThemeService().isDarkMode
+                                    ? Colors.white.withValues(alpha: 0.08)
+                                    : Colors.grey.shade100,
+                              ),
+                            ),
+                            child: Row(
+                              children: [
+                                Container(
+                                  padding: const EdgeInsets.all(12),
+                                  decoration: BoxDecoration(
+                                    color: Colors.purple.withValues(alpha: 0.1),
+                                    shape: BoxShape.circle,
+                                  ),
+                                  child: Image.asset(
+                                    'assets/images/ai-coach-icon.png',
+                                    width: 32,
+                                    height: 32,
+                                  ),
+                                ),
+                                const SizedBox(width: 16),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        lang.getString('pronunciation_practice'),
+                                        style: TextStyle(
+                                          fontSize: 18,
+                                          fontWeight: FontWeight.w900,
+                                          color: AppTheme.textPrimaryColor,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 4),
+                                      Text(
+                                        lang.getString('pronunciation_practice_desc'),
+                                        style: TextStyle(
+                                          fontSize: 13,
+                                          color: AppTheme.textSecondaryColor,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                                Icon(
                                   Icons.chevron_right_rounded,
                                   color: AppTheme.textSecondaryColor,
                                   size: 28,
@@ -259,10 +379,14 @@ class _HomeScreenState extends State<HomeScreen> {
                           child: Container(
                             padding: const EdgeInsets.all(24),
                             decoration: BoxDecoration(
-                              color: Colors.white,
+                              color: AppTheme.surfaceColor,
                               borderRadius: BorderRadius.circular(24),
                               boxShadow: AppTheme.cardShadow,
-                              border: Border.all(color: Colors.grey.shade100),
+                              border: Border.all(
+                                color: ThemeService().isDarkMode
+                                    ? Colors.white.withValues(alpha: 0.08)
+                                    : Colors.grey.shade100,
+                              ),
                             ),
                             child: Column(
                               crossAxisAlignment: CrossAxisAlignment.start,
@@ -280,12 +404,12 @@ class _HomeScreenState extends State<HomeScreen> {
                                         children: [
                                           Text(
                                             recommendedLesson.title,
-                                            style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: AppTheme.textPrimary),
+                                            style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: AppTheme.textPrimary),
                                           ),
                                           const SizedBox(height: 4),
                                           Text(
                                             recommendedLesson.description,
-                                            style: const TextStyle(fontSize: 14, color: AppTheme.textSecondary, fontWeight: FontWeight.w500),
+                                            style: TextStyle(fontSize: 14, color: AppTheme.textSecondary, fontWeight: FontWeight.w500),
                                           ),
                                         ],
                                       ),
@@ -314,7 +438,7 @@ class _HomeScreenState extends State<HomeScreen> {
                           padding: const EdgeInsets.fromLTRB(24, 40, 24, 20),
                           child: Text(
                             lang.getString('available_lessons'),
-                            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: AppTheme.textPrimary),
+                            style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: AppTheme.textPrimary),
                           ),
                         ),
                       ),
@@ -331,16 +455,31 @@ class _HomeScreenState extends State<HomeScreen> {
                             (context, index) {
                               final lesson = lessons[index];
                               final isCompleted = progress.completedLessonIds.contains(lesson.id);
+                              final locked = _isLessonLocked(lesson, lessons, progress.completedLessonIds);
                               return InkWell(
-                                onTap: () => Navigator.pushNamed(context, AppRoutes.lesson, arguments: lesson),
+                                onTap: locked ? null : () => Navigator.pushNamed(context, AppRoutes.lesson, arguments: lesson),
                                 borderRadius: BorderRadius.circular(20),
                                 child: Container(
                                   padding: const EdgeInsets.all(16),
                                   decoration: BoxDecoration(
-                                    color: isCompleted ? const Color(0xFFF0FDF4) : Colors.white,
+                                    color: locked
+                                        ? (ThemeService().isDarkMode
+                                            ? const Color(0xFF1E293B)
+                                            : Colors.grey.shade100)
+                                        : isCompleted
+                                            ? (ThemeService().isDarkMode
+                                                ? const Color(0xFF0F3A20)
+                                                : const Color(0xFFF0FDF4))
+                                            : AppTheme.surfaceColor,
                                     borderRadius: BorderRadius.circular(20),
                                     boxShadow: AppTheme.cardShadow,
-                                    border: Border.all(color: isCompleted ? Colors.green.withValues(alpha: 0.2) : Colors.grey.shade100),
+                                    border: Border.all(
+                                      color: isCompleted
+                                          ? Colors.green.withValues(alpha: 0.4)
+                                          : (ThemeService().isDarkMode
+                                              ? Colors.white.withValues(alpha: 0.08)
+                                              : Colors.grey.shade100),
+                                    ),
                                   ),
                                   child: Stack(
                                     children: [
@@ -348,7 +487,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                         right: -10,
                                         bottom: -10,
                                         child: Opacity(
-                                          opacity: 0.2, // Increased from 0.1 and removed tint
+                                          opacity: locked ? 0.05 : 0.2,
                                           child: Image.asset(
                                             'assets/images/lesson.png',
                                             width: 60,
@@ -371,24 +510,33 @@ class _HomeScreenState extends State<HomeScreen> {
                                             ),
                                             child: Text(
                                               lesson.category.toUpperCase(),
-                                              style: const TextStyle(fontSize: 8, fontWeight: FontWeight.w800, color: AppTheme.textSecondary),
+                                              style: TextStyle(fontSize: 8, fontWeight: FontWeight.w800, color: AppTheme.textSecondary),
                                             ),
                                           ),
                                           if (isCompleted)
-                                            const Icon(Icons.check_box_rounded, color: Colors.green, size: 14),
+                                            const Icon(Icons.check_box_rounded, color: Colors.green, size: 14)
+                                          else if (locked)
+                                            const Icon(Icons.lock_rounded, color: Colors.grey, size: 14),
                                         ],
                                       ),
                                       const SizedBox(height: 8),
                                       Text(
                                         lesson.title,
-                                        style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w900, color: AppTheme.textPrimary, height: 1.2),
+                                        style: TextStyle(
+                                          fontSize: 14, 
+                                          fontWeight: FontWeight.w900, 
+                                          color: locked ? AppTheme.textSecondary : AppTheme.textPrimary, 
+                                          height: 1.2
+                                        ),
                                         maxLines: 2,
                                         overflow: TextOverflow.ellipsis,
                                       ),
                                       const SizedBox(height: 4),
                                       Text(
-                                        '${lesson.xpReward} XP • ${lesson.duration}m',
-                                        style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppTheme.textSecondary),
+                                        locked
+                                            ? lang.getString('locked')
+                                            : '${lesson.xpReward} XP • ${lesson.duration}m',
+                                        style: TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppTheme.textSecondary),
                                       ),
                                     ],
                                   ),
@@ -417,10 +565,14 @@ class _HomeScreenState extends State<HomeScreen> {
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppTheme.surfaceColor,
         borderRadius: BorderRadius.circular(24),
         boxShadow: AppTheme.cardShadow,
-        border: Border.all(color: Colors.grey.shade100),
+        border: Border.all(
+          color: ThemeService().isDarkMode
+              ? Colors.white.withValues(alpha: 0.08)
+              : Colors.grey.shade100,
+        ),
       ),
       child: Row(
         children: [
@@ -433,17 +585,44 @@ class _HomeScreenState extends State<HomeScreen> {
               children: [
                 Text(
                   value,
-                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: AppTheme.textPrimary),
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: AppTheme.textPrimary),
                   overflow: TextOverflow.ellipsis,
                 ),
                 Text(
                   label,
-                  style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary),
+                  style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700, color: AppTheme.textSecondary),
                 ),
               ],
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _buildThemeToggleButton() {
+    final themeService = ThemeService();
+    return GestureDetector(
+      onTap: () {
+        themeService.toggleTheme();
+      },
+      child: Container(
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: AppTheme.surfaceColor,
+          shape: BoxShape.circle,
+          boxShadow: AppTheme.cardShadow,
+          border: Border.all(
+            color: themeService.isDarkMode
+                ? Colors.white.withValues(alpha: 0.08)
+                : Colors.grey.shade100,
+          ),
+        ),
+        child: Icon(
+          themeService.isDarkMode ? Icons.light_mode_rounded : Icons.dark_mode_rounded,
+          color: themeService.isDarkMode ? Colors.amber : AppTheme.primaryColor,
+          size: 20,
+        ),
       ),
     );
   }
@@ -461,10 +640,14 @@ class _HomeScreenState extends State<HomeScreen> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: AppTheme.surfaceColor,
           borderRadius: BorderRadius.circular(50),
           boxShadow: AppTheme.cardShadow,
-          border: Border.all(color: Colors.grey.shade100),
+          border: Border.all(
+            color: ThemeService().isDarkMode
+                ? Colors.white.withValues(alpha: 0.08)
+                : Colors.grey.shade100,
+          ),
         ),
         child: Row(
           children: [
@@ -472,7 +655,7 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(width: 8),
             Text(
               targetLang.currentLanguage.toUpperCase(),
-              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: AppTheme.textPrimary),
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800, color: AppTheme.textPrimary),
             ),
           ],
         ),

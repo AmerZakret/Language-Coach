@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../core/theme/app_theme.dart';
 import '../core/localization/language_service.dart';
 import '../core/localization/target_language_service.dart';
+import '../services/theme_service.dart';
 
 class TargetLanguageModal extends StatelessWidget {
   const TargetLanguageModal({super.key});
@@ -9,7 +10,7 @@ class TargetLanguageModal extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: TargetLanguageService(),
+      listenable: Listenable.merge([TargetLanguageService(), ThemeService()]),
       builder: (context, child) {
         final targetLangService = TargetLanguageService();
         final langService = LanguageService();
@@ -17,18 +18,20 @@ class TargetLanguageModal extends StatelessWidget {
         final languages = ['en', 'es', 'de', 'fr', 'ar'];
 
         return Container(
-          padding: const EdgeInsets.all(32),
-          decoration: const BoxDecoration(
+          padding: const EdgeInsets.fromLTRB(32, 24, 32, 8),
+          decoration: BoxDecoration(
             color: AppTheme.surfaceColor,
-            borderRadius: BorderRadius.only(
+            borderRadius: const BorderRadius.only(
               topLeft: Radius.circular(32),
               topRight: Radius.circular(32),
             ),
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
+          child: SafeArea(
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
               Center(
                 child: Container(
                   width: 40,
@@ -41,8 +44,8 @@ class TargetLanguageModal extends StatelessWidget {
               ),
               const SizedBox(height: 24),
               Text(
-                langService.currentLanguage == 'tr' ? 'Öğrenmek İstediğiniz Dil' : 'Learning Language',
-                style: const TextStyle(
+                langService.getString('learning_language'),
+                style: TextStyle(
                   fontSize: 24,
                   fontWeight: FontWeight.w900,
                   color: AppTheme.textPrimaryColor,
@@ -50,8 +53,8 @@ class TargetLanguageModal extends StatelessWidget {
               ),
               const SizedBox(height: 8),
               Text(
-                langService.currentLanguage == 'tr' ? 'Hangi dili öğrenmek istiyorsunuz?' : 'Which language do you want to learn?',
-                style: const TextStyle(
+                langService.getString('which_language_learn'),
+                style: TextStyle(
                   fontSize: 16,
                   color: AppTheme.textSecondaryColor,
                   fontWeight: FontWeight.w500,
@@ -125,7 +128,7 @@ class TargetLanguageModal extends StatelessWidget {
                                   ),
                                   const SizedBox(height: 4),
                                   Text(
-                                    langService.currentLanguage == 'tr' ? 'Başlangıç dersleri ile başla' : 'Start with beginner lessons',
+                                    langService.getString('start_beginner_lessons'),
                                     style: TextStyle(
                                       fontSize: 13,
                                       color: isSelected ? AppTheme.primaryColor.withValues(alpha: 0.7) : AppTheme.textSecondaryColor,
@@ -154,7 +157,9 @@ class TargetLanguageModal extends StatelessWidget {
               const SizedBox(height: 16),
             ],
           ),
-        );
+        ),
+      ),
+    );
       },
     );
   }

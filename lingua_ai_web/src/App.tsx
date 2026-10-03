@@ -15,6 +15,8 @@ import { AiCoachPage } from './pages/AiCoachPage';
 import { WritingPracticePage } from './pages/WritingPracticePage';
 import { ProfilePage } from './pages/ProfilePage';
 import { FlashcardsPage } from './pages/FlashcardsPage';
+import { PronunciationPracticePage } from './pages/PronunciationPracticePage';
+import { CommunityPage } from './pages/CommunityPage';
 
 function AppRoutes() {
   const { user, loading } = useAuth();
@@ -35,6 +37,8 @@ function AppRoutes() {
         <Route path="writing" element={<WritingPracticePage />} />
         <Route path="ai-coach" element={<AiCoachPage />} />
         <Route path="flashcards" element={<FlashcardsPage />} />
+        <Route path="pronunciation-practice" element={<PronunciationPracticePage />} />
+        <Route path="community" element={<CommunityPage />} />
         <Route path="profile" element={<ProfilePage />} />
       </Route>
       
@@ -43,22 +47,26 @@ function AppRoutes() {
   );
 }
 
+import { NetworkProvider } from './context/NetworkContext';
+
 export default function App() {
   return (
-    <AuthProvider>
-      <SoundProvider>
-        <TargetLanguageProvider>
-          <ProgressProvider>
-            <LanguageProvider>
-              <ThemeProvider>
-                <Router>
-                  <AppRoutes />
-                </Router>
-              </ThemeProvider>
-            </LanguageProvider>
-          </ProgressProvider>
-        </TargetLanguageProvider>
-      </SoundProvider>
-    </AuthProvider>
+    <NetworkProvider>
+      <AuthProvider>
+        <SoundProvider>
+          <TargetLanguageProvider>
+            <ProgressProvider>
+              <LanguageProvider>
+                <ThemeProvider>
+                  <Router>
+                    <AppRoutes />
+                  </Router>
+                </ThemeProvider>
+              </LanguageProvider>
+            </ProgressProvider>
+          </TargetLanguageProvider>
+        </SoundProvider>
+      </AuthProvider>
+    </NetworkProvider>
   );
 }

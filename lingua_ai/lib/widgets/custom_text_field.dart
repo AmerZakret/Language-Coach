@@ -30,7 +30,7 @@ class CustomTextField extends StatelessWidget {
       child: TextFormField(
         controller: controller,
         obscureText: isPassword,
-        style: const TextStyle(color: AppTheme.textPrimaryColor, fontWeight: FontWeight.w500),
+        style: TextStyle(color: AppTheme.textPrimaryColor, fontWeight: FontWeight.w500),
         decoration: InputDecoration(
           hintText: hintText,
           prefixIcon: prefixIcon != null ? Icon(prefixIcon, color: AppTheme.textSecondaryColor) : null,

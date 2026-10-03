@@ -1,23 +1,20 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { BookOpen, CheckCircle2, Lock, Clock, Zap, ChevronRight, Star } from "lucide-react";
+import { BookOpen, CheckCircle2, Lock, Star } from "lucide-react";
 
 import { useTargetLanguage } from "../context/TargetLanguageContext";
 import { useProgress } from "../context/ProgressContext";
+import { useLanguage } from "../context/LanguageContext";
 import { getLessons } from "../api/lessonsApi";
 import { fallbackLessons } from "../data/fallbackLessons";
 import type { Lesson } from "../types/lesson";
-
-const DIFF_COLORS: Record<string, { bg: string; text: string }> = {
-  Easy: { bg: "rgba(16,185,129,0.12)", text: "#10B981" },
-  Medium: { bg: "rgba(99,102,241,0.12)", text: "#6366F1" },
-  Hard: { bg: "rgba(245,158,11,0.12)", text: "#F59E0B" },
-};
+import { isLessonLocked } from "../utils/lessonLock";
 
 export function LessonsPage() {
 
   const { targetLanguage } = useTargetLanguage();
   const { progress } = useProgress();
+  const { t } = useLanguage();
   const navigate = useNavigate();
 
   const [lessons, setLessons] = useState<Lesson[]>([]);
@@ -26,12 +23,23 @@ export function LessonsPage() {
   useEffect(() => {
     const loadLessons = async () => {
       setLoading(true);
+      const cacheKey = `linguaai_lessons_${targetLanguage}`;
       try {
         const data = await getLessons(targetLanguage);
         setLessons(data);
+        localStorage.setItem(cacheKey, JSON.stringify(data));
       } catch (e) {
-        console.error("Failed to load lessons", e);
-        setLessons(fallbackLessons.filter((l) => l.targetLanguage === targetLanguage));
+        console.error("Failed to load lessons, using cache or fallback", e);
+        const cached = localStorage.getItem(cacheKey);
+        if (cached) {
+          try {
+            setLessons(JSON.parse(cached));
+          } catch {
+            setLessons(fallbackLessons.filter((l) => l.targetLanguage === targetLanguage));
+          }
+        } else {
+          setLessons(fallbackLessons.filter((l) => l.targetLanguage === targetLanguage));
+        }
       } finally {
         setLoading(false);
       }
@@ -46,23 +54,17 @@ export function LessonsPage() {
     return acc;
   }, {} as Record<string, Lesson[]>);
 
-  const isLevelCompleted = (level: string) => {
-    const levelLessons = groupedLessons[level] || [];
-    if (levelLessons.length === 0) return false;
-    return levelLessons.every((l) => progress.completedLessonIds.includes(l.id));
-  };
-
   const isSectionLocked = (level: string) => {
     if (level === "Beginner") return false;
-    if (level === "Elementary") return !isLevelCompleted("Beginner");
-    if (level === "Pre-Intermediate") return !isLevelCompleted("Elementary");
-    return false;
+    const levelLessons = groupedLessons[level] || [];
+    if (levelLessons.length === 0) return false;
+    return isLessonLocked(levelLessons[0], lessons, progress.completedLessonIds);
   };
 
   const SECTIONS = [
-    { level: "Beginner", desc: "Build your foundation — greetings, basics, and core vocabulary", color: "#10B981" },
-    { level: "Elementary", desc: "Build core grammar and expand vocabulary", color: "#6366F1" },
-    { level: "Pre-Intermediate", desc: "Tackle complex structures and real-world scenarios", color: "#F59E0B" },
+    { level: "Beginner", desc: t('beginner') + " — " + t('lesson_desc_beginner'), color: "#10B981" },
+    { level: "Elementary", desc: t('elementary') + " — " + t('lesson_desc_elementary'), color: "#6366F1" },
+    { level: "Pre-Intermediate", desc: t('pre_intermediate') + " — " + t('lesson_desc_pre_intermediate'), color: "#F59E0B" },
   ];
 
   const totalCompleted = lessons.filter(l => progress.completedLessonIds.includes(l.id)).length;
@@ -70,16 +72,69 @@ export function LessonsPage() {
   return (
     <div className="p-6 max-w-4xl mx-auto space-y-8 animate-fade-in">
       <div>
-        <h1 style={{ color: "var(--l-text)", fontWeight: 800, fontSize: "26px", letterSpacing: "-0.02em" }}>Curriculum</h1>
+        <h1 style={{ color: "var(--l-text)", fontWeight: 800, fontSize: "26px", letterSpacing: "-0.02em" }}>{t('curriculum')}</h1>
         <p style={{ fontSize: "14px", color: "var(--l-muted)", marginTop: "4px" }}>
-          Your {targetLanguage} learning path — <span style={{ color: "#6366F1" }}>{totalCompleted} of {lessons.length}</span> lessons completed
+          {t('lang_' + targetLanguage.toLowerCase())} {t('learning_path')} — <span style={{ color: "#6366F1" }}>{totalCompleted} {t('of')} {lessons.length}</span> {t('lessons_completed_of')}
         </p>
       </div>
 
       {loading ? (
-        <div style={{ color: "var(--l-text)", fontSize: "14px" }}>Loading...</div>
+        /* Skeleton Grid loader matching the cards layout */
+        <div className="space-y-8 animate-fade-in">
+          {[1, 2].map((groupIndex) => (
+            <div key={groupIndex} className="space-y-5">
+              <div className="h-24 rounded-2xl bg-[var(--l-surface)] border border-[var(--l-border)] p-5 flex flex-col justify-between animate-pulse">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-[var(--l-surface3)]" />
+                  <div className="space-y-2 flex-1">
+                    <div className="w-32 h-5 bg-[var(--l-surface3)] rounded" />
+                    <div className="w-2/3 h-4 bg-[var(--l-surface3)] rounded" />
+                  </div>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5 animate-pulse">
+                {[1, 2].map((cardIndex) => (
+                  <div key={cardIndex} className="p-6 rounded-2xl border border-[var(--l-border)] bg-[var(--l-surface)] h-[270px] flex flex-col justify-between">
+                    <div>
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="w-11 h-11 rounded-xl bg-[var(--l-surface3)]" />
+                        <div className="w-20 h-6 bg-[var(--l-surface3)] rounded-full" />
+                      </div>
+                      <div className="w-24 h-4 bg-[var(--l-surface3)] rounded mb-2" />
+                      <div className="w-3/4 h-6 bg-[var(--l-surface3)] rounded mb-3" />
+                      <div className="w-full h-4 bg-[var(--l-surface3)] rounded mb-1.5" />
+                      <div className="w-5/6 h-4 bg-[var(--l-surface3)] rounded" />
+                    </div>
+                    <div className="space-y-4">
+                      <div className="h-px bg-[var(--l-border-subtle)] w-full" />
+                      <div className="flex items-center justify-between">
+                        <div className="space-y-1">
+                          <div className="w-16 h-5 bg-[var(--l-surface3)] rounded" />
+                          <div className="w-12 h-3.5 bg-[var(--l-surface3)] rounded" />
+                        </div>
+                        <div className="w-24 h-9 bg-[var(--l-surface3)] rounded-xl" />
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
       ) : lessons.length === 0 ? (
-        <div style={{ color: "var(--l-text)", fontSize: "14px" }}>No lessons available for {targetLanguage}</div>
+        /* Premium Centered Empty State */
+        <div 
+          className="p-12 text-center rounded-2xl border flex flex-col items-center justify-center space-y-4" 
+          style={{ background: "var(--l-surface)", borderColor: "var(--l-border)", minHeight: "300px" }}
+        >
+          <BookOpen size={48} color="var(--l-muted)" className="animate-pulse" />
+          <h3 style={{ fontSize: "18px", fontWeight: 800, color: "var(--l-text)" }}>
+            {t('no_lessons_title')}
+          </h3>
+          <p style={{ fontSize: "14px", color: "var(--l-muted)", maxWidth: "360px", lineHeight: 1.5 }}>
+            {t('no_lessons_available')} {t('lang_' + targetLanguage.toLowerCase())}. {t('check_back_later')}
+          </p>
+        </div>
       ) : (
         SECTIONS.map((section) => {
           const levelLessons = groupedLessons[section.level];
@@ -88,68 +143,237 @@ export function LessonsPage() {
           const isLocked = isSectionLocked(section.level);
           const completedCount = levelLessons.filter((l) => progress.completedLessonIds.includes(l.id)).length;
           const totalCount = levelLessons.length;
+          const levelCompleted = completedCount === totalCount && totalCount > 0;
+          const levelAccentColor = levelCompleted ? "#22C55E" : "#6366F1";
+          const levelAccentBg = levelCompleted ? "rgba(34, 197, 94, 0.12)" : "rgba(99, 102, 241, 0.12)";
 
           return (
-            <div key={section.level}>
-              <div className="flex items-start gap-4 mb-5 p-4 rounded-2xl" style={{ background: `${section.color}08`, border: `1px solid ${section.color}18` }}>
-                <div className="w-10 h-10 rounded-xl flex items-center justify-center mt-0.5" style={{ background: `${section.color}15` }}>
-                  <Star size={18} color={section.color} />
+            <div key={section.level} className="space-y-5">
+              {/* Level Section header card */}
+              <div className="flex items-start gap-4 p-5 rounded-2xl border animate-fade-in" style={{ background: "var(--l-surface)", borderColor: "var(--l-border)" }}>
+                <div className="w-10 h-10 rounded-xl flex items-center justify-center mt-0.5 shrink-0" style={{ background: levelAccentBg }}>
+                  <Star size={18} color={levelAccentColor} />
                 </div>
-                <div className="flex-1">
+                <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-3 mb-1">
-                    <h2 style={{ fontSize: "17px", fontWeight: 800, color: "var(--l-text)" }}>{section.level}</h2>
-                    <span style={{ fontSize: "11px", fontWeight: 600, color: section.color, background: `${section.color}15`, padding: "2px 8px", borderRadius: "999px" }}>
-                      {completedCount}/{totalCount} done
+                    <h2 style={{ fontSize: "16px", fontWeight: 800, color: "var(--l-text)" }}>{t(section.level.toLowerCase().replace(' ', '_').replace('-', '_'))}</h2>
+                    <span 
+                      style={{ 
+                        fontSize: "11px", 
+                        fontWeight: 600, 
+                        color: levelCompleted ? "#22C55E" : "var(--l-text2)", 
+                        background: levelCompleted ? "rgba(34, 197, 94, 0.12)" : "var(--l-surface3)", 
+                        padding: "2px 8px", 
+                        borderRadius: "99px" 
+                      }}
+                    >
+                      {completedCount}/{totalCount} {t('done_badge')}
                     </span>
                   </div>
-                  <p style={{ fontSize: "13px", color: "var(--l-muted)", marginBottom: "10px" }}>{section.desc}</p>
-                  <div className="h-1.5 rounded-full overflow-hidden" style={{ background: "var(--l-surface3)" }}>
-                    <div className="h-full rounded-full" style={{ width: `${(completedCount / totalCount) * 100}%`, background: `linear-gradient(90deg, ${section.color}, ${section.color}88)` }} />
+                  <p style={{ fontSize: "13px", color: "var(--l-muted)", marginBottom: "12px" }}>{section.desc}</p>
+                  <div className="h-2 rounded-full overflow-hidden" style={{ background: "var(--l-surface3)" }}>
+                    <div className="h-full rounded-full" style={{ width: `${(completedCount / totalCount) * 100}%`, background: `linear-gradient(90deg, ${levelAccentColor}, ${levelAccentColor}88)` }} />
                   </div>
                 </div>
               </div>
 
-              <div className="space-y-3">
+              {/* Redesigned clean card-based grid matching user request */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                 {levelLessons.map((lesson) => {
                   const isCompleted = progress.completedLessonIds.includes(lesson.id);
-                  const diffStyle = DIFF_COLORS[lesson.difficulty || "Medium"] || DIFF_COLORS["Medium"];
                   const locked = isLocked;
 
                   return (
-                    <button
+                    <div
                       key={lesson.id}
-                      disabled={locked}
-                      onClick={() => navigate(`/lessons/${lesson.id}`)}
-                      className="w-full text-left p-4 rounded-2xl transition-all duration-200 flex items-start gap-4"
+                      className="premium-card p-6 flex flex-col justify-between transition-all duration-200 border"
                       style={{
-                        background: locked ? "var(--l-card-hover)" : "var(--l-surface)",
-                        border: isCompleted ? `1px solid ${section.color}30` : locked ? "1px solid var(--l-border-subtle)" : "1px solid var(--l-border)",
-                        opacity: locked ? 0.55 : 1,
-                        cursor: locked ? "not-allowed" : "pointer",
+                        background: locked ? "var(--l-surface2)" : "var(--l-surface)",
+                        borderColor: isCompleted ? "rgba(34, 197, 94, 0.15)" : "var(--l-border)",
+                        opacity: locked ? 0.75 : 1,
                       }}
-                      onMouseEnter={(e) => { if (!locked) { (e.currentTarget as HTMLButtonElement).style.borderColor = `${section.color}40`; (e.currentTarget as HTMLButtonElement).style.transform = "translateX(2px)"; } }}
-                      onMouseLeave={(e) => { if (!locked) { (e.currentTarget as HTMLButtonElement).style.borderColor = isCompleted ? `${section.color}30` : "var(--l-border)"; (e.currentTarget as HTMLButtonElement).style.transform = "translateX(0)"; } }}
                     >
-                      <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: isCompleted ? `${section.color}20` : "var(--l-card-hover)" }}>
-                        {isCompleted ? <CheckCircle2 size={18} color={section.color} /> : locked ? <Lock size={16} color="var(--l-subtle)" /> : <BookOpen size={16} color="var(--l-muted)" />}
+                      <div>
+                        {/* Header Row */}
+                        <div className="flex items-center justify-between mb-4">
+                          <div 
+                            className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0" 
+                            style={{ 
+                              background: locked 
+                                ? "var(--l-surface3)" 
+                                : isCompleted 
+                                  ? "rgba(34, 197, 94, 0.12)" 
+                                  : "rgba(99, 102, 241, 0.12)" 
+                            }}
+                          >
+                            {isCompleted ? (
+                              <CheckCircle2 size={20} color="#22C55E" />
+                            ) : locked ? (
+                              <Lock size={18} color="var(--l-subtle)" />
+                            ) : (
+                              <BookOpen size={18} color="#6366F1" />
+                            )}
+                          </div>
+                          {/* Status Badge */}
+                          <span 
+                            style={{ 
+                              fontSize: "11px", 
+                              fontWeight: 700, 
+                              color: locked 
+                                ? "var(--l-subtle)" 
+                                : isCompleted 
+                                  ? "#22C55E" 
+                                  : "#6366F1",
+                              background: locked 
+                                ? "var(--l-surface3)" 
+                                : isCompleted 
+                                  ? "rgba(34, 197, 94, 0.12)" 
+                                  : "rgba(99, 102, 241, 0.12)",
+                              padding: "4px 10px", 
+                              borderRadius: "999px" 
+                            }}
+                          >
+                            {locked ? t('locked') : isCompleted ? t('completed') : t('start')}
+                          </span>
+                        </div>
+
+                        {/* Meta line */}
+                        <div className="mb-2.5" style={{ fontSize: "12px" }}>
+                          <span style={{ fontWeight: 700, color: "#6366F1" }}>
+                            {t(lesson.category ? lesson.category.toLowerCase().replace(' ', '_') : 'general')}
+                          </span>
+                          <span style={{ color: "var(--l-subtle)", margin: "0 6px" }}>•</span>
+                          <span style={{ color: "var(--l-muted)", fontWeight: 500 }}>
+                            {t(section.level.toLowerCase().replace(' ', '_').replace('-', '_'))}
+                          </span>
+                        </div>
+
+                        {/* Title */}
+                        <h3 
+                          className="line-clamp-1"
+                          style={{ 
+                            fontSize: "18px", 
+                            fontWeight: 800, 
+                            color: locked ? "var(--l-subtle)" : "var(--l-text)", 
+                            letterSpacing: "-0.015em",
+                            marginBottom: "8px" 
+                          }}
+                        >
+                          {lesson.title}
+                        </h3>
+
+                        {/* Description */}
+                        <p className="line-clamp-2" style={{ fontSize: "13px", color: "var(--l-muted)", lineHeight: 1.5, marginBottom: "16px", minHeight: "39px" }}>
+                          {lesson.description}
+                        </p>
+
+                        {/* Tag Pills */}
+                        <div className="flex flex-wrap gap-2 mb-5">
+                          <span 
+                            style={{ 
+                              fontSize: "11px", 
+                              fontWeight: 600, 
+                              color: "var(--l-text2)", 
+                              background: "var(--l-surface3)", 
+                              padding: "3px 10px", 
+                              borderRadius: "999px",
+                              border: "1px solid var(--l-border-subtle)" 
+                            }}
+                          >
+                            {t('difficulty_' + (lesson.difficulty || "Medium").toLowerCase())}
+                          </span>
+                          <span 
+                            style={{ 
+                              fontSize: "11px", 
+                              fontWeight: 600, 
+                              color: "var(--l-text2)", 
+                              background: "var(--l-surface3)", 
+                              padding: "3px 10px", 
+                              borderRadius: "999px",
+                              border: "1px solid var(--l-border-subtle)" 
+                            }}
+                          >
+                            {lesson.duration} {t('min')}
+                          </span>
+                          <span 
+                            style={{ 
+                              fontSize: "11px", 
+                              fontWeight: 600, 
+                              color: "var(--l-text2)", 
+                              background: "var(--l-surface3)", 
+                              padding: "3px 10px", 
+                              borderRadius: "999px",
+                              border: "1px solid var(--l-border-subtle)" 
+                            }}
+                          >
+                            {lesson.questions?.length || 10} {t('questions')}
+                          </span>
+                        </div>
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-start justify-between gap-2 mb-1">
-                          <span style={{ fontSize: "14px", fontWeight: 700, color: locked ? "var(--l-subtle)" : "var(--l-text)" }}>{lesson.title}</span>
-                          <div className="flex items-center gap-2 shrink-0">
-                            <span style={{ fontSize: "10px", fontWeight: 700, color: diffStyle.text, background: diffStyle.bg, padding: "2px 8px", borderRadius: "999px" }}>{lesson.difficulty || "Medium"}</span>
-                            <span style={{ fontSize: "10px", fontWeight: 600, color: "var(--l-muted)", background: "var(--l-card-hover)", padding: "2px 8px", borderRadius: "999px" }}>{lesson.category || "General"}</span>
+
+                      {/* Separator line */}
+                      <div className="h-px w-full mb-4" style={{ background: "var(--l-border-subtle)" }} />
+
+                      {/* Footer Area */}
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div style={{ fontSize: "16px", fontWeight: 800, color: locked ? "var(--l-subtle)" : "#F59E0B" }}>
+                            {lesson.xpReward} XP
+                          </div>
+                          <div style={{ fontSize: "11px", color: "var(--l-muted)", fontWeight: 500 }}>
+                            {t('xp_reward_label')}
                           </div>
                         </div>
-                        <p style={{ fontSize: "12px", color: "var(--l-subtle)", marginBottom: "10px" }}>{lesson.description}</p>
-                        <div className="flex items-center gap-4">
-                          <div className="flex items-center gap-1"><Clock size={12} color="var(--l-subtle)" /><span style={{ fontSize: "11px", color: "var(--l-subtle)" }}>{lesson.duration} min</span></div>
-                          <div className="flex items-center gap-1"><Zap size={12} color="#F59E0B" /><span style={{ fontSize: "11px", color: "#F59E0B", fontWeight: 600 }}>{lesson.xpReward} XP</span></div>
-                          <span style={{ fontSize: "11px", color: "var(--l-subtle)" }}>{lesson.questions?.length || 10} questions</span>
-                        </div>
+                        <button
+                          disabled={locked}
+                          onClick={() => navigate(`/lessons/${lesson.id}`)}
+                          className="btn-primary py-2 px-5 text-xs font-bold transition-all"
+                          style={{
+                            background: locked 
+                              ? "var(--l-surface3)" 
+                              : isCompleted 
+                                ? "transparent" 
+                                : "linear-gradient(135deg, #6366F1, #8B5CF6)",
+                            border: locked
+                              ? "none"
+                              : isCompleted 
+                                ? "1px solid rgba(99, 102, 241, 0.4)" 
+                                : "none",
+                            color: locked
+                              ? "var(--l-subtle)"
+                              : isCompleted 
+                                ? "#6366F1" 
+                                : "white",
+                            boxShadow: locked || isCompleted ? "none" : "0 4px 14px rgba(99, 102, 241, 0.3)",
+                            cursor: locked ? "not-allowed" : "pointer"
+                          }}
+                          onMouseEnter={(e) => {
+                            const btn = e.currentTarget as HTMLButtonElement;
+                            if (locked) return;
+                            if (isCompleted) {
+                              btn.style.background = "rgba(99, 102, 241, 0.08)";
+                            } else {
+                              btn.style.background = "linear-gradient(135deg, #4f46e5, #7c3aed)";
+                              btn.style.boxShadow = "0 6px 20px rgba(99, 102, 241, 0.45)";
+                              btn.style.transform = "translateY(-1px)";
+                            }
+                          }}
+                          onMouseLeave={(e) => {
+                            const btn = e.currentTarget as HTMLButtonElement;
+                            if (locked) return;
+                            if (isCompleted) {
+                              btn.style.background = "transparent";
+                            } else {
+                              btn.style.background = "linear-gradient(135deg, #6366F1, #8B5CF6)";
+                              btn.style.boxShadow = "0 4px 14px rgba(99, 102, 241, 0.3)";
+                              btn.style.transform = "none";
+                            }
+                          }}
+                        >
+                          {locked ? t('locked') : isCompleted ? t('review') : t('start')}
+                        </button>
                       </div>
-                      {!locked && <ChevronRight size={16} color="var(--l-subtle)" className="shrink-0 mt-1" />}
-                    </button>
+                    </div>
                   );
                 })}
               </div>

@@ -3,6 +3,7 @@ import '../../core/theme/app_theme.dart';
 import '../../core/routes/app_routes.dart';
 import '../../core/localization/language_service.dart';
 import '../../core/localization/target_language_service.dart';
+import '../../services/theme_service.dart';
 
 class LessonResultScreen extends StatelessWidget {
   const LessonResultScreen({super.key});
@@ -17,10 +18,10 @@ class LessonResultScreen extends StatelessWidget {
     final bool isSuccess = total > 0 && (score / total) >= 0.5;
 
     return ListenableBuilder(
-      listenable: Listenable.merge([LanguageService(), TargetLanguageService()]),
+      listenable: Listenable.merge([LanguageService(), TargetLanguageService(), ThemeService()]),
       builder: (context, child) {
         return Scaffold(
-          backgroundColor: Colors.white,
+          backgroundColor: AppTheme.backgroundColor,
           body: Stack(
             children: [
               Positioned(
@@ -71,7 +72,7 @@ class LessonResultScreen extends StatelessWidget {
                             
                             Text(
                               isSuccess ? 'Great Job!' : 'Keep Practicing!',
-                              style: const TextStyle(fontSize: 32, fontWeight: FontWeight.w900, color: AppTheme.textPrimary, letterSpacing: -1),
+                              style: TextStyle(fontSize: 32, fontWeight: FontWeight.w900, color: AppTheme.textPrimary, letterSpacing: -1),
                               textAlign: TextAlign.center,
                             ),
                             
@@ -81,7 +82,7 @@ class LessonResultScreen extends StatelessWidget {
                               isSuccess 
                                 ? 'You\'ve mastered this lesson and earned some serious XP!'
                                 : 'Don\'t give up! Every mistake is a step closer to fluency.',
-                              style: const TextStyle(fontSize: 16, color: AppTheme.textSecondary, fontWeight: FontWeight.w500, height: 1.4),
+                              style: TextStyle(fontSize: 16, color: AppTheme.textSecondary, fontWeight: FontWeight.w500, height: 1.4),
                               textAlign: TextAlign.center,
                             ),
 
@@ -156,19 +157,23 @@ class LessonResultScreen extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppTheme.surfaceColor,
         borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: Colors.grey.shade100),
+        border: Border.all(
+          color: ThemeService().isDarkMode
+              ? Colors.white.withValues(alpha: 0.08)
+              : Colors.grey.shade100,
+        ),
         boxShadow: AppTheme.glassShadow,
       ),
       child: Column(
         children: [
           Icon(icon, color: color, size: 24),
           const SizedBox(height: 8),
-          Text(value, style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: AppTheme.textPrimary)),
+          Text(value, style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: AppTheme.textPrimary)),
           Text(
             label, 
-            style: const TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: AppTheme.textSecondary, letterSpacing: 0.5),
+            style: TextStyle(fontSize: 9, fontWeight: FontWeight.w800, color: AppTheme.textSecondary, letterSpacing: 0.5),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
             textAlign: TextAlign.center,

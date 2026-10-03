@@ -7,6 +7,7 @@ import '../../core/localization/language_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/auth_api_service.dart';
 import '../../services/progress_service.dart';
+import '../../services/theme_service.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -58,6 +59,7 @@ class _LoginScreenState extends State<LoginScreen> {
         email: userData['email'] ?? email,
         token: response['access_token'] ?? '',
         id: userData['id'] ?? '',
+        targetLanguage: userData['targetLanguage'],
       );
 
       // Sync progress from backend
@@ -110,12 +112,12 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: LanguageService(),
+      listenable: Listenable.merge([LanguageService(), ThemeService()]),
       builder: (context, child) {
         final lang = LanguageService();
         return Scaffold(
           body: Container(
-            decoration: const BoxDecoration(
+            decoration: BoxDecoration(
               gradient: AppTheme.backgroundGradient,
             ),
             child: SafeArea(
@@ -165,7 +167,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       // Title
                       Text(
                         lang.getString('welcome_title'),
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 30,
                           fontWeight: FontWeight.w900,
                           color: AppTheme.textPrimaryColor,
@@ -177,7 +179,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       const SizedBox(height: 8),
                       Text(
                         lang.getString('welcome_subtitle'),
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 15,
                           color: AppTheme.textSecondaryColor,
                           fontWeight: FontWeight.w500,
@@ -236,7 +238,7 @@ class _LoginScreenState extends State<LoginScreen> {
                         children: [
                           Text(
                             lang.getString('no_account'),
-                            style: const TextStyle(color: AppTheme.textSecondaryColor, fontSize: 14),
+                            style: TextStyle(color: AppTheme.textSecondaryColor, fontSize: 14),
                           ),
                           TextButton(
                             onPressed: () => Navigator.pushNamed(context, AppRoutes.register),

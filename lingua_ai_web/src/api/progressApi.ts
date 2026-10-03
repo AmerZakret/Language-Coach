@@ -1,10 +1,34 @@
 import apiClient from './apiClient';
 import type { ProgressState } from '../types/progress';
 
-export const fetchProgress = async (userId: string): Promise<ProgressState | null> => {
+interface BackendProgressResponse {
+  userId: string;
+  stats: {
+    totalXp: number;
+    streak: number;
+    completedLessonsCount: number;
+  };
+  completedLessons: {
+    lessonId: string;
+    score: number;
+    completedAt: string;
+  }[];
+  level: string;
+}
+
+export const fetchProgress = async (userId: string, targetLanguage: string): Promise<ProgressState | null> => {
   try {
-    const response = await apiClient.get<ProgressState>(`/progress/${userId}`);
-    return response.data;
+    const response = await apiClient.get<BackendProgressResponse>(`/progress/${userId}`, {
+      params: { targetLanguage }
+    });
+    const data = response.data;
+    if (!data) return null;
+    return {
+      totalXp: data.stats?.totalXp ?? 0,
+      streak: data.stats?.streak ?? 0,
+      completedLessonIds: (data.completedLessons || []).map((l) => l.lessonId),
+      weeklyActivity: [0, 0, 0, 0, 0, 0, 0], // Default fallback
+    };
   } catch (e) {
     return null;
   }

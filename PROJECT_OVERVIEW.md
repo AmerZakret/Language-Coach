@@ -13,17 +13,20 @@ LinguaAI is built using a modern, decoupled client-server architecture to ensure
 - **Flutter Mobile App (Frontend):** 
   The cross-platform mobile application providing the core user interface. It handles user interactions, local state management (via `SharedPreferences` and `ChangeNotifier`), and caching to provide offline capabilities.
   
+- **React Web App (Frontend):**
+  A responsive React frontend built using Vite and TypeScript that mirrors the mobile dashboard, lessons curriculum, flashcards, writing practice, and AI Coach.
+
 - **NestJS Backend (API Server):** 
-  A robust Node.js backend built with the NestJS framework. It serves as the secure middleman between the frontend, the database, and third-party APIs. It handles routing, validation, and business logic.
+  A robust Node.js backend built with the NestJS framework. It serves as the secure middleman between the frontend apps, the database, and third-party APIs. It handles routing, validation, and business logic.
   
 - **MongoDB Atlas (Database):** 
   A cloud-hosted NoSQL database used to store persistent user data, lesson content, progress tracking, and AI Coach conversation history.
+
+- **Python Whisper Service (Pronunciation API):**
+  A lightweight FastAPI service executing `faster-whisper` for transcribing audio recordings to evaluate user pronunciation and calculate speech correctness score.
   
 - **Google Gemini AI API:** 
   The generative AI engine powering the "AI Coach" feature. It provides grammar corrections, conversational practice, and tailored learning tips.
-  
-- **Future Web App:** 
-  A planned responsive web frontend (likely built with modern web frameworks) that will connect to the existing NestJS backend, allowing users to practice across multiple platforms.
 
 ---
 
@@ -68,12 +71,12 @@ By keeping the Gemini API key safely tucked away in the NestJS backend's `.env` 
 
 ## 4. Offline Fallback & Resilience
 
-LinguaAI is designed to be forgiving of poor network conditions:
+LinguaAI is designed with professional-grade resilience to run smoothly under unstable network conditions:
 
-- **SharedPreferences:** Used extensively to store the user's session, selected language, and local progress.
-- **Local Progress Backup:** If the backend is offline, the `ProgressService` still grants the user XP and unlocks the next lesson visually.
-- **Dummy Lessons Fallback:** If the app cannot fetch live lessons from the server on startup, it seamlessly falls back to a hardcoded local list of dummy lessons so the user is never stuck on an empty screen.
-- **Graceful Error Handling:** If the AI Coach cannot reach the backend, the user sees a friendly, localized "Cannot communicate right now" message rather than an app crash.
+- **Local Storage & SharedPreferences Caching**: Stores user session details, themes, stats, and caches fetched lessons and community feeds. When offline, users immediately load lessons and flashcards from local cache.
+- **Chronological Mutation Queueing**: Creating/updating/deleting flashcards, submitting card reviews, and completing lessons offline automatically updates the local interface instantly and queues the mutations chronologically.
+- **Auto-Sync & ID Mapping**: As soon as connection is restored, the client worker drains the queue in order. Temporary IDs generated offline (e.g. `local_123`) are automatically mapped to final MongoDB ObjectIds returned by the backend, rewriting any dependent subsequent actions in the queue to maintain data integrity.
+- **Friendly Offline Block Screens**: Features requiring live AI processing (AI Coach, Writing practice, Pronunciation practice) display beautifully styled connection warning overlays, disabling forms and submissions. Banners on the community screen notify users they are viewing cached data and disable posting/liking.
 
 ---
 
@@ -88,20 +91,21 @@ LinguaAI is explicitly tailored for Turkish speakers learning English:
 
 ## 6. Current Implemented Features
 
-- [x] **Modular Flutter Architecture:** Clean separation of UI, Services, and Theming.
-- [x] **Authentication Flow:** Login, Registration, and Guest mode support.
-- [x] **Home Dashboard:** Displays current XP, streak, and daily progress goals.
-- [x] **Lesson System:** Categorized vocabulary and grammar lessons with local fallback support.
-- [x] **Progress Tracking:** XP accumulation and lesson completion states synced between local storage and the backend.
-- [x] **Profile Management:** Displays user stats, ranks, and allows localized language switching.
-- [x] **AI Coach Integration:** Full-stack integration with Google Gemini for real-time conversational practice and grammar correction.
-- [x] **MongoDB Integration:** Persistent storage for users, lessons, chat history, and progress.
+- [x] **Modular Architecture:** Clean separation of UI, Services, and Theming on Flutter (Mobile) and React + Vite (Web).
+- [x] **Production Authentication:** Real JWT-based authentication, password hashing with bcrypt, and dynamic session-isolated guest logins.
+- [x] **Home Dashboard:** Displays current XP, streak, levels, and daily learning goals.
+- [x] **Lesson System:** Categorized vocabulary and grammar lessons with automatic local caching.
+- [x] **Progress Tracking:** XP accumulation and lesson completions dynamically synced between local storage and backend.
+- [x] **Flashcards Spaced-Repetition**: Add, update, delete, and review flashcards offline (SM-2 scheduler running locally) with auto-sync on reconnect.
+- [x] **AI Coach Conversation**: Real-time conversational practice with Gemini AI, dynamic grammar suggestions, and chat history sync across Web and Mobile.
+- [x] **Writing Practice**: AI assessment of essay/topic writing, scoring spelling/grammar/clarity out of 100.
+- [x] **Pronunciation Practice**: Python FastAPI Whisper service transcribes speech recordings, scores correctness via similarity distance, and receives Gemini encouragement.
+- [x] **Community Feed**: Multi-user feed displaying shared learning tips, with image attachments and real-time likes.
 
 ---
 
 ## 7. Future Roadmap
 
-- [ ] **Production Authentication:** Replace the current dummy tokens with real JWT-based authentication and secure password hashing (e.g., bcrypt).
 - [ ] **Expanded Curriculum:** Populate the database with hundreds of structured lessons across different CEFR levels (A1 to C2).
-- [ ] **Speech & Pronunciation:** Integrate speech-to-text (STT) and text-to-speech (TTS) so users can practice speaking directly to the AI Coach.
 - [ ] **Admin Panel:** Create a content management dashboard for administrators to easily add, edit, or remove lessons without modifying code.
+- [ ] **AI-driven Course Customization**: Automatically select topics and flashcards for a user based on their specific weaknesses found in AI Coach conversations.

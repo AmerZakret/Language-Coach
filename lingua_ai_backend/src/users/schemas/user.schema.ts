@@ -20,6 +20,15 @@ export class User extends Document {
 
   @Prop({ default: 0 })
   streak: number;
+
+  @Prop({ default: 'English' })
+  targetLanguage: string;
+
+  @Prop({ type: Map, of: Number, default: {} })
+  xpPerLanguage: Map<string, number>;
+
+  @Prop({ type: Map, of: String, default: {} })
+  levelPerLanguage: Map<string, string>;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

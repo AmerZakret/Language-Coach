@@ -1,8 +1,10 @@
 import React, { useState } from "react";
-import { Globe, Eye, EyeOff, ArrowRight, Sparkles } from "lucide-react";
+import { Eye, EyeOff, ArrowRight, Sparkles } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../../context/AuthContext";
 import { login as apiLogin, register as apiRegister } from "../../api/authApi";
+import { useLanguage } from "../../context/LanguageContext";
+import logoImg from "../../assets/images/language-learning.png";
 
 interface AuthPageProps {
   initialMode: "login" | "register";
@@ -19,6 +21,7 @@ export function AuthPage({ initialMode }: AuthPageProps) {
 
   const navigate = useNavigate();
   const { login, loginAsGuest } = useAuth();
+  const { t } = useLanguage();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -35,7 +38,7 @@ export function AuthPage({ initialMode }: AuthPageProps) {
       login(data.user, data.access_token);
       navigate("/");
     } catch (err: any) {
-      let errorMessage = `${mode === "login" ? "Login" : "Registration"} failed. Please try again.`;
+      let errorMessage = mode === "login" ? t("login_failed") : t("registration_failed");
       if (err.response?.data?.message) {
         errorMessage = Array.isArray(err.response.data.message)
           ? err.response.data.message.join(", ")
@@ -72,12 +75,12 @@ export function AuthPage({ initialMode }: AuthPageProps) {
 
       <div className="w-full max-w-sm relative">
         {/* Logo */}
-        <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl mb-4" style={{ background: "linear-gradient(135deg, #6366F1, #8B5CF6)", boxShadow: "0 0 40px rgba(99,102,241,0.4)" }}>
-            <Globe size={24} color="white" />
-          </div>
-          <h1 style={{ fontSize: "28px", fontWeight: 800, letterSpacing: "-0.03em", color: "var(--l-text)" }}>LinguaAI</h1>
-          <p style={{ fontSize: "14px", color: "var(--l-muted)", marginTop: "4px" }}>Your AI-powered language tutor</p>
+        <div className="text-center mb-8 flex flex-col items-center">
+          <img src={logoImg} alt="LinguaAI Logo" style={{ width: "56px", height: "56px", objectFit: "contain", marginBottom: "12px" }} />
+          <h1 style={{ fontSize: "28px", fontWeight: 800, letterSpacing: "-0.03em", color: "var(--l-text)" }}>
+            Lingua<span style={{ background: "linear-gradient(135deg, #6366F1, #8B5CF6)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>AI</span>
+          </h1>
+          <p style={{ fontSize: "14px", color: "var(--l-muted)", marginTop: "4px" }}>{t("your_ai_tutor")}</p>
         </div>
 
         {/* Card */}
@@ -96,16 +99,9 @@ export function AuthPage({ initialMode }: AuthPageProps) {
                 key={m}
                 type="button"
                 onClick={() => setMode(m)}
-                className="flex-1 py-2 rounded-lg transition-all duration-200 capitalize"
-                style={{
-                  fontSize: "13px",
-                  fontWeight: 600,
-                  background: mode === m ? "rgba(99,102,241,0.2)" : "transparent",
-                  color: mode === m ? "#6366F1" : "var(--l-muted)",
-                  border: mode === m ? "1px solid rgba(99,102,241,0.3)" : "1px solid transparent",
-                }}
+                className={`flex-1 py-2 rounded-lg transition-all duration-200 border text-xs font-bold ${mode === m ? 'bg-indigo-500/15 text-indigo-500 border-indigo-500/30 shadow-sm' : 'border-transparent text-[var(--l-muted)] hover:bg-[var(--l-card-hover)]'}`}
               >
-                {m === "login" ? "Sign In" : "Create Account"}
+                {m === "login" ? t("sign_in") : t("create_account")}
               </button>
             ))}
           </div>
@@ -119,38 +115,32 @@ export function AuthPage({ initialMode }: AuthPageProps) {
           <form onSubmit={handleSubmit} className="space-y-4">
             {mode === "register" && (
               <div className="animate-fade-in">
-                <label style={{ fontSize: "12px", fontWeight: 600, color: "var(--l-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Full Name</label>
+                <label style={{ fontSize: "12px", fontWeight: 600, color: "var(--l-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>{t("full_name")}</label>
                 <input
                   type="text"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="Alex Johnson"
                   required={mode === "register"}
-                  className="w-full mt-1.5 px-4 py-3 rounded-xl outline-none transition-all"
-                  style={{ background: "var(--l-input-bg)", border: "1px solid var(--l-border)", color: "var(--l-text)", fontSize: "14px" }}
-                  onFocus={(e) => { e.target.style.borderColor = "rgba(99,102,241,0.5)"; }}
-                  onBlur={(e) => { e.target.style.borderColor = "var(--l-border)"; }}
+                  className="form-input mt-1.5"
                 />
               </div>
             )}
 
             <div>
-              <label style={{ fontSize: "12px", fontWeight: 600, color: "var(--l-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Email</label>
+              <label style={{ fontSize: "12px", fontWeight: 600, color: "var(--l-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>{t("email")}</label>
               <input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="alex@example.com"
                 required
-                className="w-full mt-1.5 px-4 py-3 rounded-xl outline-none transition-all"
-                style={{ background: "var(--l-input-bg)", border: "1px solid var(--l-border)", color: "var(--l-text)", fontSize: "14px" }}
-                onFocus={(e) => { e.target.style.borderColor = "rgba(99,102,241,0.5)"; }}
-                onBlur={(e) => { e.target.style.borderColor = "var(--l-border)"; }}
+                className="form-input mt-1.5"
               />
             </div>
 
             <div>
-              <label style={{ fontSize: "12px", fontWeight: 600, color: "var(--l-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>Password</label>
+              <label style={{ fontSize: "12px", fontWeight: 600, color: "var(--l-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>{t("password")}</label>
               <div className="relative mt-1.5">
                 <input
                   type={showPassword ? "text" : "password"}
@@ -158,10 +148,7 @@ export function AuthPage({ initialMode }: AuthPageProps) {
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
                   required
-                  className="w-full px-4 py-3 pr-11 rounded-xl outline-none transition-all"
-                  style={{ background: "var(--l-input-bg)", border: "1px solid var(--l-border)", color: "var(--l-text)", fontSize: "14px" }}
-                  onFocus={(e) => { e.target.style.borderColor = "rgba(99,102,241,0.5)"; }}
-                  onBlur={(e) => { e.target.style.borderColor = "var(--l-border)"; }}
+                  className="form-input pr-11"
                 />
                 <button
                   type="button"
@@ -177,39 +164,34 @@ export function AuthPage({ initialMode }: AuthPageProps) {
             <button
               type="submit"
               disabled={loading}
-              className="w-full flex items-center justify-center gap-2 py-3 rounded-xl mt-2 transition-all duration-200"
-              style={{ background: "linear-gradient(135deg, #6366F1, #8B5CF6)", color: "white", fontSize: "14px", fontWeight: 700, boxShadow: "0 4px 20px rgba(99,102,241,0.4)", opacity: loading ? 0.7 : 1 }}
-              onMouseEnter={(e) => { if (!loading) { (e.currentTarget as HTMLButtonElement).style.transform = "translateY(-1px)"; (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 8px 30px rgba(99,102,241,0.5)"; } }}
-              onMouseLeave={(e) => { if (!loading) { (e.currentTarget as HTMLButtonElement).style.transform = "translateY(0)"; (e.currentTarget as HTMLButtonElement).style.boxShadow = "0 4px 20px rgba(99,102,241,0.4)"; } }}
+              className="w-full btn-primary mt-2"
+              style={{ opacity: loading ? 0.7 : 1 }}
             >
-              {loading ? "Please wait..." : (mode === "login" ? "Sign In" : "Create Account")}
+              {loading ? t("please_wait") : (mode === "login" ? t("sign_in") : t("create_account"))}
               {!loading && <ArrowRight size={16} />}
             </button>
           </form>
 
           <div className="flex items-center gap-3 my-4">
             <div className="flex-1 h-px" style={{ background: "var(--l-border)" }} />
-            <span style={{ fontSize: "12px", color: "var(--l-subtle)" }}>or</span>
+            <span style={{ fontSize: "12px", color: "var(--l-subtle)" }}>{t("or")}</span>
             <div className="flex-1 h-px" style={{ background: "var(--l-border)" }} />
           </div>
 
           <button
             onClick={handleGuest}
             type="button"
-            className="w-full flex items-center justify-center gap-2 py-3 rounded-xl transition-all duration-200"
-            style={{ background: "var(--l-card-hover)", border: "1px solid var(--l-border)", color: "var(--l-text2)", fontSize: "14px", fontWeight: 600 }}
-            onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "var(--l-input-bg)"; }}
-            onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = "var(--l-card-hover)"; }}
+            className="w-full btn-secondary"
           >
-            <Sparkles size={16} />
-            Continue as Guest
+            <Sparkles size={16} className="text-indigo-500" />
+            {t("continue_as_guest")}
           </button>
         </div>
 
         <p className="text-center mt-4" style={{ fontSize: "13px", color: "var(--l-subtle)" }}>
-          {mode === "login" ? "Don't have an account? " : "Already have an account? "}
+          {mode === "login" ? t("dont_have_account") + " " : t("already_have_account") + " "}
           <button type="button" onClick={() => setMode(mode === "login" ? "register" : "login")} style={{ color: "#6366F1", fontWeight: 600 }}>
-            {mode === "login" ? "Sign up" : "Sign in"}
+            {mode === "login" ? t("sign_up_action") : t("sign_in_action")}
           </button>
         </p>
       </div>

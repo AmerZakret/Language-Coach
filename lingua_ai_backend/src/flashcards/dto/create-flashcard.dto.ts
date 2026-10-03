@@ -15,6 +15,18 @@ export class CreateFlashcardDto {
   @MaxLength(200)
   turkishTranslation: string;
 
+  @IsNotEmpty()
+  @IsString()
+  targetLanguage: string;
+
+  @IsOptional()
+  @IsString()
+  nativeLanguage?: string;
+
+  @IsOptional()
+  @IsString()
+  nativeTranslation?: string;
+
   @IsOptional()
   @IsString()
   @MaxLength(500)

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
+import { useTargetLanguage } from '../../context/TargetLanguageContext';
 import { Button } from '../common/Button';
 import { Plus, Brain } from 'lucide-react';
 import apiClient from '../../api/apiClient';
@@ -9,6 +10,7 @@ import './QuickAddFlashcard.css';
 export const QuickAddFlashcard: React.FC = () => {
   const { user } = useAuth();
   const { t } = useLanguage();
+  const { targetLanguage } = useTargetLanguage();
   const [word, setWord] = useState('');
   const [translation, setTranslation] = useState('');
   const [loading, setLoading] = useState(false);
@@ -22,8 +24,9 @@ export const QuickAddFlashcard: React.FC = () => {
     try {
       await apiClient.post('/flashcards', {
         userId: user.id || user.email,
-        word,
-        translation
+        targetWord: word,
+        turkishTranslation: translation,
+        targetLanguage
       });
       setSuccess(true);
       setWord('');

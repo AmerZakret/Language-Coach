@@ -1,13 +1,15 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, ArrowRight, CheckCircle2, XCircle, Trophy, Zap } from "lucide-react";
+import { ArrowLeft, ArrowRight, CheckCircle2, XCircle, Trophy, Zap, Lock } from "lucide-react";
 
 import { useTargetLanguage } from "../context/TargetLanguageContext";
 import { useProgress } from "../context/ProgressContext";
-import { getLessonById } from "../api/lessonsApi";
+import { useLanguage } from "../context/LanguageContext";
+import { getLessonById, getLessons } from "../api/lessonsApi";
 import { fallbackLessons } from "../data/fallbackLessons";
 import type { Lesson } from "../types/lesson";
 import { soundService } from "../utils/soundService";
+import { isLessonLocked } from "../utils/lessonLock";
 
 type AnswerState = "idle" | "correct" | "incorrect";
 
@@ -16,9 +18,11 @@ export function LessonQuizPage() {
   const navigate = useNavigate();
 
   const { targetLanguage } = useTargetLanguage();
-  const { completeLesson } = useProgress();
+  const { progress: userProgress, completeLesson } = useProgress();
+  const { t } = useLanguage();
 
   const [lesson, setLesson] = useState<Lesson | null>(null);
+  const [isLocked, setIsLocked] = useState(false);
   const [current, setCurrent] = useState(0);
   const [selected, setSelected] = useState<number | null>(null);
   const [answerState, setAnswerState] = useState<AnswerState>("idle");
@@ -33,27 +37,52 @@ export function LessonQuizPage() {
         if (id) {
           const found = await getLessonById(id);
           setLesson(found);
+          const all = await getLessons(targetLanguage);
+          if (found) {
+            setIsLocked(isLessonLocked(found, all, userProgress.completedLessonIds));
+          }
         }
       } catch (e) {
         console.error("Failed to load lesson by ID, trying fallback", e);
         const fallback = fallbackLessons.find((l) => l.id === id);
-        if (fallback) setLesson(fallback);
+        if (fallback) {
+          setLesson(fallback);
+          setIsLocked(isLessonLocked(fallback, fallbackLessons.filter(l => l.targetLanguage === targetLanguage), userProgress.completedLessonIds));
+        }
       } finally {
         setLoading(false);
       }
     };
     loadLesson();
-  }, [id, targetLanguage]);
+  }, [id, targetLanguage, userProgress.completedLessonIds]);
 
-  if (loading) return <div className="min-h-screen flex items-center justify-center" style={{ background: "var(--l-bg)", color: "var(--l-text)" }}>Loading...</div>;
+  if (loading) return <div className="min-h-screen flex items-center justify-center" style={{ background: "var(--l-bg)", color: "var(--l-text)" }}>{t('loading')}</div>;
+
+  if (isLocked) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-6 animate-fade-in" style={{ background: "var(--l-bg)" }}>
+        <div className="w-full max-w-sm text-center">
+          <div className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6 bg-[var(--l-surface3)]">
+            <Lock size={28} color="var(--l-subtle)" />
+          </div>
+          <h2 style={{ fontSize: "24px", fontWeight: 800, color: "var(--l-text)", marginBottom: "8px" }}>{t('lesson_locked_title') || 'Lesson Locked'}</h2>
+          <p style={{ fontSize: "14px", color: "var(--l-muted)", marginBottom: "32px" }}>{t('lesson_locked_desc') || 'Please complete the previous lessons first to unlock this lesson.'}</p>
+          <button onClick={() => navigate("/lessons")} className="btn-primary w-full py-3">
+            {t('back_to_lessons')}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (!lesson || !lesson.questions || lesson.questions.length === 0) {
     return (
       <div className="min-h-screen flex items-center justify-center p-6" style={{ background: "var(--l-bg)" }}>
         <div className="w-full max-w-sm text-center">
-          <h2 style={{ fontSize: "28px", fontWeight: 800, color: "var(--l-text)", marginBottom: "8px" }}>Lesson Unavailable</h2>
-          <p style={{ fontSize: "14px", color: "var(--l-muted)", marginBottom: "32px" }}>No questions found for this lesson.</p>
+          <h2 style={{ fontSize: "28px", fontWeight: 800, color: "var(--l-text)", marginBottom: "8px" }}>{t('lesson_unavailable')}</h2>
+          <p style={{ fontSize: "14px", color: "var(--l-muted)", marginBottom: "32px" }}>{t('no_questions_found')}</p>
           <button onClick={() => navigate("/lessons")} className="w-full py-3 rounded-xl" style={{ background: "var(--l-card-hover)", color: "var(--l-text)", border: "1px solid var(--l-border)", fontSize: "14px", fontWeight: 700 }}>
-            Back to Lessons
+            {t('back_to_lessons')}
           </button>
         </div>
       </div>
@@ -94,7 +123,7 @@ export function LessonQuizPage() {
 
   if (done) {
     const pct = Math.round((score / lesson.questions.length) * 100);
-    const msg = pct >= 80 ? "Excellent! 🎉" : pct >= 60 ? "Good job! 👍" : "Keep practicing! 💪";
+    const msg = pct >= 80 ? t('excellent_result') : pct >= 60 ? t('good_job_result') : t('keep_practicing');
     return (
       <div className="min-h-screen flex items-center justify-center p-6 animate-fade-in" style={{ background: "var(--l-bg)" }}>
         <div className="w-full max-w-sm text-center">
@@ -106,15 +135,15 @@ export function LessonQuizPage() {
           <div className="grid grid-cols-2 gap-4 mb-8">
             <div className="p-4 rounded-2xl" style={{ background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.2)" }}>
               <div style={{ fontSize: "28px", fontWeight: 800, color: "#6366F1" }}>{score}/{lesson.questions.length}</div>
-              <div style={{ fontSize: "12px", color: "var(--l-muted)" }}>Score</div>
+              <div style={{ fontSize: "12px", color: "var(--l-muted)" }}>{t('score')}</div>
             </div>
             <div className="p-4 rounded-2xl" style={{ background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.2)" }}>
               <div style={{ fontSize: "28px", fontWeight: 800, color: "#F59E0B" }}>+{lesson.xpReward}</div>
-              <div style={{ fontSize: "12px", color: "var(--l-muted)" }}>XP Earned</div>
+              <div style={{ fontSize: "12px", color: "var(--l-muted)" }}>{t('xp_earned_label')}</div>
             </div>
           </div>
-          <button onClick={() => navigate("/lessons")} className="w-full py-3 rounded-xl transition-transform hover:scale-105" style={{ background: "linear-gradient(135deg, #6366F1, #8B5CF6)", color: "white", fontSize: "14px", fontWeight: 700, boxShadow: "0 4px 20px rgba(99,102,241,0.4)" }}>
-            Continue
+          <button onClick={() => navigate("/lessons")} className="btn-primary w-full py-3">
+            {t('continue')}
           </button>
         </div>
       </div>
@@ -130,15 +159,14 @@ export function LessonQuizPage() {
         <div className="flex items-center gap-4 mb-8">
           <button
             onClick={() => navigate("/lessons")}
-            className="w-9 h-9 rounded-xl flex items-center justify-center transition-colors"
-            style={{ background: "var(--l-card-hover)", border: "1px solid var(--l-border)", color: "var(--l-muted)" }}
+            className="btn-secondary w-9 h-9 p-0 flex items-center justify-center"
           >
             <ArrowLeft size={16} />
           </button>
           <div className="flex-1">
             <div className="flex items-center justify-between mb-1.5">
-              <span style={{ fontSize: "12px", color: "var(--l-muted)" }}>Question {current + 1} of {lesson.questions.length}</span>
-              <div className="flex items-center gap-1"><Zap size={12} color="#F59E0B" /><span style={{ fontSize: "12px", color: "#F59E0B", fontWeight: 600 }}>XP Points</span></div>
+              <span style={{ fontSize: "12px", color: "var(--l-muted)" }}>{t('question')} {current + 1} {t('of')} {lesson.questions.length}</span>
+              <div className="flex items-center gap-1"><Zap size={12} color="#F59E0B" /><span style={{ fontSize: "12px", color: "#F59E0B", fontWeight: 600 }}>{t('xp_points')}</span></div>
             </div>
             <div className="h-2 rounded-full overflow-hidden" style={{ background: "var(--l-surface3)" }}>
               <div className="h-full rounded-full transition-all duration-500" style={{ width: `${progress}%`, background: "linear-gradient(90deg, #6366F1, #8B5CF6)" }} />
@@ -150,7 +178,7 @@ export function LessonQuizPage() {
         <div className="p-6 rounded-2xl mb-6" style={{ background: "var(--l-surface)", border: "1px solid var(--l-border)" }}>
           <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full mb-4" style={{ background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.2)" }}>
             <span style={{ fontSize: "11px", fontWeight: 700, color: "#6366F1" }}>
-              {q.type === 'fill_blank' ? 'Fill in the blank' : q.type === 'meaning_match' ? 'Match meaning' : 'Translate'}
+              {q.type === 'fill_blank' ? t('fill_blank') : q.type === 'meaning_match' ? t('match_meaning') : t('translate_label')}
             </span>
           </div>
           <p style={{ fontSize: "20px", fontWeight: 700, color: "var(--l-text)", lineHeight: 1.4 }}>{q.question}</p>
@@ -159,7 +187,7 @@ export function LessonQuizPage() {
         {/* Options */}
         <div className="space-y-3 mb-8">
           {q.options.map((opt, idx) => {
-            let bg = "var(--l-card-hover)";
+            let bg = "var(--l-input-bg)";
             let border = "var(--l-border)";
             let color = "var(--l-text2)";
             let icon = null;
@@ -172,10 +200,10 @@ export function LessonQuizPage() {
               <button
                 key={idx}
                 onClick={() => handleSelect(idx)}
-                className="w-full text-left px-5 py-4 rounded-xl flex items-center justify-between transition-all duration-200"
-                style={{ background: bg, border: `1px solid ${border}`, color }}
-                onMouseEnter={(e) => { if (answerState === "idle") { (e.currentTarget as HTMLButtonElement).style.background = "rgba(99,102,241,0.08)"; (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(99,102,241,0.25)"; } }}
-                onMouseLeave={(e) => { if (answerState === "idle") { (e.currentTarget as HTMLButtonElement).style.background = "var(--l-card-hover)"; (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--l-border)"; } }}
+                className="w-full text-left px-5 py-4 rounded-xl flex items-center justify-between transition-all duration-200 border cursor-pointer"
+                style={{ background: bg, borderColor: border, color }}
+                onMouseEnter={(e) => { if (answerState === "idle") { (e.currentTarget as HTMLButtonElement).style.background = "var(--l-card-hover)"; (e.currentTarget as HTMLButtonElement).style.borderColor = "rgba(99,102,241,0.3)"; } }}
+                onMouseLeave={(e) => { if (answerState === "idle") { (e.currentTarget as HTMLButtonElement).style.background = "var(--l-input-bg)"; (e.currentTarget as HTMLButtonElement).style.borderColor = "var(--l-border)"; } }}
               >
                 <div className="flex items-center gap-3">
                   <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0" style={{ background: "var(--l-input-bg)", fontSize: "12px", fontWeight: 700 }}>
@@ -197,16 +225,16 @@ export function LessonQuizPage() {
           >
             <div>
               <div style={{ fontSize: "14px", fontWeight: 700, color: answerState === "correct" ? "#10B981" : "#F87171" }}>
-                {answerState === "correct" ? "Correct!" : "Incorrect!"}
+                {answerState === "correct" ? t('correct') : t('incorrect')}
               </div>
-              {answerState === "incorrect" && <div style={{ fontSize: "12px", color: "var(--l-muted)", marginTop: "2px" }}>Correct: {q.correctAnswer}</div>}
+              {answerState === "incorrect" && <div style={{ fontSize: "12px", color: "var(--l-muted)", marginTop: "2px" }}>{t('correct_answer')} {q.correctAnswer}</div>}
             </div>
             <button
               onClick={handleNext}
               className="flex items-center gap-2 px-5 py-2.5 rounded-xl transition-all duration-200 hover:scale-105"
               style={{ background: answerState === "correct" ? "rgba(16,185,129,0.2)" : "rgba(99,102,241,0.2)", color: answerState === "correct" ? "#10B981" : "#6366F1", fontSize: "13px", fontWeight: 700, border: `1px solid ${answerState === "correct" ? "rgba(16,185,129,0.3)" : "rgba(99,102,241,0.3)"}` }}
             >
-              {current + 1 >= lesson.questions.length ? "See Results" : "Next"} <ArrowRight size={14} />
+              {current + 1 >= lesson.questions.length ? t('see_results') : t('next')} <ArrowRight size={14} />
             </button>
           </div>
         )}

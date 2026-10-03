@@ -13,6 +13,18 @@ export class UpdateFlashcardDto {
 
   @IsOptional()
   @IsString()
+  targetLanguage?: string;
+
+  @IsOptional()
+  @IsString()
+  nativeLanguage?: string;
+
+  @IsOptional()
+  @IsString()
+  nativeTranslation?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(500)
   exampleSentence?: string;
 

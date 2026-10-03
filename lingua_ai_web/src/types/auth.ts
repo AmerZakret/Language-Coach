@@ -4,6 +4,7 @@ export interface User {
   email: string;
   isGuest: boolean;
   avatar?: string;
+  targetLanguage?: string;
 }
 
 export interface AuthState {

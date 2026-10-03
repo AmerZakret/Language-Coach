@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import type { User } from '../types/auth';
+import { fetchMe } from '../api/authApi';
 
 interface AuthContextType {
   user: User | null;
@@ -20,26 +21,48 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState<boolean>(true);
 
   useEffect(() => {
-    const storedUser = localStorage.getItem('linguaai_user');
-    const storedToken = localStorage.getItem('linguaai_token');
-    const storedIsGuest = localStorage.getItem('linguaai_is_guest') === 'true';
+    const initializeAuth = async () => {
+      const storedUser = localStorage.getItem('linguaai_user');
+      const storedToken = localStorage.getItem('linguaai_token');
+      const storedIsGuest = localStorage.getItem('linguaai_is_guest') === 'true';
 
-    if (storedIsGuest) {
-      setIsGuest(true);
-      setUser({ id: 'guest', name: 'Guest User', email: 'guest@lingua.ai', isGuest: true });
-      if (storedToken) {
+      if (storedIsGuest) {
+        setIsGuest(true);
+        setUser({ id: 'guest', name: 'Guest User', email: 'guest@lingua.ai', isGuest: true });
+        if (storedToken) {
+          setToken(storedToken);
+        }
+      } else if (storedToken) {
         setToken(storedToken);
+        try {
+          const me = await fetchMe();
+          const mergedUser = { ...me, isGuest: false };
+          setUser(mergedUser);
+          localStorage.setItem('linguaai_user', JSON.stringify(mergedUser));
+        } catch (e) {
+          // Fall back to local storage user if offline/error
+          if (storedUser) {
+            try {
+              setUser(JSON.parse(storedUser));
+            } catch {
+              localStorage.removeItem('linguaai_user');
+              localStorage.removeItem('linguaai_token');
+            }
+          } else {
+            localStorage.removeItem('linguaai_token');
+          }
+        }
+      } else if (storedUser) {
+        try {
+          setUser(JSON.parse(storedUser));
+        } catch (e) {
+          localStorage.removeItem('linguaai_user');
+        }
       }
-    } else if (storedUser) {
-      try {
-        setUser(JSON.parse(storedUser));
-        setToken(storedToken);
-      } catch (e) {
-        localStorage.removeItem('linguaai_user');
-        localStorage.removeItem('linguaai_token');
-      }
-    }
-    setLoading(false);
+      setLoading(false);
+    };
+
+    initializeAuth();
   }, []);
 
   const login = (newUser: User, newToken: string) => {

@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, UseGuards, Req, ForbiddenException } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Query, UseGuards, Req, ForbiddenException } from '@nestjs/common';
 import { ProgressService } from './progress.service';
 import { CompleteLessonDto } from './dto/complete-lesson.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -15,18 +15,22 @@ export class ProgressController {
   }
 
   @Get(':userId')
-  async getUserProgress(@Param('userId') userId: string, @Req() req: any) {
-    this.validateUserAccess(userId, req);
-    return this.progressService.getUserProgress(userId);
+  async getUserProgress(
+    @Param('userId') paramUserId: string,
+    @Query('targetLanguage') targetLanguage: string,
+    @Req() req: any,
+  ) {
+    const userId = req.user._id.toString();
+    return this.progressService.getUserProgress(userId, targetLanguage);
   }
 
   @Post(':userId/complete-lesson')
   async completeLesson(
-    @Param('userId') userId: string,
+    @Param('userId') paramUserId: string,
     @Body() completeLessonDto: CompleteLessonDto,
     @Req() req: any,
   ) {
-    this.validateUserAccess(userId, req);
+    const userId = req.user._id.toString();
     return this.progressService.completeLesson(
       userId,
       completeLessonDto.lessonId,
@@ -35,8 +39,8 @@ export class ProgressController {
   }
 
   @Delete(':userId')
-  async resetProgress(@Param('userId') userId: string, @Req() req: any) {
-    this.validateUserAccess(userId, req);
+  async resetProgress(@Param('userId') paramUserId: string, @Req() req: any) {
+    const userId = req.user._id.toString();
     return this.progressService.resetProgress(userId);
   }
 }

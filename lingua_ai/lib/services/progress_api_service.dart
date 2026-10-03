@@ -4,7 +4,7 @@ import '../core/config/api_config.dart';
 import 'auth_service.dart';
 
 class ProgressApiService {
-  Future<Map<String, dynamic>> getProgress(String userId) async {
+  Future<Map<String, dynamic>> getProgress(String userId, String targetLanguage) async {
     try {
       final headers = <String, String>{};
       final token = AuthService().token;
@@ -13,7 +13,7 @@ class ProgressApiService {
       }
 
       final response = await http.get(
-        Uri.parse('${ApiConfig.baseUrl}${ApiConfig.progress}/$userId'),
+        Uri.parse('${ApiConfig.baseUrl}${ApiConfig.progress}/$userId?targetLanguage=$targetLanguage'),
         headers: headers,
       );
 

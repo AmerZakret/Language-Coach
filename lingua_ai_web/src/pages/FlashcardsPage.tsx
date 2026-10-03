@@ -1,9 +1,12 @@
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
-import { ArrowLeft, ArrowRight, RotateCcw, Plus, Edit2, Trash2, BookOpen, GraduationCap, X, Calendar, MessageSquare, AlertCircle, Volume2, Star, Play, Pause, Shuffle, Maximize2 } from "lucide-react";
+import { ArrowLeft, ArrowRight, Plus, Edit2, Trash2, BookOpen, GraduationCap, X, Calendar, MessageSquare, AlertCircle, Volume2, Star, Play, Pause, Shuffle, Maximize2, Lightbulb } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
+import { useTheme } from "../context/ThemeContext";
+import { useLanguage } from "../context/LanguageContext";
 import { useTargetLanguage } from "../context/TargetLanguageContext";
 import apiClient from "../api/apiClient";
+import { useNetwork } from "../context/NetworkContext";
+import { pushToOfflineQueue, processOfflineQueue } from "../utils/offlineQueue";
 
 interface CardData {
   _id: string;
@@ -22,19 +25,63 @@ interface CardData {
   };
 }
 
-const SCORE_LABELS = ["Forgot", "Hard", "Okay", "Easy", "Very Easy", "Perfect"];
+const SCORE_KEYS = ["forgot", "hard", "okay", "easy", "very_easy", "perfect"];
+
+const LANGUAGE_CODES: Record<string, string> = {
+  English: 'en',
+  German: 'de',
+  Spanish: 'es',
+  French: 'fr',
+  Arabic: 'ar',
+  Turkish: 'tr',
+};
+
+const LANGUAGE_VOICES: Record<string, string> = {
+  en: 'en-US',
+  de: 'de-DE',
+  es: 'es-ES',
+  fr: 'fr-FR',
+  ar: 'ar-SA',
+  tr: 'tr-TR',
+};
 
 export function FlashcardsPage() {
-  const navigate = useNavigate();
   const { user, isGuest } = useAuth();
+  const { isDark } = useTheme();
+  const { t } = useLanguage();
   const { targetLanguage } = useTargetLanguage();
   const userId = user?.id || user?.email || (isGuest ? 'guest@lingua.ai' : 'unknown');
+  const { isOffline } = useNetwork();
+
+  useEffect(() => {
+    const syncOfflineData = async () => {
+      if (!isOffline && userId) {
+        try {
+          const success = await processOfflineQueue(userId);
+          if (success) {
+            fetchCards();
+          }
+        } catch (e) {
+          console.error("Offline sync failed", e);
+        }
+      }
+    };
+    syncOfflineData();
+  }, [isOffline, userId]);
 
   // View & Modal states
   const [view, setView] = useState<"list" | "study">("list");
   const [modal, setModal] = useState<null | "add" | "edit">(null);
   const [selectedCard, setSelectedCard] = useState<CardData | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [flippedListCards, setFlippedListCards] = useState<Record<string, boolean>>({});
+
+  const toggleListCardFlip = (cardId: string) => {
+    setFlippedListCards((prev) => ({
+      ...prev,
+      [cardId]: !prev[cardId],
+    }));
+  };
 
   // Data states
   const [allCards, setAllCards] = useState<CardData[]>([]);
@@ -65,7 +112,7 @@ export function FlashcardsPage() {
 
   useEffect(() => {
     fetchCards();
-  }, [user]);
+  }, [user, targetLanguage]);
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -95,26 +142,26 @@ export function FlashcardsPage() {
     setLoading(true);
     setError(null);
     try {
-      const allRes = await apiClient.get(`/flashcards/all?userId=${userId}`);
+      const allRes = await apiClient.get(`/flashcards/all?userId=${userId}&targetLanguage=${targetLanguage}`);
       setAllCards(allRes.data);
 
-      const dueRes = await apiClient.get(`/flashcards/due?userId=${userId}`);
+      const dueRes = await apiClient.get(`/flashcards/due?userId=${userId}&targetLanguage=${targetLanguage}`);
       setDueCards(dueRes.data);
       setOriginalDueCards(dueRes.data);
 
-      localStorage.setItem(`flashcards_all_${userId}`, JSON.stringify(allRes.data));
-      localStorage.setItem(`flashcards_due_${userId}`, JSON.stringify(dueRes.data));
+      localStorage.setItem(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(allRes.data));
+      localStorage.setItem(`flashcards_due_${userId}_${targetLanguage}`, JSON.stringify(dueRes.data));
     } catch (e) {
       console.error("Failed to fetch cards from server, loading cached.", e);
-      const cachedAll = localStorage.getItem(`flashcards_all_${userId}`);
-      const cachedDue = localStorage.getItem(`flashcards_due_${userId}`);
+      const cachedAll = localStorage.getItem(`flashcards_all_${userId}_${targetLanguage}`);
+      const cachedDue = localStorage.getItem(`flashcards_due_${userId}_${targetLanguage}`);
       if (cachedAll) setAllCards(JSON.parse(cachedAll));
       if (cachedDue) {
         setDueCards(JSON.parse(cachedDue));
         setOriginalDueCards(JSON.parse(cachedDue));
       }
       
-      setError("Unable to sync with server. Using offline data.");
+      setError(t("offline_data"));
       setTimeout(() => setError(null), 5000);
     } finally {
       setLoading(false);
@@ -140,7 +187,61 @@ export function FlashcardsPage() {
   const handleSaveCard = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.targetWord || !formData.turkishTranslation) {
-      setError("English Word and Turkish Translation are required.");
+      setError(t("field_required_error"));
+      return;
+    }
+
+    if (isOffline) {
+      if (modal === "add") {
+        const tempId = `local_${Date.now()}`;
+        const newCard: CardData = {
+          _id: tempId,
+          userId,
+          targetWord: formData.targetWord,
+          turkishTranslation: formData.turkishTranslation,
+          exampleSentence: formData.exampleSentence || undefined,
+          note: formData.note || undefined,
+          interval: 0,
+          easinessFactor: 2.5,
+          nextReviewDate: new Date().toISOString(),
+          reviewCount: 0,
+        };
+        const updatedAll = [newCard, ...allCards];
+        setAllCards(updatedAll);
+        
+        // Compute due state (always due if review count is 0)
+        const updatedDue = [newCard, ...dueCards];
+        setDueCards(updatedDue);
+        setOriginalDueCards([newCard, ...originalDueCards]);
+        
+        localStorage.setItem(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(updatedAll));
+        localStorage.setItem(`flashcards_due_${userId}_${targetLanguage}`, JSON.stringify(updatedDue));
+        
+        pushToOfflineQueue('create-flashcard', {
+          tempId,
+          userId,
+          targetLanguage,
+          ...formData
+        });
+        showSuccess(t("flashcard_created"));
+      } else if (modal === "edit" && selectedCard) {
+        const updatedAll = allCards.map(c => c._id === selectedCard._id ? { ...c, ...formData } : c);
+        const updatedDue = dueCards.map(c => c._id === selectedCard._id ? { ...c, ...formData } : c);
+        setAllCards(updatedAll);
+        setDueCards(updatedDue);
+        setOriginalDueCards(originalDueCards.map(c => c._id === selectedCard._id ? { ...c, ...formData } : c));
+        
+        localStorage.setItem(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(updatedAll));
+        localStorage.setItem(`flashcards_due_${userId}_${targetLanguage}`, JSON.stringify(updatedDue));
+        
+        pushToOfflineQueue('update-flashcard', {
+          cardId: selectedCard._id,
+          targetLanguage,
+          ...formData
+        });
+        showSuccess(t("flashcard_updated"));
+      }
+      setModal(null);
       return;
     }
 
@@ -148,30 +249,50 @@ export function FlashcardsPage() {
       if (modal === "add") {
         await apiClient.post("/flashcards", {
           userId,
+          targetLanguage,
           ...formData,
         });
-        showSuccess("Flashcard created successfully!");
+        showSuccess(t("flashcard_created"));
       } else if (modal === "edit" && selectedCard) {
-        await apiClient.put(`/flashcards/${selectedCard._id}`, formData);
-        showSuccess("Flashcard updated successfully!");
+        await apiClient.put(`/flashcards/${selectedCard._id}`, {
+          ...formData,
+          targetLanguage,
+        });
+        showSuccess(t("flashcard_updated"));
       }
       setModal(null);
       fetchCards();
     } catch (err: any) {
       console.error("Failed to save card", err);
-      setError(err.response?.data?.message || "Failed to save flashcard.");
+      setError(err.response?.data?.message || t("failed_save_card"));
     }
   };
 
   const handleDeleteCard = async (cardId: string) => {
+    if (isOffline) {
+      const updatedAll = allCards.filter(c => c._id !== cardId);
+      const updatedDue = dueCards.filter(c => c._id !== cardId);
+      setAllCards(updatedAll);
+      setDueCards(updatedDue);
+      setOriginalDueCards(originalDueCards.filter(c => c._id !== cardId));
+      
+      localStorage.setItem(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(updatedAll));
+      localStorage.setItem(`flashcards_due_${userId}_${targetLanguage}`, JSON.stringify(updatedDue));
+      
+      pushToOfflineQueue('delete-flashcard', { cardId });
+      showSuccess(t("flashcard_deleted"));
+      setDeleteConfirmId(null);
+      return;
+    }
+
     try {
       await apiClient.delete(`/flashcards/${cardId}`);
-      showSuccess("Flashcard deleted successfully!");
+      showSuccess(t("flashcard_deleted"));
       setDeleteConfirmId(null);
       fetchCards();
     } catch (err: any) {
       console.error("Failed to delete card", err);
-      setError("Failed to delete flashcard.");
+      setError(t("failed_delete_card"));
     }
   };
 
@@ -193,13 +314,53 @@ export function FlashcardsPage() {
     setView("study");
   };
 
-  const handleStudyScore = async (score: number, manual: boolean = true) => {
+  const handleStudyScore = async (score: number, _manual: boolean = true) => {
     const card = dueCards[currentStudyIndex];
     if (card) {
-      try {
-        await apiClient.put(`/flashcards/${card._id}/review`, { score });
-      } catch (e) {
-        console.error("Failed to save review to backend", e);
+      if (isOffline) {
+        // Local SM-2 calculation
+        let easinessFactor = card.easinessFactor || 2.5;
+        let interval = card.interval || 0;
+        let reviewCount = card.reviewCount || 0;
+
+        if (score >= 3) {
+          if (reviewCount === 0) {
+            interval = 1;
+          } else if (reviewCount === 1) {
+            interval = 6;
+          } else {
+            interval = Math.round(interval * easinessFactor);
+          }
+          reviewCount += 1;
+        } else {
+          reviewCount = 0;
+          interval = 1;
+        }
+        
+        easinessFactor = easinessFactor + (0.1 - (5 - score) * (0.08 + (5 - score) * 0.02));
+        if (easinessFactor < 1.3) easinessFactor = 1.3;
+
+        const nextReviewDate = new Date(Date.now() + interval * 24 * 60 * 60 * 1000).toISOString();
+        
+        const updatedCard = {
+          ...card,
+          easinessFactor,
+          interval,
+          reviewCount,
+          nextReviewDate,
+        };
+
+        const updatedAll = allCards.map(c => c._id === card._id ? updatedCard : c);
+        setAllCards(updatedAll);
+        localStorage.setItem(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(updatedAll));
+
+        pushToOfflineQueue('review-flashcard', { cardId: card._id, score });
+      } else {
+        try {
+          await apiClient.put(`/flashcards/${card._id}/review`, { score });
+        } catch (e) {
+          console.error("Failed to save review to backend", e);
+        }
       }
     }
 
@@ -214,15 +375,17 @@ export function FlashcardsPage() {
     }
   };
 
-  const speakWord = (text: string, e?: React.MouseEvent) => {
+  const speakWord = (text: string, langKey?: string, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
-      utterance.lang = "en-US";
+      const shortCode = LANGUAGE_CODES[targetLanguage] || 'en';
+      const voiceLocale = langKey === 'tr' ? 'tr-TR' : (LANGUAGE_VOICES[shortCode] || 'en-US');
+      utterance.lang = voiceLocale;
       window.speechSynthesis.speak(utterance);
     } else {
-      setError("Text-to-speech is not supported on this browser.");
+      setError(t("tts_unsupported"));
       setTimeout(() => setError(null), 3000);
     }
   };
@@ -279,11 +442,11 @@ export function FlashcardsPage() {
   };
 
   const getHintText = (card: CardData) => {
-    if (card.note) return `Note: ${card.note}`;
+    if (card.note) return `${t("note_label")}: ${card.note}`;
     if (card.turkishTranslation) {
-      return `Starts with: "${card.turkishTranslation.substring(0, 2)}..."`;
+      return `${t("starts_with")}: "${card.turkishTranslation.substring(0, 2)}..."`;
     }
-    return "No hint available.";
+    return t("no_hint_available");
   };
 
   const finishStudy = () => {
@@ -295,7 +458,7 @@ export function FlashcardsPage() {
     return (
       <div className="min-h-screen flex items-center justify-center flex-col" style={{ background: "var(--l-bg)", color: "var(--l-text)" }}>
         <div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-        <p className="font-semibold">Loading your vocabulary deck...</p>
+        <p className="font-semibold">{t("loading_vocab")}</p>
       </div>
     );
   }
@@ -326,9 +489,9 @@ export function FlashcardsPage() {
           {/* Header */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
             <div>
-              <h1 style={{ fontSize: "28px", fontWeight: 800, letterSpacing: "-0.02em" }}>Flashcards</h1>
+              <h1 style={{ fontSize: "28px", fontWeight: 800, letterSpacing: "-0.02em" }}>{t("flashcards")}</h1>
               <p style={{ fontSize: "14px", color: "var(--l-muted)", marginTop: "2px" }}>
-                Create your custom cards and learn them using Spaced Repetition (SM-2).
+                {t("flashcards_subtitle")}
               </p>
             </div>
             <div className="flex gap-3">
@@ -337,7 +500,7 @@ export function FlashcardsPage() {
                 className="flex items-center gap-2 px-5 py-2.5 rounded-xl transition-all duration-200"
                 style={{ background: "linear-gradient(135deg, #6366F1, #8B5CF6)", color: "white", fontSize: "13px", fontWeight: 700, boxShadow: "0 4px 14px rgba(99,102,241,0.3)" }}
               >
-                <Plus size={16} /> Add New Card
+                <Plus size={16} /> {t("add_new_card")}
               </button>
               {dueCards.length > 0 && (
                 <button
@@ -345,97 +508,126 @@ export function FlashcardsPage() {
                   className="flex items-center gap-2 px-5 py-2.5 rounded-xl transition-all duration-200"
                   style={{ background: "rgba(16,185,129,0.12)", border: "1px solid rgba(16,185,129,0.25)", color: "#10B981", fontSize: "13px", fontWeight: 700 }}
                 >
-                  <GraduationCap size={16} /> Study Due ({dueCards.length})
+                  <GraduationCap size={16} /> {t("study_due")} ({dueCards.length})
                 </button>
               )}
             </div>
           </div>
-
-          {/* Stats Bar */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
-            <div className="p-4 rounded-xl" style={{ background: "var(--l-surface)", border: "1px solid var(--l-border)" }}>
-              <div style={{ fontSize: "12px", color: "var(--l-muted)" }}>Total Cards</div>
-              <div style={{ fontSize: "22px", fontWeight: 800, marginTop: "2px" }}>{allCards.length}</div>
-            </div>
-            <div className="p-4 rounded-xl" style={{ background: "var(--l-surface)", border: "1px solid var(--l-border)" }}>
-              <div style={{ fontSize: "12px", color: "var(--l-muted)" }}>Due Today</div>
-              <div style={{ fontSize: "22px", fontWeight: 800, color: dueCards.length > 0 ? "#10B981" : "inherit", marginTop: "2px" }}>{dueCards.length}</div>
-            </div>
-            <div className="p-4 rounded-xl" style={{ background: "var(--l-surface)", border: "1px solid var(--l-border)" }}>
-              <div style={{ fontSize: "12px", color: "var(--l-muted)" }}>Target Language</div>
-              <div style={{ fontSize: "15px", fontWeight: 700, marginTop: "6px" }}>🇺🇸 {targetLanguage}</div>
-            </div>
-            <div className="p-4 rounded-xl" style={{ background: "var(--l-surface)", border: "1px solid var(--l-border)" }}>
-              <div style={{ fontSize: "12px", color: "var(--l-muted)" }}>Dashboard</div>
-              <button onClick={() => navigate("/")} className="text-indigo-500 hover:underline" style={{ fontSize: "13px", fontWeight: 700, marginTop: "6px", display: "block" }}>
-                &larr; Go Back
-              </button>
-            </div>
-          </div>
-
           {/* Cards Grid */}
           {allCards.length === 0 ? (
             <div className="p-12 rounded-2xl flex flex-col items-center justify-center text-center" style={{ background: "var(--l-surface)", border: "1px solid var(--l-border)" }}>
               <div className="w-12 h-12 rounded-full flex items-center justify-center mb-4" style={{ background: "rgba(99,102,241,0.12)" }}>
                 <BookOpen size={22} color="#6366F1" />
               </div>
-              <h3 style={{ fontSize: "18px", fontWeight: 700, marginBottom: "6px" }}>No flashcards yet</h3>
+              <h3 style={{ fontSize: "18px", fontWeight: 700, marginBottom: "6px" }}>{t("no_cards_title")}</h3>
               <p style={{ fontSize: "13px", color: "var(--l-muted)", maxWidth: "320px", marginBottom: "20px" }}>
-                Add words you want to remember. They will show up here and prompt you for reviews.
+                {t("no_cards_desc_language")}
               </p>
               <button
                 onClick={handleOpenAdd}
                 className="px-6 py-2.5 rounded-xl text-white font-bold"
                 style={{ background: "#6366F1", fontSize: "13px" }}
               >
-                Add Your First Card
+                {t("add_first_card")}
               </button>
             </div>
           ) : (
             <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {allCards.map((card) => {
                 const isDue = dueCards.some((d) => d._id === card._id);
+                const isFlipped = !!flippedListCards[card._id];
                 return (
                   <div
                     key={card._id}
-                    className="p-5 rounded-2xl flex flex-col justify-between transition-all hover:translate-y-[-2px]"
-                    style={{ background: "var(--l-surface)", border: isDue ? "1.5px solid #10B981" : "1px solid var(--l-border)" }}
+                    onClick={() => toggleListCardFlip(card._id)}
+                    className="relative cursor-pointer select-none"
+                    style={{ perspective: "1000px", height: "220px" }}
                   >
-                    <div>
-                      <div className="flex justify-between items-start gap-2 mb-3">
-                        <span className="px-2.5 py-0.5 rounded-md font-bold" style={{ fontSize: "10px", background: isDue ? "rgba(16,185,129,0.15)" : "var(--l-surface3)", color: isDue ? "#10B981" : "var(--l-muted)" }}>
-                          {isDue ? "DUE NOW" : "LEARNING"}
-                        </span>
-                        <div className="flex gap-2">
-                          <button onClick={() => handleOpenEdit(card)} className="p-1.5 rounded-lg hover:bg-gray-100 transition-colors" style={{ color: "var(--l-muted)" }}>
-                            <Edit2 size={14} />
-                          </button>
-                          <button onClick={() => setDeleteConfirmId(card._id)} className="p-1.5 rounded-lg hover:bg-red-50 transition-colors" style={{ color: "#F87171" }}>
-                            <Trash2 size={14} />
-                          </button>
+                    <div
+                      className="absolute inset-0 transition-transform duration-500"
+                      style={{
+                        transformStyle: "preserve-3d",
+                        transform: isFlipped ? "rotateY(180deg)" : "rotateY(0deg)",
+                      }}
+                    >
+                      {/* FRONT OF LIST CARD */}
+                      <div
+                        className="absolute inset-0 p-5 rounded-2xl flex flex-col justify-between"
+                        style={{
+                          backfaceVisibility: "hidden",
+                          background: "var(--l-surface)",
+                          border: isDue ? "1.5px solid #10B981" : "1px solid var(--l-border)",
+                          boxShadow: "0 4px 12px rgba(0,0,0,0.03)",
+                        }}
+                      >
+                        <div className="flex justify-between items-start gap-2 mb-3">
+                          <span className="px-2.5 py-0.5 rounded-md font-bold" style={{ fontSize: "10px", background: isDue ? "rgba(16,185,129,0.15)" : "var(--l-surface3)", color: isDue ? "#10B981" : "var(--l-muted)" }}>
+                            {isDue ? t("due_now") : t("learning_badge")}
+                          </span>
+                          <div className="flex gap-2">
+                            <button onClick={(e) => { e.stopPropagation(); handleOpenEdit(card); }} className="p-1.5 rounded-lg hover:bg-[var(--l-card-hover)] transition-colors" style={{ color: "var(--l-muted)" }}>
+                              <Edit2 size={14} />
+                            </button>
+                            <button onClick={(e) => { e.stopPropagation(); setDeleteConfirmId(card._id); }} className="p-1.5 rounded-lg hover:bg-red-50 transition-colors" style={{ color: "#F87171" }}>
+                              <Trash2 size={14} />
+                            </button>
+                          </div>
+                        </div>
+
+                        <div className="flex-1 flex items-center justify-center">
+                          <div style={{ fontSize: "24px", fontWeight: 800, color: "var(--l-text)", textAlign: "center" }}>{card.targetWord}</div>
+                        </div>
+
+                        <div className="text-center text-[10px] font-semibold text-[var(--l-muted)] mt-2">
+                          {t("click_to_flip")}
                         </div>
                       </div>
 
-                      <div style={{ fontSize: "20px", fontWeight: 800, color: "var(--l-text)" }}>{card.targetWord}</div>
-                      <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--l-muted)", marginTop: "4px" }}>{card.turkishTranslation}</div>
-
-                      {card.exampleSentence && (
-                        <div className="mt-3 p-2.5 rounded-lg text-xs" style={{ background: "var(--l-surface3)", fontStyle: "italic" }}>
-                          "{card.exampleSentence}"
+                      {/* BACK OF LIST CARD */}
+                      <div
+                        className="absolute inset-0 p-5 rounded-2xl flex flex-col justify-between"
+                        style={{
+                          backfaceVisibility: "hidden",
+                          transform: "rotateY(180deg)",
+                          background: "var(--l-surface)",
+                          border: isDue ? "1.5px solid #10B981" : "1px solid var(--l-border)",
+                          boxShadow: "0 4px 12px rgba(0,0,0,0.03)",
+                        }}
+                      >
+                        <div className="flex justify-between items-start gap-2 mb-2">
+                          <span className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest">
+                            {t("translation_label")}
+                          </span>
+                          <button
+                            onClick={(e) => { e.stopPropagation(); speakWord(card.turkishTranslation, 'tr', e); }}
+                            className="p-1.5 rounded-lg hover:bg-[var(--l-card-hover)] transition-colors"
+                            style={{ color: "var(--l-muted)" }}
+                          >
+                            <Volume2 size={14} />
+                          </button>
                         </div>
-                      )}
-                      
-                      {card.note && (
-                        <div className="mt-2 text-xs flex gap-1.5 items-start" style={{ color: "var(--l-muted)" }}>
-                          <MessageSquare size={12} className="mt-0.5 flex-shrink-0" />
-                          <span>{card.note}</span>
-                        </div>
-                      )}
-                    </div>
 
-                    <div className="mt-4 pt-3 flex items-center justify-between border-t" style={{ borderColor: "var(--l-border-subtle)", fontSize: "11px", color: "var(--l-subtle)" }}>
-                      <span className="flex items-center gap-1"><Calendar size={12} /> Next: {new Date(card.nextReviewDate).toLocaleDateString()}</span>
-                      <span>Reviews: {card.reviewCount || 0}</span>
+                        <div className="flex-1 flex flex-col items-center justify-center overflow-y-auto max-h-[110px] py-1">
+                          <div style={{ fontSize: "20px", fontWeight: 800, color: "var(--l-text)", textAlign: "center" }}>{card.turkishTranslation}</div>
+                          {card.exampleSentence && (
+                            <div className="mt-2 p-1.5 rounded-lg text-[10px] w-full text-center italic" style={{ background: "var(--l-surface3)", color: "var(--l-text2)" }}>
+                              "{card.exampleSentence}"
+                            </div>
+                          )}
+                          {card.note && (
+                            <div className="mt-1 text-[10px] flex gap-1 items-center justify-center text-[var(--l-muted)]">
+                              <MessageSquare size={10} className="flex-shrink-0" />
+                              <span className="truncate max-w-[150px]">{card.note}</span>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="mt-2 pt-2 flex items-center justify-between border-t" style={{ borderColor: "var(--l-border-subtle)", fontSize: "10px", color: "var(--l-subtle)" }}>
+                          <span className="flex items-center gap-1"><Calendar size={10} /> {new Date(card.nextReviewDate).toLocaleDateString()}</span>
+                          <span>{t("reviews")} {card.reviewCount || 0}</span>
+                        </div>
+                      </div>
+
                     </div>
                   </div>
                 );
@@ -451,16 +643,16 @@ export function FlashcardsPage() {
               <div className="w-16 h-16 rounded-full flex items-center justify-center mb-6" style={{ background: "linear-gradient(135deg, #10B981, #06B6D4)", boxShadow: "0 0 40px rgba(16,185,129,0.3)" }}>
                 <GraduationCap size={28} color="white" />
               </div>
-              <h2 style={{ fontSize: "24px", fontWeight: 800, marginBottom: "8px" }}>Great Job!</h2>
+              <h2 style={{ fontSize: "24px", fontWeight: 800, marginBottom: "8px" }}>{t("great_job")}</h2>
               <p style={{ fontSize: "14px", color: "var(--l-muted)", marginBottom: "24px" }}>
-                You have finished reviewing all {dueCards.length} cards for today.
+                {t("finished_reviewing")} {dueCards.length} {t("cards_today")}
               </p>
               
               <div className="px-6 py-4 rounded-xl mb-8" style={{ background: "rgba(16,185,129,0.1)", border: "1px solid rgba(16,185,129,0.2)" }}>
                 <div style={{ fontSize: "30px", fontWeight: 800, color: "#10B981" }}>
                   {studyResults.length > 0 ? (studyResults.reduce((a, b) => a + b, 0) / studyResults.length).toFixed(1) : "5.0"}/5
                 </div>
-                <div style={{ fontSize: "12px", color: "var(--l-muted)" }}>Average Score</div>
+                <div style={{ fontSize: "12px", color: "var(--l-muted)" }}>{t("average_score")}</div>
               </div>
 
               <button
@@ -468,7 +660,7 @@ export function FlashcardsPage() {
                 className="w-full py-3 rounded-xl text-white font-bold transition-transform hover:scale-102"
                 style={{ background: "linear-gradient(135deg, #6366F1, #8B5CF6)" }}
               >
-                Back to Flashcard List
+                {t("back_to_list")}
               </button>
             </div>
           ) : (
@@ -476,10 +668,10 @@ export function FlashcardsPage() {
               {/* Study Header Navigation */}
               <div className="flex items-center justify-between mb-4">
                 <button onClick={finishStudy} className="flex items-center gap-1.5 text-xs font-bold text-indigo-500 hover:underline">
-                  &larr; Exit Study
+                  {t("exit_study")}
                 </button>
                 <div className="text-xs font-bold" style={{ color: "var(--l-muted)" }}>
-                  Spaced Repetition Study Deck
+                  {t("spaced_rep")}
                 </div>
               </div>
 
@@ -507,10 +699,10 @@ export function FlashcardsPage() {
                         className="absolute inset-0 flex flex-col justify-between rounded-3xl p-8"
                         style={{
                           backfaceVisibility: "hidden",
-                          background: "#ffffff",
-                          border: "1px solid rgba(0,0,0,0.06)",
-                          boxShadow: "0 10px 30px rgba(0,0,0,0.04)",
-                          color: "#1e293b",
+                          background: "var(--l-surface)",
+                          border: "1px solid var(--l-border)",
+                          boxShadow: isDark ? "none" : "0 10px 30px rgba(0,0,0,0.04)",
+                          color: "var(--l-text)",
                         }}
                       >
                         {/* Front Card Header */}
@@ -521,22 +713,22 @@ export function FlashcardsPage() {
                               setHintVisible(!hintVisible);
                             }}
                             className="flex items-center gap-1 text-sm font-semibold hover:opacity-75"
-                            style={{ color: "#475569" }}
+                            style={{ color: "var(--l-text2)" }}
                           >
-                            <span style={{ fontSize: "16px" }}>💡</span> Get a hint
+                            <Lightbulb size={15} /> {t("get_hint")}
                           </button>
                           
                           <div className="flex items-center gap-4">
                             <button
-                              onClick={(e) => speakWord(dueCards[currentStudyIndex].targetWord, e)}
-                              className="p-2 rounded-full hover:bg-slate-50 transition-colors"
-                              style={{ color: "#475569" }}
+                              onClick={(e) => speakWord(dueCards[currentStudyIndex].targetWord, 'target', e)}
+                              className="p-2 rounded-full hover:bg-[var(--l-card-hover)] transition-colors"
+                              style={{ color: "var(--l-text2)" }}
                             >
                               <Volume2 size={18} />
                             </button>
                             <button
                               onClick={(e) => toggleStar(dueCards[currentStudyIndex]._id, e)}
-                              className="p-2 rounded-full hover:bg-slate-50 transition-colors"
+                              className="p-2 rounded-full hover:bg-[var(--l-card-hover)] transition-colors"
                               style={{ color: starredCards[dueCards[currentStudyIndex]._id] ? "#F59E0B" : "#94a3b8" }}
                             >
                               <Star size={18} fill={starredCards[dueCards[currentStudyIndex]._id] ? "#F59E0B" : "transparent"} />
@@ -546,19 +738,19 @@ export function FlashcardsPage() {
 
                         {/* Front Card Middle Text */}
                         <div className="flex-1 flex flex-col items-center justify-center">
-                          <div className="text-4xl sm:text-5xl font-medium tracking-tight text-center px-4" style={{ fontFamily: "'Outfit', 'Inter', sans-serif" }}>
+                          <div className="text-5xl sm:text-6xl font-bold tracking-tight text-center px-4" style={{ fontFamily: "'Outfit', 'Inter', sans-serif" }}>
                             {dueCards[currentStudyIndex].targetWord}
                           </div>
                           {hintVisible && (
-                            <div className="mt-6 text-sm font-medium px-4 py-2 rounded-xl bg-amber-50 border border-amber-100 text-amber-800 animate-fade-in">
+                            <div className={`mt-6 text-sm font-medium px-4 py-2 rounded-xl border animate-fade-in ${isDark ? 'bg-amber-500/10 border-amber-500/20 text-amber-200' : 'bg-amber-50 border-amber-100 text-amber-800'}`}>
                               {getHintText(dueCards[currentStudyIndex])}
                             </div>
                           )}
                         </div>
 
                         {/* Front Card Footer Tip */}
-                        <div className="text-center text-xs font-semibold text-slate-400">
-                          Click card to flip
+                        <div className="text-center text-xs font-semibold text-[var(--l-muted)]">
+                          {t("click_to_flip")}
                         </div>
                       </div>
 
@@ -568,28 +760,28 @@ export function FlashcardsPage() {
                         style={{
                           backfaceVisibility: "hidden",
                           transform: "rotateY(180deg)",
-                          background: "#ffffff",
-                          border: "1px solid rgba(0,0,0,0.06)",
-                          boxShadow: "0 10px 30px rgba(0,0,0,0.04)",
-                          color: "#1e293b",
+                          background: "var(--l-surface)",
+                          border: "1px solid var(--l-border)",
+                          boxShadow: isDark ? "none" : "0 10px 30px rgba(0,0,0,0.04)",
+                          color: "var(--l-text)",
                         }}
                       >
                         {/* Back Card Header */}
                         <div className="flex justify-between items-center w-full">
                           <div className="text-xs font-bold text-indigo-500 uppercase tracking-widest">
-                            Translation
+                            {t("translation_label")}
                           </div>
                           <div className="flex items-center gap-4">
                             <button
-                              onClick={(e) => speakWord(dueCards[currentStudyIndex].turkishTranslation, e)}
-                              className="p-2 rounded-full hover:bg-slate-50 transition-colors"
-                              style={{ color: "#475569" }}
+                              onClick={(e) => speakWord(dueCards[currentStudyIndex].turkishTranslation, 'tr', e)}
+                              className="p-2 rounded-full hover:bg-[var(--l-card-hover)] transition-colors"
+                              style={{ color: "var(--l-text2)" }}
                             >
                               <Volume2 size={18} />
                             </button>
                             <button
                               onClick={(e) => toggleStar(dueCards[currentStudyIndex]._id, e)}
-                              className="p-2 rounded-full hover:bg-slate-50 transition-colors"
+                              className="p-2 rounded-full hover:bg-[var(--l-card-hover)] transition-colors"
                               style={{ color: starredCards[dueCards[currentStudyIndex]._id] ? "#F59E0B" : "#94a3b8" }}
                             >
                               <Star size={18} fill={starredCards[dueCards[currentStudyIndex]._id] ? "#F59E0B" : "transparent"} />
@@ -599,28 +791,28 @@ export function FlashcardsPage() {
 
                         {/* Back Card Middle Text */}
                         <div className="flex-1 flex flex-col items-center justify-center overflow-y-auto max-h-[220px] py-4">
-                          <div className="text-3xl sm:text-4xl font-semibold tracking-tight text-center px-4 mb-4">
+                          <div className="text-4xl sm:text-5xl font-bold tracking-tight text-center px-4 mb-4">
                             {dueCards[currentStudyIndex].turkishTranslation}
                           </div>
                           
                           {dueCards[currentStudyIndex].exampleSentence && (
-                            <div className="w-full max-w-md p-3 rounded-xl bg-slate-50 text-left border border-slate-100 text-slate-700 mb-2">
-                              <div className="text-[10px] font-bold text-slate-400 uppercase mb-0.5">Example</div>
+                            <div className={`w-full max-w-md p-3 rounded-xl text-left border mb-2 ${isDark ? 'bg-slate-900/40 border-slate-800 text-slate-300' : 'bg-slate-50 border-slate-100 text-slate-700'}`}>
+                              <div className="text-[10px] font-bold text-slate-400 uppercase mb-0.5">{t("example_label")}</div>
                               <div className="text-xs italic">"{dueCards[currentStudyIndex].exampleSentence}"</div>
                             </div>
                           )}
 
                           {dueCards[currentStudyIndex].note && (
-                            <div className="w-full max-w-md p-3 rounded-xl bg-slate-50 text-left border border-slate-100 text-slate-700">
-                              <div className="text-[10px] font-bold text-slate-400 uppercase mb-0.5">Note</div>
+                            <div className={`w-full max-w-md p-3 rounded-xl text-left border ${isDark ? 'bg-slate-900/40 border-slate-800 text-slate-300' : 'bg-slate-50 border-slate-100 text-slate-700'}`}>
+                              <div className="text-[10px] font-bold text-slate-400 uppercase mb-0.5">{t("note_label")}</div>
                               <div className="text-xs">{dueCards[currentStudyIndex].note}</div>
                             </div>
                           )}
                         </div>
 
                         {/* Back Card Footer Tip */}
-                        <div className="text-center text-xs font-semibold text-slate-400">
-                          Click card to flip
+                        <div className="text-center text-xs font-semibold text-[var(--l-muted)]">
+                          {t("click_to_flip")}
                         </div>
                       </div>
 
@@ -629,11 +821,18 @@ export function FlashcardsPage() {
 
                   {/* Rating Buttons - Fades in below the card ONLY when card is flipped */}
                   <div className={`transition-all duration-300 overflow-hidden ${flipped ? 'opacity-100 max-h-48 mb-6' : 'opacity-0 max-h-0 pointer-events-none'}`}>
-                    <div className="p-4 rounded-2xl bg-white border border-slate-100 shadow-sm">
-                      <div className="text-center text-xs font-bold text-slate-500 mb-3 uppercase tracking-wider">How well did you know this word? (SM-2)</div>
+                    <div className="p-4 rounded-2xl bg-[var(--l-surface)] border border-[var(--l-border)] shadow-sm">
+                      <div className="text-center text-xs font-bold text-[var(--l-muted)] mb-3 uppercase tracking-wider">{t("how_well_knew_sm2")}</div>
                       <div className="grid grid-cols-6 gap-2">
-                        {SCORE_LABELS.map((label, i) => {
-                          const colors = [
+                        {SCORE_KEYS.map((key, i) => {
+                          const colors = isDark ? [
+                            { bg: "rgba(239, 68, 68, 0.15)", border: "rgba(239, 68, 68, 0.3)", text: "#F87171" },
+                            { bg: "rgba(217, 119, 6, 0.15)", border: "rgba(217, 119, 6, 0.3)", text: "#F59E0B" },
+                            { bg: "rgba(202, 138, 4, 0.15)", border: "rgba(202, 138, 4, 0.3)", text: "#FACC15" },
+                            { bg: "rgba(16, 185, 129, 0.15)", border: "rgba(16, 185, 129, 0.3)", text: "#34D399" },
+                            { bg: "rgba(8, 145, 178, 0.15)", border: "rgba(8, 145, 178, 0.3)", text: "#22D3EE" },
+                            { bg: "rgba(79, 70, 229, 0.15)", border: "rgba(79, 70, 229, 0.3)", text: "#818CF8" },
+                          ] : [
                             { bg: "#FEF2F2", border: "#FCA5A5", text: "#EF4444" },
                             { bg: "#FFFBEB", border: "#FCD34D", text: "#D97706" },
                             { bg: "#FEFCE8", border: "#FDE047", text: "#CA8A04" },
@@ -653,7 +852,7 @@ export function FlashcardsPage() {
                               style={{ background: c.bg, borderColor: c.border }}
                             >
                               <span style={{ fontSize: "16px", fontWeight: 800, color: c.text }}>{i}</span>
-                              <span style={{ fontSize: "9px", color: c.text, textAlign: "center", fontWeight: 700, lineHeight: 1.1, marginTop: "2px" }}>{label}</span>
+                              <span style={{ fontSize: "9px", color: c.text, textAlign: "center", fontWeight: 700, lineHeight: 1.1, marginTop: "2px" }}>{t(key)}</span>
                             </button>
                           );
                         })}
@@ -667,15 +866,15 @@ export function FlashcardsPage() {
                     <div className="flex items-center gap-1.5">
                       <button
                         onClick={toggleShuffle}
-                        className={`p-3 rounded-full transition-all ${isShuffled ? 'bg-indigo-50 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'}`}
-                        title="Shuffle Deck"
+                        className={`p-3 rounded-full transition-all ${isShuffled ? 'bg-indigo-500/15 text-indigo-500' : 'hover:bg-[var(--l-card-hover)] text-[var(--l-muted)]'}`}
+                        title={t("shuffle_deck")}
                       >
                         <Shuffle size={18} />
                       </button>
                       <button
                         onClick={() => setIsPlaying(!isPlaying)}
-                        className={`p-3 rounded-full transition-all ${isPlaying ? 'bg-indigo-50 text-indigo-600' : 'hover:bg-slate-100 text-slate-500'}`}
-                        title={isPlaying ? "Pause Slideshow" : "Play Slideshow"}
+                        className={`p-3 rounded-full transition-all ${isPlaying ? 'bg-indigo-500/15 text-indigo-500' : 'hover:bg-[var(--l-card-hover)] text-[var(--l-muted)]'}`}
+                        title={isPlaying ? t("pause_slideshow") : t("play_slideshow")}
                       >
                         {isPlaying ? <Pause size={18} /> : <Play size={18} />}
                       </button>
@@ -686,19 +885,19 @@ export function FlashcardsPage() {
                       <button
                         onClick={handlePrevCard}
                         disabled={currentStudyIndex === 0}
-                        className="p-3 rounded-full hover:bg-slate-100 disabled:opacity-30 disabled:pointer-events-none transition-colors text-slate-600"
+                        className="p-3 rounded-full hover:bg-[var(--l-card-hover)] disabled:opacity-30 disabled:pointer-events-none transition-colors text-[var(--l-muted)]"
                       >
                         <ArrowLeft size={20} />
                       </button>
                       
-                      <span className="text-sm font-semibold tracking-wide text-slate-600">
+                      <span className="text-sm font-semibold tracking-wide text-[var(--l-text2)]">
                         {currentStudyIndex + 1} / {dueCards.length}
                       </span>
 
                       <button
                         onClick={handleNextCard}
                         disabled={currentStudyIndex + 1 >= dueCards.length}
-                        className="p-3 rounded-full hover:bg-slate-100 disabled:opacity-30 disabled:pointer-events-none transition-colors text-slate-600 border border-slate-200"
+                        className="p-3 rounded-full hover:bg-[var(--l-card-hover)] disabled:opacity-30 disabled:pointer-events-none transition-colors text-[var(--l-muted)] border border-[var(--l-border)]"
                       >
                         <ArrowRight size={20} />
                       </button>
@@ -707,15 +906,15 @@ export function FlashcardsPage() {
                     {/* Fullscreen Button */}
                     <button
                       onClick={toggleFullscreen}
-                      className="p-3 rounded-full hover:bg-slate-100 transition-colors text-slate-500"
-                      title="Fullscreen Mode"
+                      className="p-3 rounded-full hover:bg-[var(--l-card-hover)] transition-colors text-[var(--l-muted)]"
+                      title={t("fullscreen_mode")}
                     >
                       <Maximize2 size={18} />
                     </button>
                   </div>
 
                   {/* Horizontal Linear Progress Bar */}
-                  <div className="w-full h-1 bg-slate-100 rounded-full overflow-hidden">
+                  <div className="w-full h-1.5 rounded-full overflow-hidden" style={{ background: "var(--l-border-subtle)" }}>
                     <div
                       className="h-full bg-indigo-500 rounded-full transition-all duration-300"
                       style={{ width: `${progressPercent}%` }}
@@ -734,58 +933,54 @@ export function FlashcardsPage() {
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.5)", backdropFilter: "blur(4px)" }}>
           <div className="w-full max-w-md p-6 rounded-2xl shadow-2xl animate-fade-in" style={{ background: "var(--l-surface)", border: "1px solid var(--l-border)" }}>
             <div className="flex justify-between items-center mb-4">
-              <h2 style={{ fontSize: "18px", fontWeight: 800 }}>{modal === "add" ? "Add New Flashcard" : "Edit Flashcard"}</h2>
-              <button onClick={() => setModal(null)} className="p-1.5 rounded-lg hover:bg-gray-100"><X size={16} /></button>
+              <h2 style={{ fontSize: "18px", fontWeight: 800 }}>{modal === "add" ? t("add_flashcard_modal") : t("edit_flashcard_modal")}</h2>
+              <button onClick={() => setModal(null)} className="p-1.5 rounded-lg hover:bg-[var(--l-card-hover)]"><X size={16} /></button>
             </div>
 
             <form onSubmit={handleSaveCard} className="space-y-4">
               <div>
-                <label className="block text-xs font-bold mb-1.5" style={{ color: "var(--l-muted)" }}>English Word</label>
+                <label className="block text-xs font-bold mb-1.5" style={{ color: "var(--l-muted)" }}>{t("english_word_label")}</label>
                 <input
                   type="text"
                   required
-                  placeholder="e.g. apple"
+                  placeholder={t("placeholder_target_word")}
                   value={formData.targetWord}
                   onChange={(e) => setFormData({ ...formData, targetWord: e.target.value })}
-                  className="w-full px-4 py-2.5 rounded-xl outline-none"
-                  style={{ background: "var(--l-input-bg)", border: "1px solid var(--l-border)", color: "var(--l-text)" }}
+                  className="form-input"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold mb-1.5" style={{ color: "var(--l-muted)" }}>Turkish Translation</label>
+                <label className="block text-xs font-bold mb-1.5" style={{ color: "var(--l-muted)" }}>{t("turkish_translation_label")}</label>
                 <input
                   type="text"
                   required
-                  placeholder="e.g. elma"
+                  placeholder={t("placeholder_translation")}
                   value={formData.turkishTranslation}
                   onChange={(e) => setFormData({ ...formData, turkishTranslation: e.target.value })}
-                  className="w-full px-4 py-2.5 rounded-xl outline-none"
-                  style={{ background: "var(--l-input-bg)", border: "1px solid var(--l-border)", color: "var(--l-text)" }}
+                  className="form-input"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold mb-1.5" style={{ color: "var(--l-muted)" }}>Example Sentence (Optional)</label>
+                <label className="block text-xs font-bold mb-1.5" style={{ color: "var(--l-muted)" }}>{t("example_sentence_optional")}</label>
                 <textarea
-                  placeholder="e.g. I eat an apple every day."
+                  placeholder={t("placeholder_example")}
                   value={formData.exampleSentence}
                   onChange={(e) => setFormData({ ...formData, exampleSentence: e.target.value })}
                   rows={2}
-                  className="w-full px-4 py-2 rounded-xl outline-none resize-none"
-                  style={{ background: "var(--l-input-bg)", border: "1px solid var(--l-border)", color: "var(--l-text)" }}
+                  className="form-textarea resize-none"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-bold mb-1.5" style={{ color: "var(--l-muted)" }}>Note (Optional)</label>
+                <label className="block text-xs font-bold mb-1.5" style={{ color: "var(--l-muted)" }}>{t("note_optional")}</label>
                 <input
                   type="text"
-                  placeholder="e.g. irregular plural, spelling tip"
+                  placeholder={t("placeholder_note")}
                   value={formData.note}
                   onChange={(e) => setFormData({ ...formData, note: e.target.value })}
-                  className="w-full px-4 py-2 rounded-xl outline-none"
-                  style={{ background: "var(--l-input-bg)", border: "1px solid var(--l-border)", color: "var(--l-text)" }}
+                  className="form-input"
                 />
               </div>
 
@@ -793,17 +988,15 @@ export function FlashcardsPage() {
                 <button
                   type="button"
                   onClick={() => setModal(null)}
-                  className="px-5 py-2.5 rounded-xl font-bold"
-                  style={{ background: "var(--l-surface3)" }}
+                  className="btn-secondary"
                 >
-                  Cancel
+                  {t("cancel")}
                 </button>
                 <button
                   type="submit"
-                  className="px-5 py-2.5 rounded-xl font-bold text-white"
-                  style={{ background: "linear-gradient(135deg, #6366F1, #8B5CF6)" }}
+                  className="btn-primary"
                 >
-                  Save Card
+                  {t("save_card")}
                 </button>
               </div>
             </form>
@@ -815,24 +1008,22 @@ export function FlashcardsPage() {
       {deleteConfirmId && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: "rgba(0,0,0,0.5)", backdropFilter: "blur(4px)" }}>
           <div className="w-full max-w-sm p-6 rounded-2xl shadow-2xl animate-fade-in" style={{ background: "var(--l-surface)", border: "1px solid var(--l-border)" }}>
-            <h3 style={{ fontSize: "16px", fontWeight: 800, marginBottom: "8px" }}>Delete Flashcard?</h3>
+            <h3 style={{ fontSize: "16px", fontWeight: 800, marginBottom: "8px" }}>{t("delete_flashcard_title")}</h3>
             <p style={{ fontSize: "13px", color: "var(--l-muted)", marginBottom: "20px" }}>
-              Are you sure you want to permanently delete this card from your deck? This action cannot be undone.
+              {t("delete_flashcard_warning")}
             </p>
             <div className="flex justify-end gap-3">
               <button
                 onClick={() => setDeleteConfirmId(null)}
-                className="px-4 py-2 rounded-xl font-bold"
-                style={{ background: "var(--l-surface3)" }}
+                className="btn-secondary"
               >
-                Cancel
+                {t("cancel")}
               </button>
               <button
                 onClick={() => deleteConfirmId && handleDeleteCard(deleteConfirmId)}
-                className="px-4 py-2 rounded-xl font-bold text-white"
-                style={{ background: "#EF4444" }}
+                className="btn-danger"
               >
-                Delete
+                {t("delete")}
               </button>
             </div>
           </div>

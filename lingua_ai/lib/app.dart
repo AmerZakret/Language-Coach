@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'core/theme/app_theme.dart';
 import 'core/routes/app_routes.dart';
 import 'services/auth_service.dart';
+import 'services/theme_service.dart';
 
 class LinguaAIApp extends StatelessWidget {
   const LinguaAIApp({super.key});
@@ -10,13 +11,21 @@ class LinguaAIApp extends StatelessWidget {
   Widget build(BuildContext context) {
     final auth = AuthService();
     final String initial = (auth.isLoggedIn || auth.isGuest) ? AppRoutes.home : AppRoutes.login;
+    final themeService = ThemeService();
 
-    return MaterialApp(
-      title: 'LinguAi',
-      debugShowCheckedModeBanner: false,
-      theme: AppTheme.lightTheme,
-      initialRoute: initial,
-      routes: AppRoutes.getRoutes(),
+    return ListenableBuilder(
+      listenable: themeService,
+      builder: (context, _) {
+        return MaterialApp(
+          title: 'LinguAi',
+          debugShowCheckedModeBanner: false,
+          theme: AppTheme.lightTheme,
+          darkTheme: AppTheme.darkTheme,
+          themeMode: themeService.isDarkMode ? ThemeMode.dark : ThemeMode.light,
+          initialRoute: initial,
+          routes: AppRoutes.getRoutes(),
+        );
+      },
     );
   }
 }

@@ -8,7 +8,10 @@ class FlashcardApiService {
   Future<Flashcard> createFlashcard(
     String userId,
     String targetWord,
-    String turkishTranslation, {
+    String turkishTranslation,
+    String targetLanguage, {
+    String? nativeLanguage,
+    String? nativeTranslation,
     String? exampleSentence,
     String? note,
   }) async {
@@ -28,6 +31,9 @@ class FlashcardApiService {
           'userId': userId,
           'targetWord': targetWord,
           'turkishTranslation': turkishTranslation,
+          'targetLanguage': targetLanguage,
+          if (nativeLanguage != null) 'nativeLanguage': nativeLanguage,
+          if (nativeTranslation != null) 'nativeTranslation': nativeTranslation,
           if (exampleSentence != null && exampleSentence.isNotEmpty) 'exampleSentence': exampleSentence,
           if (note != null && note.isNotEmpty) 'note': note,
         }),
@@ -47,6 +53,9 @@ class FlashcardApiService {
     String cardId,
     String targetWord,
     String turkishTranslation, {
+    String? targetLanguage,
+    String? nativeLanguage,
+    String? nativeTranslation,
     String? exampleSentence,
     String? note,
   }) async {
@@ -65,6 +74,9 @@ class FlashcardApiService {
         body: json.encode({
           'targetWord': targetWord,
           'turkishTranslation': turkishTranslation,
+          if (targetLanguage != null) 'targetLanguage': targetLanguage,
+          if (nativeLanguage != null) 'nativeLanguage': nativeLanguage,
+          if (nativeTranslation != null) 'nativeTranslation': nativeTranslation,
           if (exampleSentence != null && exampleSentence.isNotEmpty) 'exampleSentence': exampleSentence,
           if (note != null && note.isNotEmpty) 'note': note,
         }),
@@ -101,7 +113,7 @@ class FlashcardApiService {
     }
   }
 
-  Future<List<Flashcard>> getDueCards(String userId) async {
+  Future<List<Flashcard>> getDueCards(String userId, {String? targetLanguage}) async {
     try {
       final headers = <String, String>{};
       final token = AuthService().token;
@@ -109,8 +121,13 @@ class FlashcardApiService {
         headers['Authorization'] = 'Bearer $token';
       }
 
+      var url = '${ApiConfig.baseUrl}${ApiConfig.flashcards}/due?userId=$userId';
+      if (targetLanguage != null && targetLanguage.isNotEmpty) {
+        url += '&targetLanguage=$targetLanguage';
+      }
+
       final response = await http.get(
-        Uri.parse('${ApiConfig.baseUrl}${ApiConfig.flashcards}/due?userId=$userId'),
+        Uri.parse(url),
         headers: headers,
       );
 
@@ -125,7 +142,7 @@ class FlashcardApiService {
     }
   }
 
-  Future<List<Flashcard>> getAllCards(String userId) async {
+  Future<List<Flashcard>> getAllCards(String userId, {String? targetLanguage}) async {
     try {
       final headers = <String, String>{};
       final token = AuthService().token;
@@ -133,8 +150,13 @@ class FlashcardApiService {
         headers['Authorization'] = 'Bearer $token';
       }
 
+      var url = '${ApiConfig.baseUrl}${ApiConfig.flashcards}/all?userId=$userId';
+      if (targetLanguage != null && targetLanguage.isNotEmpty) {
+        url += '&targetLanguage=$targetLanguage';
+      }
+
       final response = await http.get(
-        Uri.parse('${ApiConfig.baseUrl}${ApiConfig.flashcards}/all?userId=$userId'),
+        Uri.parse(url),
         headers: headers,
       );
 

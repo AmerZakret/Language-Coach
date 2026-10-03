@@ -6,6 +6,7 @@ import '../../services/progress_service.dart';
 import '../../core/localization/language_service.dart';
 import '../../services/lesson_api_service.dart';
 import '../../services/sound_service.dart';
+import '../../services/theme_service.dart';
 
 class LessonScreen extends StatefulWidget {
   const LessonScreen({super.key});
@@ -101,7 +102,7 @@ class _LessonScreenState extends State<LessonScreen> {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: LanguageService(),
+      listenable: Listenable.merge([LanguageService(), ThemeService()]),
       builder: (context, child) {
         final lang = LanguageService();
         
@@ -119,12 +120,12 @@ class _LessonScreenState extends State<LessonScreen> {
         final isCorrect = isChecked && selectedAnswer == currentQuestion.correctAnswer;
 
         return Scaffold(
-          backgroundColor: Colors.white,
+          backgroundColor: AppTheme.backgroundColor,
           appBar: AppBar(
-            backgroundColor: Colors.white,
+            backgroundColor: AppTheme.surfaceColor,
             elevation: 0,
             leading: IconButton(
-              icon: const Icon(Icons.close_rounded, color: AppTheme.textSecondary),
+              icon: Icon(Icons.close_rounded, color: AppTheme.textSecondary),
               onPressed: () => Navigator.pop(context),
             ),
             title: ClipRRect(
@@ -144,7 +145,7 @@ class _LessonScreenState extends State<LessonScreen> {
                   padding: const EdgeInsets.only(right: 20),
                   child: Text(
                     '$currentNumber / $totalQuestions',
-                    style: const TextStyle(color: AppTheme.textSecondary, fontWeight: FontWeight.w800, fontSize: 13),
+                    style: TextStyle(color: AppTheme.textSecondary, fontWeight: FontWeight.w800, fontSize: 13),
                   ),
                 ),
               ),
@@ -161,7 +162,7 @@ class _LessonScreenState extends State<LessonScreen> {
                     children: [
                       Text(
                         lang.getString('translate_sentence'),
-                        style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: AppTheme.textPrimary, letterSpacing: -0.5),
+                        style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: AppTheme.textPrimary, letterSpacing: -0.5),
                       ),
                       const SizedBox(height: 32),
                       
@@ -169,13 +170,13 @@ class _LessonScreenState extends State<LessonScreen> {
                       Container(
                         padding: const EdgeInsets.all(32),
                         decoration: BoxDecoration(
-                          color: AppTheme.backgroundColor,
+                          color: ThemeService().isDarkMode ? AppTheme.surfaceColor : AppTheme.backgroundColor,
                           borderRadius: BorderRadius.circular(24),
-                          border: Border.all(color: Colors.grey.shade100),
+                          border: Border.all(color: ThemeService().isDarkMode ? Colors.white.withValues(alpha: 0.08) : Colors.grey.shade100),
                         ),
                         child: Text(
                           currentQuestion.question,
-                          style: const TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: AppTheme.textPrimary, height: 1.3),
+                          style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800, color: AppTheme.textPrimary, height: 1.3),
                           textAlign: TextAlign.center,
                         ),
                       ),
@@ -263,9 +264,9 @@ class _LessonScreenState extends State<LessonScreen> {
 
     return Container(
       padding: const EdgeInsets.all(24),
-      decoration: const BoxDecoration(
-        color: Colors.white,
-        border: Border(top: BorderSide(color: Color(0xFFF1F5F9))),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceColor,
+        border: Border(top: BorderSide(color: ThemeService().isDarkMode ? Colors.white.withValues(alpha: 0.08) : const Color(0xFFF1F5F9))),
       ),
       child: SafeArea(
         top: false,
@@ -276,7 +277,7 @@ class _LessonScreenState extends State<LessonScreen> {
             style: ElevatedButton.styleFrom(
               padding: const EdgeInsets.symmetric(vertical: 20),
               backgroundColor: AppTheme.primaryColor,
-              disabledBackgroundColor: Colors.grey.shade200,
+              disabledBackgroundColor: ThemeService().isDarkMode ? Colors.white.withValues(alpha: 0.05) : Colors.grey.shade200,
             ),
             child: const Text('CHECK', style: TextStyle(fontWeight: FontWeight.w900, fontSize: 16, letterSpacing: 1)),
           ),
@@ -288,19 +289,19 @@ class _LessonScreenState extends State<LessonScreen> {
   Widget _buildOption(String text, String correctAnswer) {
     final isSelected = selectedAnswer == text;
     
-    Color bgColor = Colors.white;
-    Color borderColor = const Color(0xFFE2E8F0);
+    Color bgColor = ThemeService().isDarkMode ? AppTheme.surfaceColor : Colors.white;
+    Color borderColor = ThemeService().isDarkMode ? Colors.white.withValues(alpha: 0.08) : const Color(0xFFE2E8F0);
     Color textColor = AppTheme.textPrimary;
 
     if (isChecked) {
       if (text == correctAnswer) {
-        bgColor = const Color(0xFFDCFCE7);
+        bgColor = ThemeService().isDarkMode ? const Color(0xFF0F3A20) : const Color(0xFFDCFCE7);
         borderColor = Colors.green;
-        textColor = Colors.green.shade900;
+        textColor = ThemeService().isDarkMode ? Colors.green.shade200 : Colors.green.shade900;
       } else if (isSelected) {
-        bgColor = const Color(0xFFFEE2E2);
+        bgColor = ThemeService().isDarkMode ? const Color(0xFF4A1515) : const Color(0xFFFEE2E2);
         borderColor = Colors.red;
-        textColor = Colors.red.shade900;
+        textColor = ThemeService().isDarkMode ? Colors.red.shade200 : Colors.red.shade900;
       }
     } else if (isSelected) {
       bgColor = AppTheme.primaryColor.withValues(alpha: 0.05);

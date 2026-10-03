@@ -6,6 +6,8 @@ import '../../core/localization/target_language_service.dart';
 import '../../widgets/bottom_nav_bar.dart';
 import '../../services/writing_api_service.dart';
 import '../../services/progress_service.dart';
+import '../../services/theme_service.dart';
+import '../../services/connectivity_service.dart';
 
 class WritingPracticeScreen extends StatefulWidget {
   const WritingPracticeScreen({super.key});
@@ -24,8 +26,8 @@ class _WritingPracticeScreenState extends State<WritingPracticeScreen> {
   WritingFeedback? _feedback;
   bool _xpAwarded = false;
 
-  // predefined topics per target language
-  static const Map<String, List<String>> _topics = {
+  // predefined topics per target language in English
+  static const Map<String, List<String>> _topicsEn = {
     'en': [
       'Write about your daily routine.',
       'Describe your family.',
@@ -55,9 +57,53 @@ class _WritingPracticeScreenState extends State<WritingPracticeScreen> {
     ],
   };
 
+  // predefined topics per target language in Turkish
+  static const Map<String, List<String>> _topicsTr = {
+    'en': [
+      'Günlük rutininiz hakkında yazın.',
+      'Ailenizi tanıtın.',
+      'En sevdiğiniz yemek hakkında yazın.',
+      'Son seyahatinizi anlatın.',
+      'Hobileriniz hakkında yazın.',
+    ],
+    'de': [
+      'Almanca dilinde günlük rutininiz hakkında yazın.',
+      'Almanca dilinde kendinizi tanıtın.',
+      'Almanca dilinde ailenizi anlatın.',
+    ],
+    'es': [
+      'İspanyolca dilinde günlük rutininiz hakkında yazın.',
+      'İspanyolca dilinde kendinizi tanıtın.',
+      'İspanyolca dilinde en sevdiğiniz yemek hakkında yazın.',
+    ],
+    'fr': [
+      'Fransızca dilinde kendinizi tanıtın.',
+      'Fransızca dilinde okulunuzu anlatın.',
+      'Fransızca dilinde hobileriniz hakkında yazın.',
+    ],
+    'ar': [
+      'Arapça dilinde kendinizi tanıtın.',
+      'Arapça dilinde ailenizi anlatın.',
+      'Arapça dilinde gününüzü anlatın.',
+    ],
+  };
+
+  String? _getLocalizedTopic(String interfaceLang, String targetLang, String? currentTopic) {
+    if (currentTopic == null) return null;
+    final listEn = _topicsEn[targetLang] ?? _topicsEn['en']!;
+    final index = listEn.indexOf(currentTopic);
+    if (index != -1) {
+      if (interfaceLang == 'tr') {
+        final listTr = _topicsTr[targetLang] ?? _topicsTr['en']!;
+        return listTr[index];
+      }
+    }
+    return currentTopic;
+  }
+
   void _suggestTopic() {
     final targetLang = TargetLanguageService().currentLanguage;
-    final list = _topics[targetLang] ?? _topics['en']!;
+    final list = _topicsEn[targetLang] ?? _topicsEn['en']!;
     setState(() {
       _currentTopic = list[_random.nextInt(list.length)];
       _feedback = null;
@@ -128,19 +174,70 @@ class _WritingPracticeScreenState extends State<WritingPracticeScreen> {
     super.dispose();
   }
 
+  Widget _buildOfflineScreen(LanguageService lang) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(32.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: Colors.orange.withValues(alpha: 0.1),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(
+                Icons.wifi_off_rounded,
+                size: 64,
+                color: Colors.orangeAccent,
+              ),
+            ),
+            const SizedBox(height: 24),
+            Text(
+              lang.getString('offline_mode'),
+              style: TextStyle(
+                fontSize: 20,
+                fontWeight: FontWeight.w900,
+                color: AppTheme.textPrimaryColor,
+              ),
+            ),
+            const SizedBox(height: 12),
+            Text(
+              lang.getString('offline_writing_desc'),
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                fontSize: 14,
+                height: 1.5,
+                color: AppTheme.textSecondaryColor,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: Listenable.merge([LanguageService(), TargetLanguageService()]),
+      listenable: Listenable.merge([
+        LanguageService(),
+        TargetLanguageService(),
+        ThemeService(),
+        ConnectivityService()
+      ]),
       builder: (context, child) {
         final lang = LanguageService();
         final targetLang = TargetLanguageService();
+        final isOffline = ConnectivityService().isOffline;
 
         return Scaffold(
           appBar: AppBar(
             title: Column(
               children: [
-                Text(lang.getString('writing_practice'), style: const TextStyle(fontWeight: FontWeight.w900)),
+                Text(lang.getString('writing_practice'), style: TextStyle(fontWeight: FontWeight.w900, color: AppTheme.textPrimary)),
                 const SizedBox(height: 2),
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
@@ -158,13 +255,15 @@ class _WritingPracticeScreenState extends State<WritingPracticeScreen> {
             centerTitle: true,
           ),
           body: SafeArea(
-            child: SingleChildScrollView(
-              physics: const BouncingScrollPhysics(),
-              padding: const EdgeInsets.all(24),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  _buildTopicSection(lang),
+            child: isOffline
+                ? _buildOfflineScreen(lang)
+                : SingleChildScrollView(
+                    physics: const BouncingScrollPhysics(),
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        _buildTopicSection(lang),
                   const SizedBox(height: 24),
 
                   _buildWritingInput(lang),
@@ -188,12 +287,12 @@ class _WritingPracticeScreenState extends State<WritingPracticeScreen> {
                           borderRadius: BorderRadius.circular(12),
                           border: Border.all(color: Colors.amber.shade200),
                         ),
-                        child: const Row(
+                        child: Row(
                           mainAxisAlignment: MainAxisAlignment.center,
                           children: [
-                            Icon(Icons.bolt_rounded, color: Colors.amber, size: 20),
-                            SizedBox(width: 8),
-                            Text('+10 XP Earned!', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: Colors.amber)),
+                            const Icon(Icons.bolt_rounded, color: Colors.amber, size: 20),
+                            const SizedBox(width: 8),
+                            Text(lang.getString('xp_earned_badge_plus'), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: Colors.amber)),
                           ],
                         ),
                       ),
@@ -219,14 +318,25 @@ class _WritingPracticeScreenState extends State<WritingPracticeScreen> {
   }
 
   Widget _buildTopicSection(LanguageService lang) {
+    final displayTopic = _getLocalizedTopic(
+      lang.currentLanguage,
+      TargetLanguageService().currentLanguage,
+      _currentTopic,
+    );
     return Container(
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
-        gradient: _currentTopic != null ? AppTheme.primaryGradient : null,
-        color: _currentTopic == null ? Colors.white : null,
+        gradient: _currentTopic != null ? AppTheme.premiumGradient : null,
+        color: _currentTopic == null ? AppTheme.surfaceColor : null,
         borderRadius: BorderRadius.circular(24),
         boxShadow: _currentTopic != null ? AppTheme.softShadow : AppTheme.cardShadow,
-        border: _currentTopic == null ? Border.all(color: Colors.grey.shade100) : null,
+        border: _currentTopic == null
+            ? Border.all(
+                color: ThemeService().isDarkMode
+                    ? Colors.white.withValues(alpha: 0.08)
+                    : Colors.grey.shade100,
+              )
+            : null,
       ),
       child: Column(
         children: [
@@ -237,7 +347,7 @@ class _WritingPracticeScreenState extends State<WritingPracticeScreen> {
             ),
             const SizedBox(height: 12),
             Text(
-              _currentTopic!,
+              displayTopic ?? _currentTopic!,
               style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w900, color: Colors.white, height: 1.3),
               textAlign: TextAlign.center,
             ),
@@ -256,7 +366,7 @@ class _WritingPracticeScreenState extends State<WritingPracticeScreen> {
             const SizedBox(height: 16),
             Text(
               lang.getString('suggest_topic'),
-              style: const TextStyle(fontSize: 15, color: AppTheme.textSecondaryColor, fontWeight: FontWeight.w600),
+              style: TextStyle(fontSize: 15, color: AppTheme.textSecondaryColor, fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 16),
             ElevatedButton(
@@ -273,19 +383,23 @@ class _WritingPracticeScreenState extends State<WritingPracticeScreen> {
   Widget _buildWritingInput(LanguageService lang) {
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppTheme.surfaceColor,
         borderRadius: BorderRadius.circular(24),
-        border: Border.all(color: Colors.grey.shade100),
+        border: Border.all(
+          color: ThemeService().isDarkMode
+              ? Colors.white.withValues(alpha: 0.08)
+              : Colors.grey.shade100,
+        ),
         boxShadow: AppTheme.cardShadow,
       ),
       child: TextField(
         controller: _writingController,
         maxLines: 6,
         maxLength: 500,
-        style: const TextStyle(fontSize: 16, color: AppTheme.textPrimaryColor, height: 1.5),
+        style: TextStyle(fontSize: 16, color: AppTheme.textPrimaryColor, height: 1.5),
         decoration: InputDecoration(
           hintText: lang.getString('write_answer'),
-          hintStyle: const TextStyle(color: AppTheme.textSecondaryColor),
+          hintStyle: TextStyle(color: AppTheme.textSecondaryColor),
           border: InputBorder.none,
           contentPadding: const EdgeInsets.all(20),
         ),
@@ -294,25 +408,30 @@ class _WritingPracticeScreenState extends State<WritingPracticeScreen> {
   }
 
   Widget _buildScoreCards(LanguageService lang) {
-    return Row(
+    return Wrap(
+      spacing: 12,
+      runSpacing: 12,
       children: [
-        Expanded(child: _buildScorePill(lang.getString('grammar'), _feedback!.grammarScore, Colors.blue)),
-        const SizedBox(width: 12),
-        Expanded(child: _buildScorePill(lang.getString('vocabulary'), _feedback!.vocabularyScore, Colors.orange)),
-        const SizedBox(width: 12),
-        Expanded(child: _buildScorePill(lang.getString('clarity'), _feedback!.clarityScore, AppTheme.secondaryColor)),
+        _buildScorePill(lang.getString('grammar'), _feedback!.grammarScore, Colors.blue),
+        _buildScorePill(lang.getString('vocabulary'), _feedback!.vocabularyScore, Colors.orange),
+        _buildScorePill(lang.getString('clarity'), _feedback!.clarityScore, AppTheme.secondaryColor),
       ],
     );
   }
 
   Widget _buildScorePill(String label, int score, Color color) {
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 20),
+      width: 100,
+      padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 8),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppTheme.surfaceColor,
         borderRadius: BorderRadius.circular(20),
         boxShadow: AppTheme.cardShadow,
-        border: Border.all(color: Colors.grey.shade100),
+        border: Border.all(
+          color: ThemeService().isDarkMode
+              ? Colors.white.withValues(alpha: 0.08)
+              : Colors.grey.shade100,
+        ),
       ),
       child: Column(
         children: [
@@ -323,8 +442,10 @@ class _WritingPracticeScreenState extends State<WritingPracticeScreen> {
           const SizedBox(height: 4),
           Text(
             label,
-            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.textSecondaryColor),
+            style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: AppTheme.textSecondaryColor),
             textAlign: TextAlign.center,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
           ),
         ],
       ),
@@ -335,9 +456,11 @@ class _WritingPracticeScreenState extends State<WritingPracticeScreen> {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: const Color(0xFFF0FDF4),
+        color: ThemeService().isDarkMode ? const Color(0xFF0F3A20) : const Color(0xFFF0FDF4),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.green.withValues(alpha: 0.2)),
+        border: Border.all(
+          color: Colors.green.withValues(alpha: ThemeService().isDarkMode ? 0.4 : 0.2),
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -349,7 +472,7 @@ class _WritingPracticeScreenState extends State<WritingPracticeScreen> {
           const SizedBox(height: 12),
           Text(
             _feedback!.correctedVersion,
-            style: const TextStyle(fontSize: 15, color: AppTheme.textPrimaryColor, height: 1.5, fontWeight: FontWeight.w500),
+            style: TextStyle(fontSize: 15, color: AppTheme.textPrimaryColor, height: 1.5, fontWeight: FontWeight.w500),
           ),
         ],
       ),
@@ -360,9 +483,13 @@ class _WritingPracticeScreenState extends State<WritingPracticeScreen> {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppTheme.surfaceColor,
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.grey.shade100),
+        border: Border.all(
+          color: ThemeService().isDarkMode
+              ? Colors.white.withValues(alpha: 0.08)
+              : Colors.grey.shade100,
+        ),
         boxShadow: AppTheme.cardShadow,
       ),
       child: Column(
@@ -375,7 +502,7 @@ class _WritingPracticeScreenState extends State<WritingPracticeScreen> {
           const SizedBox(height: 12),
           Text(
             _feedback!.overallFeedback,
-            style: const TextStyle(fontSize: 15, color: AppTheme.textPrimaryColor, height: 1.5),
+            style: TextStyle(fontSize: 15, color: AppTheme.textPrimaryColor, height: 1.5),
           ),
         ],
       ),
@@ -386,9 +513,11 @@ class _WritingPracticeScreenState extends State<WritingPracticeScreen> {
     return Container(
       padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        color: const Color(0xFFFEF2F2),
+        color: ThemeService().isDarkMode ? const Color(0xFF4A1515) : const Color(0xFFFEF2F2),
         borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: Colors.red.withValues(alpha: 0.2)),
+        border: Border.all(
+          color: Colors.red.withValues(alpha: ThemeService().isDarkMode ? 0.4 : 0.2),
+        ),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -400,7 +529,7 @@ class _WritingPracticeScreenState extends State<WritingPracticeScreen> {
           const SizedBox(height: 12),
           Text(
             _feedback!.mistakes,
-            style: const TextStyle(fontSize: 15, color: AppTheme.textPrimaryColor, height: 1.5),
+            style: TextStyle(fontSize: 15, color: AppTheme.textPrimaryColor, height: 1.5),
           ),
         ],
       ),

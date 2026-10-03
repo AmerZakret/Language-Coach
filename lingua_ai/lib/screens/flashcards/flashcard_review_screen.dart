@@ -6,6 +6,7 @@ import '../../core/localization/language_service.dart';
 import '../../core/localization/target_language_service.dart';
 import '../../models/flashcard.dart';
 import '../../services/flashcard_service.dart';
+import '../../services/theme_service.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 
 class FlashcardReviewScreen extends StatefulWidget {
@@ -189,9 +190,14 @@ class _FlashcardReviewScreenState extends State<FlashcardReviewScreen> with Sing
       key: const ValueKey('front'),
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppTheme.surfaceColor,
         borderRadius: BorderRadius.circular(32),
-        border: Border.all(color: Colors.grey.shade200, width: 1),
+        border: Border.all(
+          color: ThemeService().isDarkMode
+              ? Colors.white.withValues(alpha: 0.08)
+              : Colors.grey.shade200,
+          width: 1,
+        ),
         boxShadow: AppTheme.cardShadow,
       ),
       child: Column(
@@ -208,22 +214,22 @@ class _FlashcardReviewScreenState extends State<FlashcardReviewScreen> with Sing
                   });
                 },
                 icon: const Icon(Icons.lightbulb_outline_rounded, color: Colors.orange, size: 16),
-                label: const Text(
+                label: Text(
                   'Get a hint',
-                  style: TextStyle(color: AppTheme.textSecondaryColor, fontSize: 13, fontWeight: FontWeight.bold),
+                  style: TextStyle(color: AppTheme.textSecondary, fontSize: 13, fontWeight: FontWeight.bold),
                 ),
                 style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: Size.zero),
               ),
               Row(
                 children: [
                   IconButton(
-                    icon: const Icon(Icons.volume_up_rounded, color: AppTheme.textSecondaryColor, size: 20),
+                    icon: Icon(Icons.volume_up_rounded, color: AppTheme.textSecondary, size: 20),
                     onPressed: () => _speak(card.targetWord, 'en-US'),
                   ),
                   IconButton(
                     icon: Icon(
                       isStarred ? Icons.star_rounded : Icons.star_outline_rounded,
-                      color: isStarred ? Colors.amber : AppTheme.textSecondaryColor,
+                      color: isStarred ? Colors.amber : AppTheme.textSecondary,
                       size: 20,
                     ),
                     onPressed: () => _toggleStar(card.id),
@@ -240,10 +246,10 @@ class _FlashcardReviewScreenState extends State<FlashcardReviewScreen> with Sing
               children: [
                 Text(
                   card.targetWord,
-                  style: const TextStyle(
+                  style: TextStyle(
                     fontSize: 34,
                     fontWeight: FontWeight.w900,
-                    color: AppTheme.textPrimaryColor,
+                    color: AppTheme.textPrimary,
                     letterSpacing: -0.5,
                   ),
                   textAlign: TextAlign.center,
@@ -269,7 +275,7 @@ class _FlashcardReviewScreenState extends State<FlashcardReviewScreen> with Sing
           ),
 
           // Tap feedback
-          const Text(
+          Text(
             'Tap card to flip',
             style: TextStyle(fontSize: 11, color: AppTheme.textSecondaryColor, fontWeight: FontWeight.w600),
           ),
@@ -286,9 +292,14 @@ class _FlashcardReviewScreenState extends State<FlashcardReviewScreen> with Sing
       key: const ValueKey('back'),
       padding: const EdgeInsets.all(24),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppTheme.surfaceColor,
         borderRadius: BorderRadius.circular(32),
-        border: Border.all(color: Colors.grey.shade200, width: 1),
+        border: Border.all(
+          color: ThemeService().isDarkMode
+              ? Colors.white.withValues(alpha: 0.08)
+              : Colors.grey.shade200,
+          width: 1,
+        ),
         boxShadow: AppTheme.cardShadow,
       ),
       child: Column(
@@ -310,7 +321,7 @@ class _FlashcardReviewScreenState extends State<FlashcardReviewScreen> with Sing
               Row(
                 children: [
                   IconButton(
-                    icon: const Icon(Icons.volume_up_rounded, color: AppTheme.textSecondaryColor, size: 20),
+                    icon: Icon(Icons.volume_up_rounded, color: AppTheme.textSecondaryColor, size: 20),
                     onPressed: () => _speak(translation, 'tr-TR'),
                   ),
                   IconButton(
@@ -335,7 +346,7 @@ class _FlashcardReviewScreenState extends State<FlashcardReviewScreen> with Sing
                   const SizedBox(height: 12),
                   Text(
                     translation,
-                    style: const TextStyle(
+                    style: TextStyle(
                       fontSize: 28,
                       fontWeight: FontWeight.w900,
                       color: AppTheme.textPrimaryColor,
@@ -353,14 +364,14 @@ class _FlashcardReviewScreenState extends State<FlashcardReviewScreen> with Sing
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text(
+                          Text(
                             'Example',
                             style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: AppTheme.textSecondaryColor),
                           ),
                           const SizedBox(height: 2),
                           Text(
                             '"${card.exampleSentence}"',
-                            style: const TextStyle(fontSize: 12, fontStyle: FontStyle.italic, color: AppTheme.textPrimaryColor),
+                            style: TextStyle(fontSize: 12, fontStyle: FontStyle.italic, color: AppTheme.textPrimaryColor),
                           ),
                         ],
                       ),
@@ -376,14 +387,14 @@ class _FlashcardReviewScreenState extends State<FlashcardReviewScreen> with Sing
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text(
+                          Text(
                             'Note',
                             style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold, color: AppTheme.textSecondaryColor),
                           ),
                           const SizedBox(height: 2),
                           Text(
                             card.note!,
-                            style: const TextStyle(fontSize: 12, color: AppTheme.textPrimaryColor),
+                            style: TextStyle(fontSize: 12, color: AppTheme.textPrimaryColor),
                           ),
                         ],
                       ),
@@ -395,7 +406,7 @@ class _FlashcardReviewScreenState extends State<FlashcardReviewScreen> with Sing
           ),
 
           // Tap feedback
-          const Text(
+          Text(
             'Tap card to flip',
             style: TextStyle(fontSize: 11, color: AppTheme.textSecondaryColor, fontWeight: FontWeight.w600),
           ),
@@ -406,282 +417,288 @@ class _FlashcardReviewScreenState extends State<FlashcardReviewScreen> with Sing
 
   @override
   Widget build(BuildContext context) {
-    final lang = LanguageService();
-    final targetLang = TargetLanguageService();
+    return ListenableBuilder(
+      listenable: Listenable.merge([LanguageService(), TargetLanguageService(), ThemeService()]),
+      builder: (context, child) {
+        final lang = LanguageService();
+        final targetLang = TargetLanguageService();
 
-    if (_dueCards.isEmpty) {
-      return Scaffold(
-        body: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(32),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Container(
-                  width: 80,
-                  height: 80,
-                  decoration: const BoxDecoration(
-                    gradient: AppTheme.premiumGradient,
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(
-                    Icons.auto_awesome_rounded,
-                    color: Colors.white,
-                    size: 36,
-                  ),
-                ),
-                const SizedBox(height: 32),
-                Text(
-                  lang.getString('all_caught_up'),
-                  style: const TextStyle(
-                    fontSize: 26,
-                    fontWeight: FontWeight.w900,
-                    color: AppTheme.textPrimaryColor,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 12),
-                Text(
-                  lang.getString('no_cards_due'),
-                  style: const TextStyle(
-                    fontSize: 15,
-                    color: AppTheme.textSecondaryColor,
-                    fontWeight: FontWeight.w500,
-                    height: 1.5,
-                  ),
-                  textAlign: TextAlign.center,
-                ),
-                const SizedBox(height: 40),
-                SizedBox(
-                  width: double.infinity,
-                  height: 56,
-                  child: ElevatedButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: Text(
-                      lang.getString('back_to_dashboard'),
-                      style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+        if (_dueCards.isEmpty) {
+          return Scaffold(
+            body: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.all(32),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Container(
+                      width: 80,
+                      height: 80,
+                      decoration: BoxDecoration(
+                        gradient: AppTheme.premiumGradient,
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(
+                        Icons.auto_awesome_rounded,
+                        color: Colors.white,
+                        size: 36,
+                      ),
                     ),
-                  ),
+                    const SizedBox(height: 32),
+                    Text(
+                      lang.getString('all_caught_up'),
+                      style: TextStyle(
+                        fontSize: 26,
+                        fontWeight: FontWeight.w900,
+                        color: AppTheme.textPrimary,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 12),
+                    Text(
+                      lang.getString('no_cards_due'),
+                      style: TextStyle(
+                        fontSize: 15,
+                        color: AppTheme.textSecondary,
+                        fontWeight: FontWeight.w500,
+                        height: 1.5,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 40),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 56,
+                      child: ElevatedButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: Text(
+                          lang.getString('back_to_dashboard'),
+                          style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        }
+
+        if (_isDone) {
+          final avgScore = _results.isEmpty ? 0.0 : _results.reduce((a, b) => a + b) / _results.length;
+
+          return Scaffold(
+            body: SafeArea(
+              child: Padding(
+                padding: const EdgeInsets.all(32),
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Container(
+                      width: 80,
+                      height: 80,
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [AppTheme.accentColor, Colors.teal.shade400],
+                        ),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Icon(Icons.check_rounded, color: Colors.white, size: 40),
+                    ),
+                    const SizedBox(height: 32),
+                    Text(
+                      'Great Job!',
+                      style: TextStyle(fontSize: 28, fontWeight: FontWeight.w900, color: AppTheme.textPrimary),
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      "You've reviewed all ${_dueCards.length} cards for today.",
+                      style: TextStyle(fontSize: 15, color: AppTheme.textSecondary, fontWeight: FontWeight.w600),
+                    ),
+                    const SizedBox(height: 32),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
+                      decoration: BoxDecoration(
+                        color: AppTheme.accentColor.withValues(alpha: ThemeService().isDarkMode ? 0.15 : 0.1),
+                        border: Border.all(color: AppTheme.accentColor.withValues(alpha: ThemeService().isDarkMode ? 0.3 : 0.2)),
+                        borderRadius: BorderRadius.circular(24),
+                      ),
+                      child: Column(
+                        children: [
+                          Text(
+                            '${avgScore.toStringAsFixed(1)} / 5',
+                            style: const TextStyle(fontSize: 36, fontWeight: FontWeight.w900, color: AppTheme.accentColor),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            'Average Score',
+                            style: TextStyle(fontSize: 12, color: AppTheme.textSecondary, fontWeight: FontWeight.w700),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 48),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 56,
+                      child: ElevatedButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: Text(
+                          lang.getString('back_to_dashboard'),
+                          style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          );
+        }
+
+        final card = _dueCards[_currentIndex];
+        final progressVal = _dueCards.isNotEmpty ? _currentIndex / _dueCards.length : 0.0;
+
+        return Scaffold(
+          appBar: AppBar(
+            title: Column(
+              children: [
+                Text(
+                  lang.getString('flashcards'),
+                  style: TextStyle(fontWeight: FontWeight.w900, fontSize: 20, color: AppTheme.textPrimary),
+                ),
+                Text(
+                  '${_dueCards.length} due today',
+                  style: TextStyle(fontSize: 11, color: AppTheme.textSecondary, fontWeight: FontWeight.w600),
                 ),
               ],
             ),
+            iconTheme: IconThemeData(color: AppTheme.textPrimary),
           ),
-        ),
-      );
-    }
-
-    if (_isDone) {
-      final avgScore = _results.isEmpty ? 0.0 : _results.reduce((a, b) => a + b) / _results.length;
-
-      return Scaffold(
-        body: SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.all(32),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Container(
-                  width: 80,
-                  height: 80,
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      colors: [AppTheme.accentColor, Colors.teal.shade400],
-                    ),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(Icons.check_rounded, color: Colors.white, size: 40),
-                ),
-                const SizedBox(height: 32),
-                const Text(
-                  'Great Job!',
-                  style: TextStyle(fontSize: 28, fontWeight: FontWeight.w900, color: AppTheme.textPrimaryColor),
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  "You've reviewed all ${_dueCards.length} cards for today.",
-                  style: const TextStyle(fontSize: 15, color: AppTheme.textSecondaryColor, fontWeight: FontWeight.w600),
-                ),
-                const SizedBox(height: 32),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 32, vertical: 24),
-                  decoration: BoxDecoration(
-                    color: AppTheme.accentColor.withValues(alpha: 0.1),
-                    border: Border.all(color: AppTheme.accentColor.withValues(alpha: 0.2)),
-                    borderRadius: BorderRadius.circular(24),
-                  ),
-                  child: Column(
-                    children: [
-                      Text(
-                        '${avgScore.toStringAsFixed(1)} / 5',
-                        style: const TextStyle(fontSize: 36, fontWeight: FontWeight.w900, color: AppTheme.accentColor),
-                      ),
-                      const SizedBox(height: 4),
-                      const Text(
-                        'Average Score',
-                        style: TextStyle(fontSize: 12, color: AppTheme.textSecondaryColor, fontWeight: FontWeight.w700),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 48),
-                SizedBox(
-                  width: double.infinity,
-                  height: 56,
-                  child: ElevatedButton(
-                    onPressed: () => Navigator.pop(context),
-                    child: Text(
-                      lang.getString('back_to_dashboard'),
-                      style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      );
-    }
-
-    final card = _dueCards[_currentIndex];
-    final progressVal = _dueCards.isNotEmpty ? _currentIndex / _dueCards.length : 0.0;
-
-    return Scaffold(
-      appBar: AppBar(
-        title: Column(
-          children: [
-            Text(
-              lang.getString('flashcards'),
-              style: const TextStyle(fontWeight: FontWeight.w900, fontSize: 20),
-            ),
-            Text(
-              '${_dueCards.length} due today',
-              style: const TextStyle(fontSize: 11, color: AppTheme.textSecondaryColor, fontWeight: FontWeight.w600),
-            ),
-          ],
-        ),
-      ),
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
-              // Study Card Container
-              Expanded(
-                child: Center(
-                  child: GestureDetector(
-                    onTap: _toggleCard,
-                    child: AspectRatio(
-                      aspectRatio: 0.85,
-                      child: AnimatedBuilder(
-                        animation: _animation,
-                        builder: (context, child) {
-                          final angle = _animation.value * math.pi;
-                          final isBack = angle >= math.pi / 2;
-
-                          final transform = Matrix4.identity()
-                            ..setEntry(3, 2, 0.001) // perspective
-                            ..rotateY(angle);
-
-                          return Transform(
-                            transform: transform,
-                            alignment: Alignment.center,
-                            child: isBack
-                                ? Transform(
-                                    transform: Matrix4.rotationY(math.pi),
-                                    alignment: Alignment.center,
-                                    child: _buildCardBack(card),
-                                  )
-                                : _buildCardFront(card, targetLang.currentLanguage),
-                          );
-                        },
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 16),
-
-              // Rating Panel - Visible only when flipped
-              AnimatedSize(
-                duration: const Duration(milliseconds: 250),
-                child: Container(
-                  child: _isFlipped ? _buildRatingPanel(lang) : const SizedBox.shrink(),
-                ),
-              ),
-
-              // Controls Bar (Play, Shuffle, Prev, Next, Star)
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          body: SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Row(
-                    children: [
-                      IconButton(
-                        icon: Icon(
-                          _isShuffled ? Icons.shuffle_on_rounded : Icons.shuffle_rounded,
-                          color: _isShuffled ? AppTheme.primaryColor : AppTheme.textSecondaryColor,
+                  // Study Card Container
+                  Expanded(
+                    child: Center(
+                      child: GestureDetector(
+                        onTap: _toggleCard,
+                        child: AspectRatio(
+                          aspectRatio: 0.85,
+                          child: AnimatedBuilder(
+                            animation: _animation,
+                            builder: (context, child) {
+                              final angle = _animation.value * math.pi;
+                              final isBack = angle >= math.pi / 2;
+
+                              final transform = Matrix4.identity()
+                                ..setEntry(3, 2, 0.001) // perspective
+                                ..rotateY(angle);
+
+                              return Transform(
+                                transform: transform,
+                                alignment: Alignment.center,
+                                child: isBack
+                                    ? Transform(
+                                        transform: Matrix4.rotationY(math.pi),
+                                        alignment: Alignment.center,
+                                        child: _buildCardBack(card),
+                                      )
+                                    : _buildCardFront(card, targetLang.currentLanguage),
+                              );
+                            },
+                          ),
                         ),
-                        onPressed: _toggleShuffle,
                       ),
-                      IconButton(
-                        icon: Icon(
-                          _isPlaying ? Icons.pause_circle_filled_rounded : Icons.play_circle_fill_rounded,
-                          color: _isPlaying ? AppTheme.primaryColor : AppTheme.textSecondaryColor,
-                        ),
-                        onPressed: () {
-                          if (_isPlaying) {
-                            _stopSlideshow();
-                          } else {
-                            _startSlideshow();
-                          }
-                        },
-                      ),
-                    ],
+                    ),
                   ),
-                  
-                  // Centered Navigation Controls
-                  Row(
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.arrow_back_rounded),
-                        onPressed: _currentIndex > 0 ? _goPrevCard : null,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        '${_currentIndex + 1} / ${_dueCards.length}',
-                        style: const TextStyle(fontWeight: FontWeight.bold, color: AppTheme.textPrimaryColor),
-                      ),
-                      const SizedBox(width: 8),
-                      IconButton(
-                        icon: const Icon(Icons.arrow_forward_rounded),
-                        onPressed: _currentIndex + 1 < _dueCards.length ? _goNextCard : null,
-                      ),
-                    ],
+                  const SizedBox(height: 16),
+
+                  // Rating Panel - Visible only when flipped
+                  AnimatedSize(
+                    duration: const Duration(milliseconds: 250),
+                    child: Container(
+                      child: _isFlipped ? _buildRatingPanel(lang) : const SizedBox.shrink(),
+                    ),
                   ),
 
-                  // Empty slot to keep balance
-                  const SizedBox(width: 48),
+                  // Controls Bar (Play, Shuffle, Prev, Next, Star)
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Row(
+                        children: [
+                          IconButton(
+                            icon: Icon(
+                              _isShuffled ? Icons.shuffle_on_rounded : Icons.shuffle_rounded,
+                              color: _isShuffled ? AppTheme.primaryColor : AppTheme.textSecondary,
+                            ),
+                            onPressed: _toggleShuffle,
+                          ),
+                          IconButton(
+                            icon: Icon(
+                              _isPlaying ? Icons.pause_circle_filled_rounded : Icons.play_circle_fill_rounded,
+                              color: _isPlaying ? AppTheme.primaryColor : AppTheme.textSecondary,
+                            ),
+                            onPressed: () {
+                              if (_isPlaying) {
+                                _stopSlideshow();
+                              } else {
+                                _startSlideshow();
+                              }
+                            },
+                          ),
+                        ],
+                      ),
+                      
+                      // Centered Navigation Controls
+                      Row(
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.arrow_back_rounded),
+                            onPressed: _currentIndex > 0 ? _goPrevCard : null,
+                          ),
+                          const SizedBox(width: 8),
+                          Text(
+                            '${_currentIndex + 1} / ${_dueCards.length}',
+                            style: TextStyle(fontWeight: FontWeight.bold, color: AppTheme.textPrimary),
+                          ),
+                          const SizedBox(width: 8),
+                          IconButton(
+                            icon: const Icon(Icons.arrow_forward_rounded),
+                            onPressed: _currentIndex + 1 < _dueCards.length ? _goNextCard : null,
+                          ),
+                        ],
+                      ),
+
+                      // Empty slot to keep balance
+                      const SizedBox(width: 48),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+
+                  // Linear Progress Bar
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(10),
+                    child: LinearProgressIndicator(
+                      value: progressVal,
+                      minHeight: 6,
+                      backgroundColor: ThemeService().isDarkMode ? Colors.white12 : Colors.grey.shade200,
+                      valueColor: const AlwaysStoppedAnimation<Color>(AppTheme.primaryColor),
+                    ),
+                  ),
+                  const SizedBox(height: 8),
                 ],
               ),
-              const SizedBox(height: 12),
-
-              // Linear Progress Bar
-              ClipRRect(
-                borderRadius: BorderRadius.circular(10),
-                child: LinearProgressIndicator(
-                  value: progressVal,
-                  minHeight: 6,
-                  backgroundColor: Colors.grey.shade200,
-                  valueColor: const AlwaysStoppedAnimation<Color>(AppTheme.primaryColor),
-                ),
-              ),
-              const SizedBox(height: 8),
-            ],
+            ),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 
@@ -700,13 +717,19 @@ class _FlashcardReviewScreenState extends State<FlashcardReviewScreen> with Sing
       margin: const EdgeInsets.only(bottom: 16),
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
-        color: Colors.white,
+        color: AppTheme.surfaceColor,
         borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: ThemeService().isDarkMode
+              ? Colors.white.withValues(alpha: 0.08)
+              : Colors.grey.shade100,
+          width: 1,
+        ),
         boxShadow: AppTheme.cardShadow,
       ),
       child: Column(
         children: [
-          const Text(
+          Text(
             'How well did you know this word?',
             style: TextStyle(fontSize: 12, color: AppTheme.textSecondaryColor, fontWeight: FontWeight.bold),
           ),

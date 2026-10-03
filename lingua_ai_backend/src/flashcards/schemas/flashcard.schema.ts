@@ -12,6 +12,15 @@ export class Flashcard extends Document {
   @Prop({ required: true })
   turkishTranslation: string;
 
+  @Prop({ required: true })
+  targetLanguage: string;
+
+  @Prop({ required: false })
+  nativeLanguage?: string;
+
+  @Prop({ required: false })
+  nativeTranslation?: string;
+
   @Prop({ required: false })
   exampleSentence?: string;
 
@@ -41,4 +50,4 @@ export class Flashcard extends Document {
 }
 
 export const FlashcardSchema = SchemaFactory.createForClass(Flashcard);
-FlashcardSchema.index({ userId: 1, targetWord: 1 }, { unique: true });
+FlashcardSchema.index({ userId: 1, targetLanguage: 1, targetWord: 1 }, { unique: true });

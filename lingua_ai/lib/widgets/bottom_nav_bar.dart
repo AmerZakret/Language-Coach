@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../core/theme/app_theme.dart';
 import '../core/routes/app_routes.dart';
 import '../core/localization/language_service.dart';
+import '../services/theme_service.dart';
 
 class BottomNavBar extends StatelessWidget {
   final int currentIndex;
@@ -11,34 +12,41 @@ class BottomNavBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ListenableBuilder(
-      listenable: LanguageService(),
+      listenable: Listenable.merge([LanguageService(), ThemeService()]),
       builder: (context, child) {
         final lang = LanguageService();
-        return Container(
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: const BorderRadius.only(
-              topLeft: Radius.circular(32),
-              topRight: Radius.circular(32),
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withValues(alpha: 0.08),
-                blurRadius: 30,
-                offset: const Offset(0, -10),
+        final isDark = ThemeService().isDarkMode;
+        
+        return SafeArea(
+          top: false,
+          bottom: true,
+          child: Container(
+            margin: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0xFF0F111A) : Colors.white,
+              borderRadius: BorderRadius.circular(40),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: isDark ? 0.35 : 0.06),
+                  blurRadius: 20,
+                  offset: const Offset(0, 8),
+                ),
+              ],
+              border: Border.all(
+                color: isDark ? Colors.white.withValues(alpha: 0.06) : Colors.black.withValues(alpha: 0.04),
+                width: 1,
               ),
-            ],
-          ),
-          child: SafeArea(
+            ),
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+              padding: const EdgeInsets.all(8),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  _buildNavItem(context, imagePath: 'assets/images/apps.png', label: lang.getString('home'), index: 0, route: AppRoutes.home),
-                  _buildNavItem(context, imagePath: 'assets/images/writing.png', label: lang.getString('writing_practice').split(' ').first, index: 1, route: AppRoutes.writing),
-                  _buildNavItem(context, imagePath: 'assets/images/ai-coach-icon.png', label: lang.getString('ai_coach').split(' ').last, index: 2, route: AppRoutes.aiCoach),
-                  _buildNavItem(context, imagePath: 'assets/images/user.png', label: lang.getString('profile'), index: 3, route: AppRoutes.profile),
+                  _buildNavItem(context, icon: Icons.home_rounded, label: lang.getString('home'), index: 0, route: AppRoutes.home, isDark: isDark),
+                  _buildNavItem(context, icon: Icons.edit_note_rounded, label: lang.getString('writing_practice').split(' ').first, index: 1, route: AppRoutes.writing, isDark: isDark),
+                  _buildNavItem(context, icon: Icons.smart_toy_rounded, label: lang.getString('ai_coach').split(' ').last, index: 2, route: AppRoutes.aiCoach, isDark: isDark),
+                  _buildNavItem(context, icon: Icons.forum_rounded, label: lang.getString('community'), index: 3, route: AppRoutes.community, isDark: isDark),
+                  _buildNavItem(context, icon: Icons.person_rounded, label: lang.getString('profile'), index: 4, route: AppRoutes.profile, isDark: isDark),
                 ],
               ),
             ),
@@ -48,7 +56,13 @@ class BottomNavBar extends StatelessWidget {
     );
   }
 
-  Widget _buildNavItem(BuildContext context, {required String imagePath, required String label, required int index, required String route}) {
+  Widget _buildNavItem(BuildContext context, {
+    required IconData icon,
+    required String label,
+    required int index,
+    required String route,
+    required bool isDark,
+  }) {
     final isSelected = currentIndex == index;
     
     return GestureDetector(
@@ -59,35 +73,62 @@ class BottomNavBar extends StatelessWidget {
       },
       behavior: HitTestBehavior.opaque,
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 300),
-        curve: Curves.easeOutBack,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeInOut,
+        padding: isSelected
+            ? const EdgeInsets.all(4)
+            : EdgeInsets.zero,
         decoration: BoxDecoration(
-          color: isSelected ? AppTheme.primaryColor.withValues(alpha: 0.1) : Colors.transparent,
-          borderRadius: BorderRadius.circular(20),
+          color: isSelected
+              ? (isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9))
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(100),
         ),
-        child: Column(
+        child: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Opacity(
-              opacity: isSelected ? 1.0 : 0.5,
-              child: Image.asset(
-                imagePath,
-                width: 24,
-                height: 24,
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: isSelected
+                    ? AppTheme.secondaryColor // App theme purple
+                    : (isDark ? const Color(0xFF1A1F2C) : const Color(0xFFE2E8F0)),
+                shape: BoxShape.circle,
+              ),
+              child: Icon(
+                icon,
+                size: 20,
+                color: isSelected
+                    ? Colors.white // White for high contrast on purple
+                    : (isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)), // Muted for inactive icon
               ),
             ),
-            if (isSelected) ...[
-              const SizedBox(height: 4),
-              Text(
-                label,
-                style: const TextStyle(
-                  color: AppTheme.primaryColor,
-                  fontWeight: FontWeight.w800,
-                  fontSize: 12,
-                ),
-              ),
-            ]
+            AnimatedSize(
+              duration: const Duration(milliseconds: 250),
+              curve: Curves.easeInOut,
+              alignment: Alignment.centerLeft,
+              child: isSelected
+                  ? Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const SizedBox(width: 8),
+                        Padding(
+                          padding: const EdgeInsets.only(right: 12),
+                          child: Text(
+                            label,
+                            style: TextStyle(
+                              color: isDark ? Colors.white : const Color(0xFF0F172A),
+                              fontWeight: FontWeight.w800,
+                              fontSize: 13,
+                              letterSpacing: -0.01,
+                            ),
+                          ),
+                        ),
+                      ],
+                    )
+                  : const SizedBox.shrink(),
+            ),
           ],
         ),
       ),

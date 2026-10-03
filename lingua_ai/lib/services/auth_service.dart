@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-import 'progress_service.dart';
+import '../core/localization/target_language_service.dart';
+import 'user_api_service.dart';
 
 class AuthService extends ChangeNotifier {
   static final AuthService _instance = AuthService._internal();
@@ -34,6 +35,10 @@ class AuthService extends ChangeNotifier {
     _token = _prefs.getString('token') ?? '';
     
     notifyListeners();
+
+    if (_isLoggedIn && !_isGuest && _token.isNotEmpty) {
+      fetchLatestProfile();
+    }
   }
 
   // Returns null if input is valid, or an error message if invalid
@@ -59,6 +64,7 @@ class AuthService extends ChangeNotifier {
     required String email,
     required String token,
     required String id,
+    String? targetLanguage,
   }) {
     _isLoggedIn = true;
     _isGuest = false;
@@ -68,7 +74,31 @@ class AuthService extends ChangeNotifier {
     _token = token;
     
     _saveSession();
-    ProgressService().reloadProgress();
+
+    if (targetLanguage != null && targetLanguage.isNotEmpty) {
+      final shortCode = TargetLanguageService.toShortCode(targetLanguage);
+      TargetLanguageService().setLanguage(shortCode, syncToBackend: false);
+    }
+  }
+
+  void updateName(String newName) {
+    _currentUserName = newName;
+    _saveSession();
+  }
+
+  Future<void> fetchLatestProfile() async {
+    if (!_isLoggedIn || _isGuest || _token.isEmpty) return;
+    try {
+      final data = await UserApiService().fetchMe();
+      _currentUserName = data['name'] ?? _currentUserName;
+      _currentUserEmail = data['email'] ?? _currentUserEmail;
+      _currentUserId = data['id'] ?? _currentUserId;
+      
+      await _saveSession();
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Failed to fetch latest profile: $e');
+    }
   }
 
   void loginAsGuest() {
@@ -80,7 +110,6 @@ class AuthService extends ChangeNotifier {
     _token = '';
     
     _saveSession();
-    ProgressService().reloadProgress();
   }
 
   /// Sets a guest session with a real backend token, enabling
@@ -97,7 +126,6 @@ class AuthService extends ChangeNotifier {
     _token = token;
 
     _saveSession();
-    ProgressService().reloadProgress();
   }
 
   // Returns null if input is valid, or an error message if invalid
@@ -137,7 +165,6 @@ class AuthService extends ChangeNotifier {
     _prefs.remove('currentUserId');
     _prefs.remove('token');
     
-    ProgressService().reloadProgress();
     notifyListeners();
   }
 
