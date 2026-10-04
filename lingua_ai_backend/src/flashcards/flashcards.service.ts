@@ -72,11 +72,12 @@ export class FlashcardsService implements OnModuleInit {
    * Helper function to find a user profile in MongoDB by email or ObjectId.
    */
   private async findUser(userId: string): Promise<User | null> {
-    const queryEmail = userId === 'guest' ? 'guest@lingua.ai' : userId;
+    // Authenticated controllers supply the JWT user's MongoDB ID. Retain email
+    // lookup compatibility, but never map a literal guest to the shared account.
     const isObjectId = Types.ObjectId.isValid(userId);
     return this.userModel.findOne({
       $or: [
-        { email: queryEmail },
+        { email: userId },
         ...(isObjectId ? [{ _id: new Types.ObjectId(userId) }] : []),
       ],
     }).exec();

@@ -24,6 +24,29 @@ class AuthService extends ChangeNotifier {
   String get currentUserId => _currentUserId;
   String get token => _token;
 
+  /// Shared identity for local progress and flashcard storage, never displayed.
+  String get localStorageNamespace {
+    if (_isGuest) {
+      return _hasBackendGuestIdentity(_currentUserId, _currentUserEmail, _token)
+          ? 'guest_$_currentUserId'
+          : 'local_guest';
+    }
+    if (_isLoggedIn) {
+      if (_currentUserId.isNotEmpty) return 'registered_$_currentUserId';
+      if (_currentUserEmail.isNotEmpty) {
+        return 'registered_email_${Uri.encodeComponent(_currentUserEmail)}';
+      }
+    }
+    return 'local_guest';
+  }
+
+  /// Only registered caches have an attributable legacy email namespace.
+  /// The old shared guest cache must never be claimed by a new guest session.
+  String? get legacyRegisteredStorageNamespace =>
+      _isLoggedIn && !_isGuest && _currentUserEmail.isNotEmpty
+          ? _currentUserEmail.replaceAll('.', '_').replaceAll('@', '_')
+          : null;
+
   Future<void> init() async {
     _prefs = await SharedPreferences.getInstance();
     
@@ -33,6 +56,13 @@ class AuthService extends ChangeNotifier {
     _currentUserEmail = _prefs.getString('currentUserEmail') ?? '';
     _currentUserId = _prefs.getString('currentUserId') ?? '';
     _token = _prefs.getString('token') ?? '';
+
+    if (_isGuest && _token.isNotEmpty &&
+        !_hasBackendGuestIdentity(_currentUserId, _currentUserEmail, _token)) {
+      // Legacy or incomplete guest state cannot retain backend authorization.
+      await loginAsGuest();
+      return;
+    }
     
     notifyListeners();
 
@@ -101,7 +131,7 @@ class AuthService extends ChangeNotifier {
     }
   }
 
-  void loginAsGuest() {
+  Future<void> loginAsGuest() async {
     _isLoggedIn = false;
     _isGuest = true;
     _currentUserName = 'Guest User';
@@ -109,23 +139,34 @@ class AuthService extends ChangeNotifier {
     _currentUserId = 'guest';
     _token = '';
     
-    _saveSession();
+    await _saveSession();
   }
 
   /// Sets a guest session with a real backend token, enabling
   /// authenticated API access (flashcards, AI coach) for guests.
-  void setGuestSession({
+  Future<void> setGuestSession({
     required String token,
     required String id,
-  }) {
+    required String email,
+    String name = 'Guest User',
+  }) async {
+    if (!_hasBackendGuestIdentity(id, email, token)) {
+      throw ArgumentError('Backend guest session requires a valid identity and token');
+    }
     _isLoggedIn = false;
     _isGuest = true;
-    _currentUserName = 'Guest User';
-    _currentUserEmail = 'guest@lingua.ai';
+    _currentUserName = name;
+    _currentUserEmail = email;
     _currentUserId = id;
     _token = token;
 
-    _saveSession();
+    await _saveSession();
+  }
+
+  static bool _hasBackendGuestIdentity(String id, String email, String token) {
+    return RegExp(r'^[a-f\d]{24}$', caseSensitive: false).hasMatch(id)
+        && email.toLowerCase().endsWith('@guest.lingua.local')
+        && token.trim().isNotEmpty;
   }
 
   // Returns null if input is valid, or an error message if invalid
@@ -178,4 +219,3 @@ class AuthService extends ChangeNotifier {
     notifyListeners();
   }
 }
-

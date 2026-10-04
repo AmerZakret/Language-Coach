@@ -13,11 +13,17 @@ export class UsersService {
     return this.userModel.findOne({ email }).exec();
   }
 
-  async create(name: string, email: string, passwordHash: string): Promise<User> {
+  async create(
+    name: string,
+    email: string,
+    passwordHash: string,
+    isGuest = false,
+  ): Promise<User> {
     const user = new this.userModel({
       name,
       email,
       passwordHash,
+      isGuest,
       level: 'Beginner',
       totalXp: 0,
       streak: 0,

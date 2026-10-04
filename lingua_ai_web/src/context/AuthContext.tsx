@@ -14,6 +14,18 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+const localGuestUser: User = {
+  id: 'guest', name: 'Guest User', email: 'guest@lingua.ai', isGuest: true,
+};
+
+function isBackendGuestUser(value: unknown): value is User {
+  if (!value || typeof value !== 'object') return false;
+  const guest = value as Partial<User>;
+  return typeof guest.id === 'string' && /^[a-f\d]{24}$/i.test(guest.id)
+    && typeof guest.name === 'string' && typeof guest.email === 'string'
+    && guest.email.toLowerCase().endsWith('@guest.lingua.local');
+}
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
@@ -28,9 +40,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       if (storedIsGuest) {
         setIsGuest(true);
-        setUser({ id: 'guest', name: 'Guest User', email: 'guest@lingua.ai', isGuest: true });
-        if (storedToken) {
+        let restoredGuest: unknown = null;
+        try {
+          restoredGuest = storedUser ? JSON.parse(storedUser) : null;
+        } catch {
+          // Incomplete guest state must never retain backend authorization.
+        }
+        if (storedToken?.trim() && isBackendGuestUser(restoredGuest)) {
+          setUser({ ...restoredGuest, isGuest: true });
           setToken(storedToken);
+        } else {
+          localStorage.removeItem('linguaai_token');
+          localStorage.setItem('linguaai_user', JSON.stringify(localGuestUser));
+          setUser(localGuestUser);
+          setToken(null);
         }
       } else if (storedToken) {
         setToken(storedToken);
@@ -75,9 +98,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const loginAsGuest = async () => {
-    const guestUser: User = { id: 'guest', name: 'Guest User', email: 'guest@lingua.ai', isGuest: true };
-    localStorage.setItem('linguaai_is_guest', 'true');
-    localStorage.removeItem('linguaai_user');
+    let guestUser: User = localGuestUser;
+    let guestToken: string | null = null;
 
     // Try to get a real guest token from the backend
     try {
@@ -85,25 +107,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         `${import.meta.env.VITE_API_URL || 'http://localhost:3000'}/auth/guest`,
         { method: 'POST', headers: { 'Content-Type': 'application/json' } }
       );
-      if (response.ok) {
-        const data = await response.json();
-        const guestToken = data.access_token || '';
-        const backendUser = data.user || {};
-        guestUser.id = backendUser.id || 'guest';
-        localStorage.setItem('linguaai_token', guestToken);
-        setToken(guestToken);
-      } else {
-        // Server returned error — fall back to local guest
-        localStorage.removeItem('linguaai_token');
-        setToken(null);
+      if (!response.ok) throw new Error('Guest login failed');
+      const data = await response.json();
+      if (!isBackendGuestUser(data.user)
+        || typeof data.access_token !== 'string' || !data.access_token.trim()) {
+        throw new Error('Guest login returned an incomplete session');
       }
+      guestUser = { ...data.user, isGuest: true };
+      guestToken = data.access_token;
     } catch {
-      // Server unreachable — fall back to local guest
-      localStorage.removeItem('linguaai_token');
-      setToken(null);
+      // Backend unavailable or invalid response: use a local guest without a token.
     }
 
+    localStorage.setItem('linguaai_user', JSON.stringify(guestUser));
+    if (guestToken) {
+      localStorage.setItem('linguaai_token', guestToken);
+    } else {
+      localStorage.removeItem('linguaai_token');
+    }
+    localStorage.setItem('linguaai_is_guest', 'true');
+
     setUser(guestUser);
+    setToken(guestToken);
     setIsGuest(true);
   };
 

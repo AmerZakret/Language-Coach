@@ -4,7 +4,7 @@ import { DEFAULT_PROGRESS } from '../types/progress';
 import { useAuth } from './AuthContext';
 import { useNetwork } from './NetworkContext';
 import { useTargetLanguage } from './TargetLanguageContext';
-import { getUserProgressKey } from '../utils/userKey';
+import { getUserProgressKey, getLegacyRegisteredProgressKey } from '../utils/userKey';
 import { loadProgress, saveProgress, resetProgress as resetLocalProgress } from '../utils/progressStorage';
 import { fetchProgress, saveProgressToBackend, resetProgressInBackend } from '../api/progressApi';
 
@@ -19,16 +19,17 @@ interface ProgressContextType {
 const ProgressContext = createContext<ProgressContextType | undefined>(undefined);
 
 export const ProgressProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { user, isGuest } = useAuth();
+  const { user, isGuest, token } = useAuth();
   const { targetLanguage } = useTargetLanguage();
   const { isOffline } = useNetwork();
   const [progress, setProgress] = useState<ProgressState>(DEFAULT_PROGRESS);
 
-  const userKey = getUserProgressKey(user?.email, isGuest);
+  const userKey = getUserProgressKey(user, isGuest, token);
+  const legacyUserKey = getLegacyRegisteredProgressKey(user?.email, isGuest);
 
   const loadCurrentProgress = useCallback(async () => {
     // 1. Load local data (scoped by userKey + targetLanguage)
-    let current = loadProgress(userKey, targetLanguage);
+    let current = loadProgress(userKey, targetLanguage, legacyUserKey);
 
     // 2. If logged in and NOT guest, try to sync with backend
     const identifier = user?.id || user?.email;
@@ -69,7 +70,7 @@ export const ProgressProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
 
     setProgress(current);
-  }, [userKey, targetLanguage, user, isGuest]);
+  }, [userKey, legacyUserKey, targetLanguage, user, isGuest]);
 
   useEffect(() => {
     loadCurrentProgress();

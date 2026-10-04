@@ -52,10 +52,7 @@ class FlashcardService extends ChangeNotifier {
     final auth = AuthService();
     final targetLang = TargetLanguageService();
 
-    String userPart = 'guest';
-    if (auth.isLoggedIn && auth.currentUserEmail.isNotEmpty) {
-      userPart = auth.currentUserEmail.replaceAll('.', '_').replaceAll('@', '_');
-    }
+    final userPart = auth.localStorageNamespace;
 
     String langPart = targetLang.currentLanguage;
     return 'flashcards_${userPart}_${langPart}_$suffix';
@@ -94,8 +91,20 @@ class FlashcardService extends ChangeNotifier {
   }
 
   Future<void> reloadFlashcards() async {
+    final key = _getScopedKey('list');
     _cards = [];
-    final savedJson = _prefs.getString(_getScopedKey('list'));
+    final legacyUserPart = AuthService().legacyRegisteredStorageNamespace;
+    if (legacyUserPart != null) {
+      final lang = TargetLanguageService().currentLanguage;
+      final legacyKey = 'flashcards_${legacyUserPart}_${lang}_list';
+      if (!_prefs.containsKey(key)) {
+        final legacyJson = _prefs.getString(legacyKey);
+        if (legacyJson != null) await _prefs.setString(key, legacyJson);
+      }
+      if (_prefs.containsKey(key)) await _prefs.remove(legacyKey);
+    }
+    if (_getScopedKey('list') != key) return;
+    final savedJson = _prefs.getString(key);
     if (savedJson != null) {
       try {
         final List decoded = json.decode(savedJson);
