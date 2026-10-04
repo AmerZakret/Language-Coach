@@ -12,6 +12,9 @@ export class User extends Document {
   @Prop({ required: true })
   passwordHash: string;
 
+  @Prop({ default: false })
+  isGuest: boolean;
+
   @Prop({ default: 'Beginner' })
   level: string;
 

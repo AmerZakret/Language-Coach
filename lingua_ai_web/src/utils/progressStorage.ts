@@ -6,9 +6,19 @@ export const getProgressStorageKey = (userKey: string, targetLanguage: TargetLan
   return `progress_${userKey}_${targetLanguage}`;
 };
 
-export const loadProgress = (userKey: string, targetLanguage: TargetLanguage): ProgressState => {
+export const loadProgress = (userKey: string, targetLanguage: TargetLanguage, legacyRegisteredKey?: string): ProgressState => {
   const key = getProgressStorageKey(userKey, targetLanguage);
-  const saved = localStorage.getItem(key);
+  let saved = localStorage.getItem(key);
+  // Migrate only a registered user's attributable email cache, never shared guest data.
+  if (legacyRegisteredKey) {
+    const legacyKey = getProgressStorageKey(legacyRegisteredKey, targetLanguage);
+    if (saved === null) {
+      saved = localStorage.getItem(legacyKey);
+      if (saved !== null) localStorage.setItem(key, saved);
+    }
+    // Retire the legacy key so resetting progress cannot resurrect the old cache.
+    if (saved !== null) localStorage.removeItem(legacyKey);
+  }
   if (saved) {
     try {
       const parsed = JSON.parse(saved);

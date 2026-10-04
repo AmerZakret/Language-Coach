@@ -1,7 +1,10 @@
-import { Injectable, UnauthorizedException, ConflictException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, ConflictException, BadRequestException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
+import { randomUUID } from 'node:crypto';
 import { UsersService } from '../users/users.service';
 import * as bcrypt from 'bcrypt';
+
+const GUEST_EMAIL_SUFFIX = '@guest.lingua.local';
 
 @Injectable()
 export class AuthService {
@@ -9,6 +12,10 @@ export class AuthService {
     private readonly usersService: UsersService,  // User service for DB operations
     private readonly jwtService: JwtService,      // JWT service for token generation
   ) {}
+
+  private isGuestEmail(email: string): boolean {
+    return email.trim().toLowerCase().endsWith(GUEST_EMAIL_SUFFIX);
+  }
 
   /**
    * User Registration:
@@ -18,6 +25,9 @@ export class AuthService {
    * 4. Signs a JWT token containing email and userId (sub) and returns access token + profile.
    */
   async register(name: string, email: string, password: string) {
+    if (this.isGuestEmail(email)) {
+      throw new BadRequestException('This email domain is reserved for guest sessions');
+    }
     const existingUser = await this.usersService.findByEmail(email);
     if (existingUser) {
       throw new ConflictException('Email already registered');
@@ -51,8 +61,11 @@ export class AuthService {
    * 4. Signs and returns a fresh JWT access token.
    */
   async login(email: string, password: string) {
+    if (this.isGuestEmail(email)) {
+      throw new UnauthorizedException('Invalid credentials');
+    }
     const user = await this.usersService.findByEmail(email);
-    if (!user) {
+    if (!user || user.isGuest) {
       throw new UnauthorizedException('Invalid credentials');
     }
 
@@ -79,16 +92,16 @@ export class AuthService {
 
   /**
    * Guest Login Session Isolation:
-   * 1. Resolves/registers a lazy-loaded static guest account.
+   * 1. Creates a unique guest account for this session.
    * 2. Signs a JWT token mapped to this user session.
    * 3. Returns a guest profile layout.
    */
   async guest() {
-    const email = 'guest@lingua.ai';
-    let user = await this.usersService.findByEmail(email);
-    if (!user) {
-      user = await this.usersService.create('Guest User', email, 'placeholder-hash');
-    }
+    const email = `guest-${randomUUID()}${GUEST_EMAIL_SUFFIX}`;
+    // Deliberately not a bcrypt hash: guest accounts cannot use password login.
+    const user = await this.usersService.create(
+      'Guest User', email, '!guest-no-password!', true,
+    );
 
     const payload = { email: user.email, sub: user._id.toString() };
     return {
@@ -101,6 +114,7 @@ export class AuthService {
         totalXp: user.totalXp,
         streak: user.streak,
         targetLanguage: user.targetLanguage || 'English',
+        isGuest: true,
       },
     };
   }

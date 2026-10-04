@@ -86,14 +86,16 @@ class _LoginScreenState extends State<LoginScreen> {
     try {
       final response = await _apiService.loginGuest();
       final userData = response['user'] ?? {};
-      auth.setGuestSession(
-        token: response['access_token'] ?? '',
-        id: userData['id'] ?? 'guest',
+      await auth.setGuestSession(
+        token: response['access_token'] as String,
+        id: userData['id'] as String,
+        email: userData['email'] as String,
+        name: userData['name'] as String? ?? 'Guest User',
       );
     } catch (e) {
       // Server unreachable — fall back to local guest mode
       debugPrint('Guest login backend failed, falling back to local: $e');
-      auth.loginAsGuest();
+      await auth.loginAsGuest();
     }
 
     if (mounted) {

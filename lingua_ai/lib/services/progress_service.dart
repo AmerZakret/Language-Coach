@@ -36,16 +36,12 @@ class ProgressService extends ChangeNotifier {
     return 'Beginner';
   }
 
-  // Scopes keys by user (email or guest) and target language
+  // Scopes keys by authenticated identity (or local guest) and target language.
   String _getScopedKey(String suffix) {
     final auth = AuthService();
     final targetLang = TargetLanguageService();
     
-    // Identity part
-    String userPart = 'guest';
-    if (auth.isLoggedIn && auth.currentUserEmail.isNotEmpty) {
-      userPart = auth.currentUserEmail.replaceAll('.', '_').replaceAll('@', '_');
-    }
+    final userPart = auth.localStorageNamespace;
     
     // Language part
     String langPart = targetLang.currentLanguage;
@@ -79,6 +75,10 @@ class ProgressService extends ChangeNotifier {
 
   // Resets in-memory state and reloads from SharedPreferences for current user/language
   Future<void> reloadProgress() async {
+    final scopedKeys = {
+      for (final suffix in ['totalXp', 'streak', 'completedLessonIds', 'weeklyActivity'])
+        suffix: _getScopedKey(suffix),
+    };
     // 1. Reset in-memory state
     _totalXp = 0;
     _streak = 0;
@@ -86,6 +86,23 @@ class ProgressService extends ChangeNotifier {
     _weeklyActivity = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
 
     // 2. Load from scoped keys
+    final legacyUserPart = AuthService().legacyRegisteredStorageNamespace;
+    if (legacyUserPart != null) {
+      final lang = TargetLanguageService().currentLanguage;
+      for (final suffix in ['totalXp', 'streak', 'completedLessonIds', 'weeklyActivity']) {
+        final key = scopedKeys[suffix]!;
+        final legacyKey = 'progress_${legacyUserPart}_${lang}_$suffix';
+        if (!_prefs.containsKey(key)) {
+          final value = _prefs.get(legacyKey);
+          if (value is int) await _prefs.setInt(key, value);
+          if (value is List<String>) await _prefs.setStringList(key, value);
+        }
+        // Retiring the old key prevents a later reset from restoring old data.
+        if (_prefs.containsKey(key)) await _prefs.remove(legacyKey);
+      }
+    }
+    // Another auth/language listener may have reloaded while migration yielded.
+    if (_getScopedKey('totalXp') != scopedKeys['totalXp']) return;
     _totalXp = _prefs.getInt(_getScopedKey('totalXp')) ?? 0;
     _streak = _prefs.getInt(_getScopedKey('streak')) ?? 0;
 
@@ -240,24 +257,37 @@ class ProgressService extends ChangeNotifier {
   }
 
   Future<void> _saveLocalData() async {
-    await _prefs.setInt(_getScopedKey('totalXp'), _totalXp);
-    await _prefs.setInt(_getScopedKey('streak'), _streak);
+    // Capture keys and values before yielding so a session change cannot split
+    // this local write across two accounts.
+    final xpKey = _getScopedKey('totalXp');
+    final streakKey = _getScopedKey('streak');
+    final lessonsKey = _getScopedKey('completedLessonIds');
+    final activityKey = _getScopedKey('weeklyActivity');
+    final xp = _totalXp;
+    final streak = _streak;
+    final lessonIds = _completedLessonIds.toList();
+    final activity = _weeklyActivity.map((e) => e.toString()).toList();
+    await _prefs.setInt(xpKey, xp);
+    await _prefs.setInt(streakKey, streak);
     await _prefs.setStringList(
-        _getScopedKey('completedLessonIds'), _completedLessonIds.toList());
+        lessonsKey, lessonIds);
     await _prefs.setStringList(
-        _getScopedKey('weeklyActivity'), _weeklyActivity.map((e) => e.toString()).toList());
+        activityKey, activity);
   }
 
   Future<void> resetProgress() async {
+    final keys = [
+      for (final suffix in ['totalXp', 'streak', 'completedLessonIds', 'weeklyActivity'])
+        _getScopedKey(suffix),
+    ];
     _totalXp = 0;
     _streak = 0;
     _completedLessonIds.clear();
     _weeklyActivity = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
 
-    await _prefs.remove(_getScopedKey('totalXp'));
-    await _prefs.remove(_getScopedKey('streak'));
-    await _prefs.remove(_getScopedKey('completedLessonIds'));
-    await _prefs.remove(_getScopedKey('weeklyActivity'));
+    for (final key in keys) {
+      await _prefs.remove(key);
+    }
 
     notifyListeners();
   }
