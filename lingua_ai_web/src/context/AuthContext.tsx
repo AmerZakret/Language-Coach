@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import type { User } from '../types/auth';
 import { fetchMe } from '../api/authApi';
+import { advanceOfflineQueueSession, ensureOfflineQueueSessionRevision, getOfflineQueueSession } from '../utils/queueSession';
 
 interface AuthContextType {
   user: User | null;
@@ -34,9 +35,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     const initializeAuth = async () => {
+      ensureOfflineQueueSessionRevision();
       const storedUser = localStorage.getItem('linguaai_user');
       const storedToken = localStorage.getItem('linguaai_token');
       const storedIsGuest = localStorage.getItem('linguaai_is_guest') === 'true';
+      const revision = getOfflineQueueSession().revision;
+      const sessionUnchanged = () => getOfflineQueueSession().revision === revision
+        && localStorage.getItem('linguaai_token') === storedToken;
 
       if (storedIsGuest) {
         setIsGuest(true);
@@ -59,10 +64,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setToken(storedToken);
         try {
           const me = await fetchMe();
+          // Never pair an old profile's owner ID with the new session's token.
+          if (!sessionUnchanged()) { setLoading(false); return; }
           const mergedUser = { ...me, isGuest: false };
           setUser(mergedUser);
           localStorage.setItem('linguaai_user', JSON.stringify(mergedUser));
         } catch (e) {
+          if (!sessionUnchanged()) { setLoading(false); return; }
           // Fall back to local storage user if offline/error
           if (storedUser) {
             try {
@@ -89,6 +97,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   const login = (newUser: User, newToken: string) => {
+    advanceOfflineQueueSession();
     localStorage.setItem('linguaai_user', JSON.stringify(newUser));
     localStorage.setItem('linguaai_token', newToken);
     localStorage.removeItem('linguaai_is_guest');
@@ -119,6 +128,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // Backend unavailable or invalid response: use a local guest without a token.
     }
 
+    advanceOfflineQueueSession();
     localStorage.setItem('linguaai_user', JSON.stringify(guestUser));
     if (guestToken) {
       localStorage.setItem('linguaai_token', guestToken);
@@ -133,6 +143,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const logout = () => {
+    advanceOfflineQueueSession();
     localStorage.removeItem('linguaai_user');
     localStorage.removeItem('linguaai_token');
     localStorage.removeItem('linguaai_is_guest');

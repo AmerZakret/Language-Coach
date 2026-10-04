@@ -198,6 +198,7 @@ class ProgressService extends ChangeNotifier {
 
   void completeLesson(String lessonId, int xpReward, {int score = 100}) async {
     final auth = AuthService();
+    final ownerNamespace = auth.localStorageNamespace;
 
     if (!_completedLessonIds.contains(lessonId)) {
       final hasToken = auth.token.isNotEmpty;
@@ -231,7 +232,7 @@ class ProgressService extends ChangeNotifier {
           await OfflineQueueService().pushAction('complete-lesson', {
             'lessonId': lessonId,
             'score': score,
-          });
+          }, ownerNamespace: ownerNamespace);
           _completedLessonIds.add(lessonId);
           _totalXp += xpReward;
           _saveLocalData();

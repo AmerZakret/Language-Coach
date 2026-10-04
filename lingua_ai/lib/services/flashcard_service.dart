@@ -163,6 +163,7 @@ class FlashcardService extends ChangeNotifier {
   }) async {
     final auth = AuthService();
     final userId = auth.currentUserId.isNotEmpty ? auth.currentUserId : auth.currentUserEmail;
+    final ownerNamespace = auth.localStorageNamespace;
     final targetLang = TargetLanguageService().currentLanguage;
     final localId = 'local_${DateTime.now().microsecondsSinceEpoch}';
 
@@ -177,7 +178,7 @@ class FlashcardService extends ChangeNotifier {
           'targetLanguage': targetLang,
           'exampleSentence': exampleSentence,
           'note': note,
-        });
+        }, ownerNamespace: ownerNamespace);
         _createLocalCard(userId, targetWord, turkishTranslation, targetLang, exampleSentence, note, localId: localId);
         return;
       }
@@ -203,7 +204,7 @@ class FlashcardService extends ChangeNotifier {
           'targetLanguage': targetLang,
           'exampleSentence': exampleSentence,
           'note': note,
-        });
+        }, ownerNamespace: ownerNamespace);
         _createLocalCard(userId, targetWord, turkishTranslation, targetLang, exampleSentence, note, localId: localId);
       }
     } else {
@@ -252,6 +253,7 @@ class FlashcardService extends ChangeNotifier {
   }) async {
     final auth = AuthService();
     final isLocal = cardId.startsWith('local_') || auth.isGuest || !auth.isLoggedIn;
+    final ownerNamespace = auth.localStorageNamespace;
     final targetLang = TargetLanguageService().currentLanguage;
 
     if (!isLocal) {
@@ -264,7 +266,7 @@ class FlashcardService extends ChangeNotifier {
           'targetLanguage': targetLang,
           'exampleSentence': exampleSentence,
           'note': note,
-        });
+        }, ownerNamespace: ownerNamespace);
         _updateLocalCard(cardId, targetWord, turkishTranslation, targetLang, exampleSentence, note);
         return;
       }
@@ -293,7 +295,7 @@ class FlashcardService extends ChangeNotifier {
           'targetLanguage': targetLang,
           'exampleSentence': exampleSentence,
           'note': note,
-        });
+        }, ownerNamespace: ownerNamespace);
       }
     }
 
@@ -325,6 +327,7 @@ class FlashcardService extends ChangeNotifier {
 
   Future<void> deleteFlashcard(String cardId) async {
     final auth = AuthService();
+    final ownerNamespace = auth.localStorageNamespace;
     final isLocal = cardId.startsWith('local_') || auth.isGuest || !auth.isLoggedIn;
 
     if (!isLocal) {
@@ -332,7 +335,7 @@ class FlashcardService extends ChangeNotifier {
         debugPrint('Device is offline. Queueing deleteFlashcard.');
         await OfflineQueueService().pushAction('delete-flashcard', {
           'id': cardId,
-        });
+        }, ownerNamespace: ownerNamespace);
         _deleteLocalCard(cardId);
         return;
       }
@@ -345,7 +348,7 @@ class FlashcardService extends ChangeNotifier {
         debugPrint('Failed to delete flashcard on backend: $e. Queueing delete.');
         await OfflineQueueService().pushAction('delete-flashcard', {
           'id': cardId,
-        });
+        }, ownerNamespace: ownerNamespace);
       }
     }
 
@@ -360,6 +363,7 @@ class FlashcardService extends ChangeNotifier {
 
   Future<void> reviewCard(Flashcard card, int score) async {
     final auth = AuthService();
+    final ownerNamespace = auth.localStorageNamespace;
     final isLocal = card.id.startsWith('local_') || auth.isGuest || !auth.isLoggedIn;
 
     if (!isLocal) {
@@ -368,7 +372,7 @@ class FlashcardService extends ChangeNotifier {
         await OfflineQueueService().pushAction('review-flashcard', {
           'id': card.id,
           'score': score,
-        });
+        }, ownerNamespace: ownerNamespace);
         _reviewLocalCard(card, score);
         return;
       }
@@ -388,7 +392,7 @@ class FlashcardService extends ChangeNotifier {
         await OfflineQueueService().pushAction('review-flashcard', {
           'id': card.id,
           'score': score,
-        });
+        }, ownerNamespace: ownerNamespace);
       }
     }
 

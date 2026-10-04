@@ -48,11 +48,22 @@ async function mount(localStorage, fetch, fetchMe = async () => {
     createElement: (type, props) => ({ type, props }),
   };
   const module = { exports: {} };
+  const sessionModule = { exports: {} };
+  vm.runInNewContext(ts.transpileModule(
+    readFileSync(join(__dirname, '../src/utils/queueSession.ts'), 'utf8'),
+    { compilerOptions: { module: ts.ModuleKind.CommonJS } },
+  ).outputText, { module: sessionModule, exports: sessionModule.exports, localStorage,
+    require: name => {
+      if (name === './userKey') return keyModule.exports;
+      throw new Error(`Unexpected session import: ${name}`);
+    },
+  });
   vm.runInNewContext(compiled, {
     module, exports: module.exports, localStorage, fetch,
     require: name => {
       if (name === 'react') return react;
       if (name === '../api/authApi') return { fetchMe };
+      if (name === '../utils/queueSession') return sessionModule.exports;
       throw new Error(`Unexpected import: ${name}`);
     },
   });

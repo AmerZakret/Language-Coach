@@ -7,6 +7,7 @@ import { useTargetLanguage } from "../context/TargetLanguageContext";
 import apiClient from "../api/apiClient";
 import { useNetwork } from "../context/NetworkContext";
 import { pushToOfflineQueue, processOfflineQueue } from "../utils/offlineQueue";
+import { getUserProgressKey } from "../utils/userKey";
 
 interface CardData {
   _id: string;
@@ -46,7 +47,8 @@ const LANGUAGE_VOICES: Record<string, string> = {
 };
 
 export function FlashcardsPage() {
-  const { user, isGuest } = useAuth();
+  const { user, isGuest, token } = useAuth();
+  const queueOwner = getUserProgressKey(user, isGuest, token);
   const { isDark } = useTheme();
   const { t } = useLanguage();
   const { targetLanguage } = useTargetLanguage();
@@ -222,7 +224,7 @@ export function FlashcardsPage() {
           userId,
           targetLanguage,
           ...formData
-        });
+        }, queueOwner);
         showSuccess(t("flashcard_created"));
       } else if (modal === "edit" && selectedCard) {
         const updatedAll = allCards.map(c => c._id === selectedCard._id ? { ...c, ...formData } : c);
@@ -238,7 +240,7 @@ export function FlashcardsPage() {
           cardId: selectedCard._id,
           targetLanguage,
           ...formData
-        });
+        }, queueOwner);
         showSuccess(t("flashcard_updated"));
       }
       setModal(null);
@@ -279,7 +281,7 @@ export function FlashcardsPage() {
       localStorage.setItem(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(updatedAll));
       localStorage.setItem(`flashcards_due_${userId}_${targetLanguage}`, JSON.stringify(updatedDue));
       
-      pushToOfflineQueue('delete-flashcard', { cardId });
+      pushToOfflineQueue('delete-flashcard', { cardId }, queueOwner);
       showSuccess(t("flashcard_deleted"));
       setDeleteConfirmId(null);
       return;
@@ -354,7 +356,7 @@ export function FlashcardsPage() {
         setAllCards(updatedAll);
         localStorage.setItem(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(updatedAll));
 
-        pushToOfflineQueue('review-flashcard', { cardId: card._id, score });
+        pushToOfflineQueue('review-flashcard', { cardId: card._id, score }, queueOwner);
       } else {
         try {
           await apiClient.put(`/flashcards/${card._id}/review`, { score });

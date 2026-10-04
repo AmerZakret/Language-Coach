@@ -16,6 +16,7 @@ class AuthService extends ChangeNotifier {
   String _currentUserEmail = '';
   String _currentUserId = '';
   String _token = '';
+  int _sessionVersion = 0;
 
   bool get isLoggedIn => _isLoggedIn;
   bool get isGuest => _isGuest;
@@ -23,6 +24,7 @@ class AuthService extends ChangeNotifier {
   String get currentUserEmail => _currentUserEmail;
   String get currentUserId => _currentUserId;
   String get token => _token;
+  int get sessionVersion => _sessionVersion;
 
   /// Shared identity for local progress and flashcard storage, never displayed.
   String get localStorageNamespace {
@@ -48,6 +50,7 @@ class AuthService extends ChangeNotifier {
           : null;
 
   Future<void> init() async {
+    _sessionVersion++;
     _prefs = await SharedPreferences.getInstance();
     
     _isLoggedIn = _prefs.getBool('isLoggedIn') ?? false;
@@ -96,6 +99,7 @@ class AuthService extends ChangeNotifier {
     required String id,
     String? targetLanguage,
   }) {
+    _sessionVersion++;
     _isLoggedIn = true;
     _isGuest = false;
     _currentUserName = name;
@@ -118,8 +122,12 @@ class AuthService extends ChangeNotifier {
 
   Future<void> fetchLatestProfile() async {
     if (!_isLoggedIn || _isGuest || _token.isEmpty) return;
+    final version = _sessionVersion;
+    final sessionToken = _token;
     try {
       final data = await UserApiService().fetchMe();
+      // A stale profile must not pair the previous owner's ID with a new token.
+      if (_sessionVersion != version || _token != sessionToken) return;
       _currentUserName = data['name'] ?? _currentUserName;
       _currentUserEmail = data['email'] ?? _currentUserEmail;
       _currentUserId = data['id'] ?? _currentUserId;
@@ -132,6 +140,7 @@ class AuthService extends ChangeNotifier {
   }
 
   Future<void> loginAsGuest() async {
+    _sessionVersion++;
     _isLoggedIn = false;
     _isGuest = true;
     _currentUserName = 'Guest User';
@@ -153,6 +162,7 @@ class AuthService extends ChangeNotifier {
     if (!_hasBackendGuestIdentity(id, email, token)) {
       throw ArgumentError('Backend guest session requires a valid identity and token');
     }
+    _sessionVersion++;
     _isLoggedIn = false;
     _isGuest = true;
     _currentUserName = name;
@@ -192,6 +202,7 @@ class AuthService extends ChangeNotifier {
   }
 
   void logout() {
+    _sessionVersion++;
     _isLoggedIn = false;
     _isGuest = false;
     _currentUserName = '';
