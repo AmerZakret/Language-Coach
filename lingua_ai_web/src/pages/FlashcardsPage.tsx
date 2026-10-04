@@ -8,6 +8,8 @@ import apiClient from "../api/apiClient";
 import { useNetwork } from "../context/NetworkContext";
 import { pushToOfflineQueue, processOfflineQueue } from "../utils/offlineQueue";
 import { getUserProgressKey } from "../utils/userKey";
+import { useSessionGuard } from "../utils/useSessionGuard";
+import { getSessionRequestConfig } from "../utils/queueSession";
 
 interface CardData {
   _id: string;
@@ -52,15 +54,18 @@ export function FlashcardsPage() {
   const { isDark } = useTheme();
   const { t } = useLanguage();
   const { targetLanguage } = useTargetLanguage();
+  const captureContext = useSessionGuard(queueOwner, targetLanguage);
   const userId = user?.id || user?.email || (isGuest ? 'guest@lingua.ai' : 'unknown');
   const { isOffline } = useNetwork();
 
   useEffect(() => {
+    let cancelled = false;
+    const isCurrent = captureContext();
     const syncOfflineData = async () => {
       if (!isOffline && userId) {
         try {
           const success = await processOfflineQueue(userId);
-          if (success) {
+          if (success && !cancelled && isCurrent()) {
             fetchCards();
           }
         } catch (e) {
@@ -69,7 +74,8 @@ export function FlashcardsPage() {
       }
     };
     syncOfflineData();
-  }, [isOffline, userId]);
+    return () => { cancelled = true; };
+  }, [isOffline, userId, captureContext]);
 
   // View & Modal states
   const [view, setView] = useState<"list" | "study">("list");
@@ -113,8 +119,18 @@ export function FlashcardsPage() {
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   useEffect(() => {
+    setAllCards([]);
+    setDueCards([]);
+    setOriginalDueCards([]);
+    setModal(null);
+    setSelectedCard(null);
+    setDeleteConfirmId(null);
+    setSuccessMsg(null);
+    setIsPlaying(false);
+    setView('list');
+    setStudyResults([]);
     fetchCards();
-  }, [user, targetLanguage]);
+  }, [user, targetLanguage, captureContext]);
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -141,19 +157,25 @@ export function FlashcardsPage() {
   }, [isPlaying, flipped, currentStudyIndex, dueCards, view, studyFinished]);
 
   const fetchCards = async () => {
+    const isCurrent = captureContext();
+    if (!isCurrent()) return;
+    const requestConfig = getSessionRequestConfig();
     setLoading(true);
     setError(null);
     try {
-      const allRes = await apiClient.get(`/flashcards/all?userId=${userId}&targetLanguage=${targetLanguage}`);
+      const allRes = await apiClient.get(`/flashcards/all?userId=${userId}&targetLanguage=${targetLanguage}`, requestConfig);
+      if (!isCurrent()) return;
       setAllCards(allRes.data);
 
-      const dueRes = await apiClient.get(`/flashcards/due?userId=${userId}&targetLanguage=${targetLanguage}`);
+      const dueRes = await apiClient.get(`/flashcards/due?userId=${userId}&targetLanguage=${targetLanguage}`, requestConfig);
+      if (!isCurrent()) return;
       setDueCards(dueRes.data);
       setOriginalDueCards(dueRes.data);
 
       localStorage.setItem(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(allRes.data));
       localStorage.setItem(`flashcards_due_${userId}_${targetLanguage}`, JSON.stringify(dueRes.data));
     } catch (e) {
+      if (!isCurrent()) return;
       console.error("Failed to fetch cards from server, loading cached.", e);
       const cachedAll = localStorage.getItem(`flashcards_all_${userId}_${targetLanguage}`);
       const cachedDue = localStorage.getItem(`flashcards_due_${userId}_${targetLanguage}`);
@@ -164,9 +186,9 @@ export function FlashcardsPage() {
       }
       
       setError(t("offline_data"));
-      setTimeout(() => setError(null), 5000);
+      setTimeout(() => { if (isCurrent()) setError(null); }, 5000);
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   };
 
@@ -188,6 +210,9 @@ export function FlashcardsPage() {
 
   const handleSaveCard = async (e: React.FormEvent) => {
     e.preventDefault();
+    const isCurrent = captureContext();
+    if (!isCurrent()) return;
+    const requestConfig = getSessionRequestConfig();
     if (!formData.targetWord || !formData.turkishTranslation) {
       setError(t("field_required_error"));
       return;
@@ -253,24 +278,29 @@ export function FlashcardsPage() {
           userId,
           targetLanguage,
           ...formData,
-        });
+        }, requestConfig);
+        if (!isCurrent()) return;
         showSuccess(t("flashcard_created"));
       } else if (modal === "edit" && selectedCard) {
         await apiClient.put(`/flashcards/${selectedCard._id}`, {
           ...formData,
           targetLanguage,
-        });
+        }, requestConfig);
+        if (!isCurrent()) return;
         showSuccess(t("flashcard_updated"));
       }
       setModal(null);
       fetchCards();
     } catch (err: any) {
+      if (!isCurrent()) return;
       console.error("Failed to save card", err);
       setError(err.response?.data?.message || t("failed_save_card"));
     }
   };
 
   const handleDeleteCard = async (cardId: string) => {
+    const isCurrent = captureContext();
+    if (!isCurrent()) return;
     if (isOffline) {
       const updatedAll = allCards.filter(c => c._id !== cardId);
       const updatedDue = dueCards.filter(c => c._id !== cardId);
@@ -288,19 +318,23 @@ export function FlashcardsPage() {
     }
 
     try {
-      await apiClient.delete(`/flashcards/${cardId}`);
+      await apiClient.delete(`/flashcards/${cardId}`, getSessionRequestConfig());
+      if (!isCurrent()) return;
       showSuccess(t("flashcard_deleted"));
       setDeleteConfirmId(null);
       fetchCards();
     } catch (err: any) {
+      if (!isCurrent()) return;
       console.error("Failed to delete card", err);
       setError(t("failed_delete_card"));
     }
   };
 
   const showSuccess = (msg: string) => {
+    const isCurrent = captureContext();
+    if (!isCurrent()) return;
     setSuccessMsg(msg);
-    setTimeout(() => setSuccessMsg(null), 3000);
+    setTimeout(() => { if (isCurrent()) setSuccessMsg(null); }, 3000);
   };
 
   // Study functions
@@ -317,6 +351,8 @@ export function FlashcardsPage() {
   };
 
   const handleStudyScore = async (score: number, _manual: boolean = true) => {
+    const isCurrent = captureContext();
+    if (!isCurrent()) return;
     const card = dueCards[currentStudyIndex];
     if (card) {
       if (isOffline) {
@@ -359,13 +395,14 @@ export function FlashcardsPage() {
         pushToOfflineQueue('review-flashcard', { cardId: card._id, score }, queueOwner);
       } else {
         try {
-          await apiClient.put(`/flashcards/${card._id}/review`, { score });
+          await apiClient.put(`/flashcards/${card._id}/review`, { score }, getSessionRequestConfig());
         } catch (e) {
           console.error("Failed to save review to backend", e);
         }
       }
     }
 
+    if (!isCurrent()) return;
     setStudyResults((prev) => [...prev, score]);
     if (currentStudyIndex + 1 >= dueCards.length) {
       setStudyFinished(true);
@@ -378,6 +415,7 @@ export function FlashcardsPage() {
   };
 
   const speakWord = (text: string, langKey?: string, e?: React.MouseEvent) => {
+    const isCurrent = captureContext();
     if (e) e.stopPropagation();
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
@@ -388,7 +426,7 @@ export function FlashcardsPage() {
       window.speechSynthesis.speak(utterance);
     } else {
       setError(t("tts_unsupported"));
-      setTimeout(() => setError(null), 3000);
+      setTimeout(() => { if (isCurrent()) setError(null); }, 3000);
     }
   };
 
@@ -415,10 +453,11 @@ export function FlashcardsPage() {
   };
 
   const toggleFullscreen = () => {
+    const isCurrent = captureContext();
     const element = document.getElementById("study-container");
     if (!element) return;
     if (!document.fullscreenElement) {
-      element.requestFullscreen().then(() => setIsFullscreen(true)).catch(err => {
+      element.requestFullscreen().then(() => { if (isCurrent()) setIsFullscreen(true); }).catch(err => {
         console.error("Error entering fullscreen mode", err);
       });
     } else {

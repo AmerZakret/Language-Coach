@@ -8,6 +8,8 @@ import { useSound } from "../context/SoundContext";
 import { getLevelFromXp } from "../utils/levelUtils";
 import type { TargetLanguage } from "../types/language";
 import { updateProfile } from "../api/authApi";
+import { getUserProgressKey } from "../utils/userKey";
+import { useSessionGuard } from "../utils/useSessionGuard";
 
 const INTERFACE_LANGS = [
   { value: "en", label: "English" },
@@ -18,6 +20,7 @@ const TARGET_LANGS = ["English", "German", "Spanish", "French", "Arabic"];
 
 export function ProfilePage() {
   const { user, isGuest, logout, login, token } = useAuth();
+  const captureSession = useSessionGuard(getUserProgressKey(user, isGuest, token));
   const { language, setLanguage, t } = useLanguage();
   const { targetLanguage, setTargetLanguage } = useTargetLanguage();
   const { progress, resetProgress } = useProgress();
@@ -40,13 +43,16 @@ export function ProfilePage() {
   const userEmail = user?.email || 'guest@linguaai.com';
 
   const handleSave = async () => {
+    const isCurrent = captureSession();
+    if (!isCurrent()) return;
     try {
       if (name.trim() && name !== user?.name && !isGuest && token) {
         const updatedUser = await updateProfile({ name });
+        if (!isCurrent()) return;
         login({ ...updatedUser, isGuest: false }, token);
       }
       setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      setTimeout(() => { if (isCurrent()) setSaved(false); }, 2000);
     } catch (e) {
       console.error("Failed to update profile name", e);
     }

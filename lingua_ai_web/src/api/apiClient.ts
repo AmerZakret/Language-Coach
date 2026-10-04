@@ -1,6 +1,6 @@
 import axios from 'axios';
 import type { InternalAxiosRequestConfig } from 'axios';
-import { isOfflineQueueSessionActive } from '../utils/queueSession';
+import { isOfflineQueueSessionActive, isSessionCurrent } from '../utils/queueSession';
 import type { QueueSession } from '../utils/queueSession';
 
 const apiClient = axios.create({
@@ -23,6 +23,14 @@ apiClient.interceptors.request.use(
         throw new Error('Offline queue session changed before dispatch');
       }
       config.headers.Authorization = `Bearer ${queueSession.token}`;
+      return config;
+    }
+    const session = (config as InternalAxiosRequestConfig & {
+      sessionSnapshot?: QueueSession;
+    }).sessionSnapshot;
+    if (session) {
+      if (!isSessionCurrent(session)) throw new Error('Session changed before dispatch');
+      if (session.token) config.headers.Authorization = `Bearer ${session.token}`;
       return config;
     }
     const token = localStorage.getItem('linguaai_token');

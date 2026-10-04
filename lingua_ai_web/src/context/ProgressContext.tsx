@@ -7,6 +7,7 @@ import { useTargetLanguage } from './TargetLanguageContext';
 import { getUserProgressKey, getLegacyRegisteredProgressKey } from '../utils/userKey';
 import { loadProgress, saveProgress, resetProgress as resetLocalProgress } from '../utils/progressStorage';
 import { fetchProgress, saveProgressToBackend, resetProgressInBackend } from '../api/progressApi';
+import { useSessionGuard } from '../utils/useSessionGuard';
 
 interface ProgressContextType {
   progress: ProgressState;
@@ -26,8 +27,11 @@ export const ProgressProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const userKey = getUserProgressKey(user, isGuest, token);
   const legacyUserKey = getLegacyRegisteredProgressKey(user?.email, isGuest);
+  const captureContext = useSessionGuard(userKey, targetLanguage);
 
   const loadCurrentProgress = useCallback(async () => {
+    const isCurrent = captureContext();
+    if (!isCurrent()) return;
     // 1. Load local data (scoped by userKey + targetLanguage)
     let current = loadProgress(userKey, targetLanguage, legacyUserKey);
 
@@ -36,6 +40,7 @@ export const ProgressProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     if (user && !isGuest && identifier) {
       try {
         const backendData = await fetchProgress(identifier, targetLanguage);
+        if (!isCurrent()) return;
         if (backendData) {
           // Sync any offline progress to backend
           const backendLessonIds = backendData.completedLessonIds || [];
@@ -43,11 +48,14 @@ export const ProgressProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
           let syncedAny = false;
           for (const lessonId of unsyncedLessonIds) {
+            if (!isCurrent()) return;
             try {
               await saveProgressToBackend(identifier, lessonId, 100);
+              if (!isCurrent()) return;
               syncedAny = true;
               console.log(`Synced offline completion for lesson ${lessonId} to backend.`);
             } catch (e) {
+              if (!isCurrent()) return;
               console.error(`Failed to sync offline lesson ${lessonId} to backend`, e);
             }
           }
@@ -55,6 +63,7 @@ export const ProgressProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           if (syncedAny) {
             // Refetch after sync
             const updatedBackendData = await fetchProgress(identifier, targetLanguage);
+            if (!isCurrent()) return;
             if (updatedBackendData) {
               current = updatedBackendData;
             }
@@ -65,12 +74,13 @@ export const ProgressProvider: React.FC<{ children: React.ReactNode }> = ({ chil
           saveProgress(userKey, targetLanguage, current);
         }
       } catch (e) {
+        if (!isCurrent()) return;
         console.error('Failed to sync progress with backend', e);
       }
     }
 
-    setProgress(current);
-  }, [userKey, legacyUserKey, targetLanguage, user, isGuest]);
+    if (isCurrent()) setProgress(current);
+  }, [userKey, legacyUserKey, targetLanguage, user, isGuest, captureContext]);
 
   useEffect(() => {
     loadCurrentProgress();
@@ -83,7 +93,9 @@ export const ProgressProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   }, [isOffline, loadCurrentProgress]);
 
   const addXp = (amount: number) => {
+    const isCurrent = captureContext();
     setProgress(prev => {
+      if (!isCurrent()) return prev;
       const updated = { ...prev, totalXp: prev.totalXp + amount };
       saveProgress(userKey, targetLanguage, updated);
       return updated;
@@ -91,6 +103,8 @@ export const ProgressProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const completeLesson = async (lessonId: string, xpReward: number, score: number = 100) => {
+    const isCurrent = captureContext();
+    if (!isCurrent()) return;
     // Check if already completed in the current progress state
     if (progress.completedLessonIds.includes(lessonId)) {
        return;
@@ -103,13 +117,16 @@ export const ProgressProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     if (user && identifier && ((!isGuest) || hasToken)) {
       try {
         await saveProgressToBackend(identifier, lessonId, score);
+        if (!isCurrent()) return;
         // Successful sync! Reload progress from backend to get official calculated XP and level
         const backendData = await fetchProgress(identifier, targetLanguage);
+        if (!isCurrent()) return;
         if (backendData) {
           setProgress(backendData);
           saveProgress(userKey, targetLanguage, backendData);
         }
       } catch (e) {
+        if (!isCurrent()) return;
         console.error('Failed to sync lesson completion to backend, falling back to local update', e);
         // If offline/error, fall back to local update
         const updated = {
@@ -133,6 +150,8 @@ export const ProgressProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const handleResetProgress = async () => {
+    const isCurrent = captureContext();
+    if (!isCurrent()) return;
     // 1. Clear local progress storage
     resetLocalProgress(userKey, targetLanguage);
 
@@ -147,7 +166,7 @@ export const ProgressProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     }
 
     // 3. Reset in-memory state
-    setProgress(DEFAULT_PROGRESS);
+    if (isCurrent()) setProgress(DEFAULT_PROGRESS);
   };
 
   return (

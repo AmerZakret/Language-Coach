@@ -5,6 +5,8 @@ import { useAuth } from "../../context/AuthContext";
 import { login as apiLogin, register as apiRegister } from "../../api/authApi";
 import { useLanguage } from "../../context/LanguageContext";
 import logoImg from "../../assets/images/language-learning.png";
+import { getUserProgressKey } from "../../utils/userKey";
+import { useSessionGuard } from "../../utils/useSessionGuard";
 
 interface AuthPageProps {
   initialMode: "login" | "register";
@@ -20,11 +22,14 @@ export function AuthPage({ initialMode }: AuthPageProps) {
   const [loading, setLoading] = useState(false);
 
   const navigate = useNavigate();
-  const { login, loginAsGuest } = useAuth();
+  const { login, loginAsGuest, user, isGuest, token } = useAuth();
+  const captureSession = useSessionGuard(getUserProgressKey(user, isGuest, token));
   const { t } = useLanguage();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const isCurrent = captureSession();
+    if (!isCurrent()) return;
     setError("");
     setLoading(true);
 
@@ -35,9 +40,11 @@ export function AuthPage({ initialMode }: AuthPageProps) {
       } else {
         data = await apiRegister(name, email, password);
       }
+      if (!isCurrent()) return;
       login(data.user, data.access_token);
       navigate("/");
     } catch (err: any) {
+      if (!isCurrent()) return;
       let errorMessage = mode === "login" ? t("login_failed") : t("registration_failed");
       if (err.response?.data?.message) {
         errorMessage = Array.isArray(err.response.data.message)
@@ -46,7 +53,7 @@ export function AuthPage({ initialMode }: AuthPageProps) {
       }
       setError(errorMessage);
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   };
 

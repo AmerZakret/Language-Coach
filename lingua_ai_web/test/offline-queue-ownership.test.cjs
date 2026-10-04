@@ -48,6 +48,11 @@ function harness(saved = storage()) {
   const react = {
     createContext: () => ({ Provider: Symbol('provider') }),
     useContext: () => {},
+    useRef: initial => {
+      const index = cursor++;
+      if (!(index in state)) state[index] = { current: initial };
+      return state[index];
+    },
     useState: initial => {
       const index = cursor++;
       if (!(index in state)) state[index] = initial;
@@ -73,6 +78,8 @@ function harness(saved = storage()) {
     });
   }
   transport.post = (url, data, config) => request('post', url, data, config);
+  transport.get = (url, config) => request('get', url, undefined, config);
+  transport.patch = (url, data, config) => request('patch', url, data, config);
   transport.put = (url, data, config) => request('put', url, data, config);
   transport.delete = (url, config) => request('delete', url, undefined, config);
 
@@ -80,6 +87,7 @@ function harness(saved = storage()) {
     userKey: 'utils/userKey.ts', queueSession: 'utils/queueSession.ts',
     apiClient: 'api/apiClient.ts', offlineQueue: 'utils/offlineQueue.ts',
     auth: 'context/AuthContext.tsx',
+    authApi: 'api/authApi.ts', progressApi: 'api/progressApi.ts',
   };
   function load(name) {
     if (modules.has(name)) return modules.get(name).exports;
@@ -122,7 +130,8 @@ function harness(saved = storage()) {
   const enqueue = (type = 'complete-lesson', data = payload) => {
     queue.pushToOfflineQueue(type, data, session.getOfflineQueueSession().ownerNamespace);
   };
-  return { saved, requests, control, queue, session, auth, mount, enqueue };
+  return { saved, requests, control, queue, session, auth, mount, enqueue,
+    authApi: load('authApi'), progressApi: load('progressApi'), client: load('apiClient').default };
 }
 
 test('registered A logout, B isolation, and A recovery preserve owner queues', async () => {
@@ -313,3 +322,21 @@ test('late auth profile cannot replace B owner with A while retaining B credenti
   assert.equal(await h.queue.processOfflineQueue(B), true);
   assert.equal(h.requests[0].headers.Authorization, `Bearer test-${B}`);
 });
+
+for (const operation of ['profile-fetch', 'profile-update', 'progress-fetch', 'lesson-complete', 'progress-reset', 'card-fetch']) {
+  test(`ordinary ${operation} request cannot pick up B token before dispatch`, async () => {
+    const h = harness(); await h.mount(); h.auth().login(user(A), `test-${A}`);
+    const send = {
+      'profile-fetch': () => h.authApi.fetchMe(),
+      'profile-update': () => h.authApi.updateProfile({ name: 'A name' }),
+      'progress-fetch': () => h.progressApi.fetchProgress(A, 'English'),
+      'lesson-complete': () => h.progressApi.saveProgressToBackend(A, 'lesson', 4),
+      'progress-reset': () => h.progressApi.resetProgressInBackend(A),
+      'card-fetch': () => h.client.get(`/flashcards/all?userId=${A}`, h.session.getSessionRequestConfig()),
+    }[operation];
+    const pending = send(); h.auth().logout(); h.auth().login(user(B), `test-${B}`);
+    if (operation === 'progress-fetch') assert.equal(await pending, null);
+    else await assert.rejects(pending, /Session changed before dispatch/);
+    assert.equal(h.requests.length, 0);
+  });
+}

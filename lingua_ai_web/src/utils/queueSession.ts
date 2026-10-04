@@ -1,5 +1,6 @@
 import { getUserProgressKey } from './userKey';
 import type { User } from '../types/auth';
+import type { AxiosRequestConfig } from 'axios';
 
 const SESSION_REVISION_KEY = 'linguaai_session_revision';
 
@@ -35,10 +36,18 @@ export function getOfflineQueueSession(): QueueSession {
   };
 }
 
-export function isOfflineQueueSessionActive(session: QueueSession): boolean {
+export function isSessionCurrent(session: QueueSession): boolean {
   const active = getOfflineQueueSession();
-  return session.ownerNamespace !== 'local_guest' && !!session.token.trim()
-    && !!session.userId && active.ownerNamespace === session.ownerNamespace
+  return active.ownerNamespace === session.ownerNamespace
     && active.userId === session.userId && active.token === session.token
     && active.revision === session.revision;
+}
+
+export function getSessionRequestConfig(): AxiosRequestConfig & { sessionSnapshot: QueueSession } {
+  return { sessionSnapshot: getOfflineQueueSession() };
+}
+
+export function isOfflineQueueSessionActive(session: QueueSession): boolean {
+  return session.ownerNamespace !== 'local_guest' && !!session.token.trim()
+    && !!session.userId && isSessionCurrent(session);
 }

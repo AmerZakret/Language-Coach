@@ -3,6 +3,22 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../core/localization/target_language_service.dart';
 import 'user_api_service.dart';
 
+/// Captured identity for asynchronous work; valid for local-only sessions too.
+class SessionSnapshot {
+  final int revision;
+  final String ownerNamespace;
+  final String userId;
+  final String _token;
+  SessionSnapshot._(this.revision, this.ownerNamespace, this.userId, this._token);
+
+  bool get isCurrent {
+    final auth = AuthService();
+    return auth.sessionVersion == revision &&
+        auth.localStorageNamespace == ownerNamespace &&
+        auth.currentUserId == userId && auth.token == _token;
+  }
+}
+
 class AuthService extends ChangeNotifier {
   static final AuthService _instance = AuthService._internal();
   factory AuthService() => _instance;
@@ -25,6 +41,8 @@ class AuthService extends ChangeNotifier {
   String get currentUserId => _currentUserId;
   String get token => _token;
   int get sessionVersion => _sessionVersion;
+  SessionSnapshot captureSession() => SessionSnapshot._(
+      _sessionVersion, localStorageNamespace, _currentUserId, _token);
 
   /// Shared identity for local progress and flashcard storage, never displayed.
   String get localStorageNamespace {
@@ -50,8 +68,9 @@ class AuthService extends ChangeNotifier {
           : null;
 
   Future<void> init() async {
-    _sessionVersion++;
+    final revision = ++_sessionVersion;
     _prefs = await SharedPreferences.getInstance();
+    if (_sessionVersion != revision) return;
     
     _isLoggedIn = _prefs.getBool('isLoggedIn') ?? false;
     _isGuest = _prefs.getBool('isGuest') ?? false;
@@ -122,18 +141,17 @@ class AuthService extends ChangeNotifier {
 
   Future<void> fetchLatestProfile() async {
     if (!_isLoggedIn || _isGuest || _token.isEmpty) return;
-    final version = _sessionVersion;
-    final sessionToken = _token;
+    final session = captureSession();
     try {
       final data = await UserApiService().fetchMe();
       // A stale profile must not pair the previous owner's ID with a new token.
-      if (_sessionVersion != version || _token != sessionToken) return;
+      if (!session.isCurrent) return;
       _currentUserName = data['name'] ?? _currentUserName;
       _currentUserEmail = data['email'] ?? _currentUserEmail;
       _currentUserId = data['id'] ?? _currentUserId;
       
       await _saveSession();
-      notifyListeners();
+      if (session.isCurrent) notifyListeners();
     } catch (e) {
       debugPrint('Failed to fetch latest profile: $e');
     }
@@ -221,12 +239,20 @@ class AuthService extends ChangeNotifier {
   }
 
   Future<void> _saveSession() async {
-    await _prefs.setBool('isLoggedIn', _isLoggedIn);
-    await _prefs.setBool('isGuest', _isGuest);
-    await _prefs.setString('currentUserName', _currentUserName);
-    await _prefs.setString('currentUserEmail', _currentUserEmail);
-    await _prefs.setString('currentUserId', _currentUserId);
-    await _prefs.setString('token', _token);
-    notifyListeners();
+    final session = captureSession();
+    final values = <String, Object>{
+      'isLoggedIn': _isLoggedIn, 'isGuest': _isGuest,
+      'currentUserName': _currentUserName, 'currentUserEmail': _currentUserEmail,
+      'currentUserId': _currentUserId, 'token': _token,
+    };
+    for (final entry in values.entries) {
+      if (!session.isCurrent) return;
+      if (entry.value is bool) {
+        await _prefs.setBool(entry.key, entry.value as bool);
+      } else {
+        await _prefs.setString(entry.key, entry.value as String);
+      }
+    }
+    if (session.isCurrent) notifyListeners();
   }
 }
