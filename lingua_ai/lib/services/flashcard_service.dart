@@ -160,7 +160,6 @@ class FlashcardService extends ChangeNotifier {
 
     try {
       final backendCards = await _apiService.getAllCards(
-        userId,
         targetLanguage: language,
       );
       if (!isCurrent()) return;
@@ -206,7 +205,6 @@ class FlashcardService extends ChangeNotifier {
 
       try {
         final newCard = await _apiService.createFlashcard(
-          userId,
           targetWord,
           turkishTranslation,
           targetLang,

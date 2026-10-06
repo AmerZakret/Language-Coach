@@ -178,7 +178,7 @@ describe('Guest session isolation', () => {
     expect(own.body[0].userId).toBe(guestB.user.id);
   });
 
-  it('ignores the literal guest alias in HTTP requests and preserves historical email lookup', async () => {
+  it('ignores client guest aliases and preserves historical users only by MongoDB ID', async () => {
     const legacy = await app.get(UsersService).create('Legacy Guest',
       'guest@lingua.ai', 'placeholder-hash');
     const historicalCard = { userId: legacy._id.toString(), targetWord: 'historical' };
@@ -188,8 +188,9 @@ describe('Guest session isolation', () => {
       .query({ userId: 'guest' }).auth(guestA.access_token, { type: 'bearer' }).expect(200);
     expect(result.body).toEqual([]);
     expect(flashcardModel.find).toHaveBeenLastCalledWith({ userId: guestA.user.id });
-    expect(await app.get(FlashcardsService).getAll('guest')).toEqual([]);
-    expect(await app.get(FlashcardsService).getAll('guest@lingua.ai')).toEqual([historicalCard]);
+    await expect(app.get(FlashcardsService).getAll('guest')).rejects.toThrow('Authenticated user not found');
+    await expect(app.get(FlashcardsService).getAll('guest@lingua.ai')).rejects.toThrow('Authenticated user not found');
+    expect(await app.get(FlashcardsService).getAll(legacy._id.toString())).toEqual([historicalCard]);
     expect(users.get(legacy._id.toString())).toBe(legacy);
   });
 

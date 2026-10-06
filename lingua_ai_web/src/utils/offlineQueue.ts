@@ -232,7 +232,7 @@ export const processOfflineQueue = async (userId: string, waitForActive = false)
             break;
           case 'create-flashcard': {
             const response = await apiClient.post('/flashcards', {
-              userId: session.userId, targetWord: payload.targetWord, turkishTranslation: payload.turkishTranslation,
+              targetWord: payload.targetWord, turkishTranslation: payload.turkishTranslation,
               targetLanguage: payload.targetLanguage, nativeLanguage: payload.nativeLanguage,
               nativeTranslation: payload.nativeTranslation, exampleSentence: payload.exampleSentence, note: payload.note,
             }, config);

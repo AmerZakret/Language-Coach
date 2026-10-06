@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
 import { AlertCircle, CheckCircle2, Sparkles, WifiOff } from "lucide-react";
-import { useAuth } from "../context/AuthContext";
 import { useLanguage } from "../context/LanguageContext";
 import { useTargetLanguage } from "../context/TargetLanguageContext";
 import { useProgress } from "../context/ProgressContext";
@@ -38,7 +37,6 @@ function ScoreRing({ value, color, label }: { value: number; color: string; labe
 }
 
 export function WritingPracticePage() {
-  const { user, isGuest } = useAuth();
   const { language, t } = useLanguage();
   const { targetLanguage } = useTargetLanguage();
   const { addXp } = useProgress();
@@ -96,7 +94,6 @@ export function WritingPracticePage() {
 
     try {
       const response = await checkWriting({
-        userId: user?.id || (isGuest ? 'guest' : 'unknown'),
         topic: topic,
         text: text,
         language: language,

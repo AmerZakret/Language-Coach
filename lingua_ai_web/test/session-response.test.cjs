@@ -40,12 +40,12 @@ function harness(initial = {}) {
   h.saveProgress = async () => {};
   h.resetProgress = async () => {};
   h.drain = async () => false;
-  h.transport = async (method, url) => {
+  h.transport = async (method, url, data, config) => {
     if (method === 'get') {
-      const id = url.includes(A) ? A : B;
+      const id = data?.sessionSnapshot?.userId || h.auth().user.id;
       return { data: [card(id)] };
     }
-    return { data: card(A) };
+    return { data: card(config?.sessionSnapshot?.userId || h.auth().user.id) };
   };
   const depsEqual = (a, b) => a && b && a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
   const react = {
@@ -275,7 +275,7 @@ for (const backendGuest of [true, false]) {
       assert.equal(session.userId, A); assert.equal(session.token, `test-${A}`);
       assert.equal(session.ownerNamespace, `${backendGuest ? 'guest' : 'registered'}_${A}`);
       mutations.push(method);
-      if (method === 'post') { assert.equal(data.userId, A); savedCard = { ...card(A), ...data }; }
+      if (method === 'post') { assert.equal('userId' in data, false); savedCard = { ...card(A), ...data }; }
       if (method === 'put' && !url.endsWith('/review')) savedCard = { ...savedCard, ...data };
       if (method === 'delete') savedCard = null;
       return { data: savedCard || {} };
@@ -441,13 +441,15 @@ for (const kind of ['fetch', 'create', 'update', 'delete', 'review', 'failed-cre
     const pending = deferred(); let operation;
     const originalTransport = h.transport;
     if (kind === 'sync-refresh') {
-      h.transport = (method, url, data) => url.includes(B) ? originalTransport(method, url, data) : pending.promise;
+      h.transport = (method, url, data, config) => (method === 'get' ? data : config)?.sessionSnapshot?.userId === B
+        ? originalTransport(method, url, data, config) : pending.promise;
       h.syncRevision = 1; h.child.render();
     } else {
       if (['create', 'failed-create'].includes(kind)) h.child.exposed.handleOpenAdd();
       if (kind === 'update') h.child.exposed.handleOpenEdit(card(A));
       h.child.exposed.setFormData({ targetWord: 'new', turkishTranslation: 'translation' }); h.child.render();
-      h.transport = (method, url, data) => url.includes(B) ? originalTransport(method, url, data) : pending.promise;
+      h.transport = (method, url, data, config) => (method === 'get' || method === 'delete' ? data : config)?.sessionSnapshot?.userId === B
+        ? originalTransport(method, url, data, config) : pending.promise;
       if (kind === 'delete') operation = h.child.exposed.handleDeleteCard(`card-${A}`);
       else if (kind === 'review') operation = h.child.exposed.handleStudyScore(4);
       else if (['create', 'update', 'failed-create'].includes(kind)) operation = h.child.exposed.handleSaveCard({ preventDefault() {} });

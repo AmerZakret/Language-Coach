@@ -50,16 +50,9 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
     });
 
     try {
-      final auth = AuthService();
-      final userId = auth.currentUserId.isNotEmpty
-          ? auth.currentUserId
-          : (auth.currentUserEmail.isNotEmpty
-              ? auth.currentUserEmail
-              : 'guest');
       final targetLanguage = TargetLanguageService().currentLanguage;
 
       final history = await _apiService.getHistory(
-        userId: userId,
         targetLanguage: targetLanguage,
       );
 
@@ -111,17 +104,10 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
     _scrollToBottom();
 
     try {
-      final auth = AuthService();
-      final userId = auth.currentUserId.isNotEmpty
-          ? auth.currentUserId
-          : (auth.currentUserEmail.isNotEmpty
-              ? auth.currentUserEmail
-              : 'guest');
       final language = LanguageService().currentLanguage;
       final targetLanguageCode = TargetLanguageService().currentLanguage;
 
       final response = await _apiService.sendMessage(
-        userId: userId,
         message: text,
         language: language,
         targetLanguage: targetLanguageCode,
@@ -161,7 +147,6 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
 
   Future<void> _clearChat() async {
     final lang = LanguageService();
-    final auth = AuthService();
     final targetLang = TargetLanguageService();
 
     final confirm = await showDialog<bool>(
@@ -195,14 +180,7 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
     if (confirm == true) {
       setState(() => _isLoading = true);
       try {
-        final userId = auth.currentUserId.isNotEmpty
-            ? auth.currentUserId
-            : (auth.currentUserEmail.isNotEmpty
-                ? auth.currentUserEmail
-                : 'guest');
-
         await _apiService.clearHistory(
-          userId: userId,
           targetLanguage: targetLang.currentLanguage,
         );
         setState(() {

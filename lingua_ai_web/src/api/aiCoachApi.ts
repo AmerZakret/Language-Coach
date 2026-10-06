@@ -8,7 +8,6 @@ export interface ChatMessage {
 }
 
 interface ChatRequest {
-  userId: string;
   message: string;
   language: InterfaceLanguage;
   targetLanguage: TargetLanguage;
@@ -26,21 +25,20 @@ export const sendMessage = async (data: ChatRequest): Promise<ChatResponse> => {
   return response.data;
 };
 
-export const getChatHistory = async (userId: string, targetLanguage: TargetLanguage): Promise<ChatMessage[]> => {
+export const getChatHistory = async (targetLanguage: TargetLanguage): Promise<ChatMessage[]> => {
   const response = await apiClient.get<ChatMessage[]>(`/ai-coach/history`, {
-    params: { userId, targetLanguage }
+    params: { targetLanguage }
   });
   return response.data;
 };
 
-export const clearChatHistory = async (userId: string, targetLanguage: TargetLanguage): Promise<void> => {
+export const clearChatHistory = async (targetLanguage: TargetLanguage): Promise<void> => {
   await apiClient.delete(`/ai-coach/clear`, {
-    params: { userId, targetLanguage }
+    params: { targetLanguage }
   });
 };
 
 export interface WritingCorrectionRequest {
-  userId: string;
   topic: string;
   text: string;
   language: InterfaceLanguage;

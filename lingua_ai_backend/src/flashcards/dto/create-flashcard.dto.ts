@@ -3,10 +3,6 @@ import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 export class CreateFlashcardDto {
   @IsNotEmpty()
   @IsString()
-  userId: string;
-
-  @IsNotEmpty()
-  @IsString()
   @MaxLength(100)
   targetWord: string;
 

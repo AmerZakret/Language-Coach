@@ -5,14 +5,12 @@ import 'auth_service.dart';
 
 class AiCoachApiService {
   Future<Map<String, dynamic>> sendMessage({
-    required String userId,
     required String message,
     required String language,
     String? targetLanguage,
   }) async {
     try {
       final body = <String, dynamic>{
-        'userId': userId,
         'message': message,
         'language': language,
       };
@@ -50,7 +48,6 @@ class AiCoachApiService {
   }
 
   Future<List<dynamic>> getHistory({
-    required String userId,
     required String targetLanguage,
   }) async {
     try {
@@ -64,7 +61,7 @@ class AiCoachApiService {
 
       final response = await http.get(
         Uri.parse(
-          '${ApiConfig.baseUrl}${ApiConfig.aiCoach}/history?userId=$userId&targetLanguage=$targetLanguage',
+          '${ApiConfig.baseUrl}${ApiConfig.aiCoach}/history?targetLanguage=$targetLanguage',
         ),
         headers: headers,
       );
@@ -80,7 +77,6 @@ class AiCoachApiService {
   }
 
   Future<void> clearHistory({
-    required String userId,
     required String targetLanguage,
   }) async {
     try {
@@ -92,7 +88,7 @@ class AiCoachApiService {
 
       final response = await http.delete(
         Uri.parse(
-          '${ApiConfig.baseUrl}${ApiConfig.aiCoach}/clear?userId=$userId&targetLanguage=$targetLanguage',
+          '${ApiConfig.baseUrl}${ApiConfig.aiCoach}/clear?targetLanguage=$targetLanguage',
         ),
         headers: headers,
       );
@@ -106,7 +102,6 @@ class AiCoachApiService {
   }
 
   Future<Map<String, dynamic>> checkWriting({
-    required String userId,
     required String topic,
     required String text,
     required String language,
@@ -114,7 +109,6 @@ class AiCoachApiService {
   }) async {
     try {
       final body = <String, dynamic>{
-        'userId': userId,
         'topic': topic,
         'text': text,
         'language': language,

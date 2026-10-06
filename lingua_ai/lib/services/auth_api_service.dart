@@ -38,7 +38,17 @@ class AuthApiService {
       );
 
       if (response.statusCode == 201 || response.statusCode == 200) {
-        return json.decode(response.body);
+        final data = json.decode(response.body);
+        final user = data is Map<String, dynamic> ? data['user'] : null;
+        final id = user is Map<String, dynamic> ? user['id'] : null;
+        final token = data is Map<String, dynamic> ? data['access_token'] : null;
+        if (id is! String ||
+            !RegExp(r'^[a-f\d]{24}$', caseSensitive: false).hasMatch(id) ||
+            token is! String || token.trim().isEmpty) {
+          throw const FormatException(
+              'Registration returned an incomplete authentication session');
+        }
+        return data as Map<String, dynamic>;
       } else {
         final errorData = json.decode(response.body);
         throw Exception(errorData['message'] ?? 'Failed to register');

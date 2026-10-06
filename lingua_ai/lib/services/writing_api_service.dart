@@ -1,5 +1,4 @@
 import 'ai_coach_api_service.dart';
-import 'auth_service.dart';
 import '../core/localization/language_service.dart';
 
 class WritingFeedback {
@@ -28,18 +27,9 @@ class WritingApiService {
     required String userText,
     required String targetLanguage,
   }) async {
-    final auth = AuthService();
-    final userId = auth.isGuest
-        ? 'guest'
-        : (auth.currentUserId.isNotEmpty
-            ? auth.currentUserId
-            : (auth.currentUserEmail.isNotEmpty
-                ? auth.currentUserEmail
-                : 'guest'));
     final language = LanguageService().currentLanguage;
 
     final response = await _aiService.checkWriting(
-      userId: userId,
       topic: topic,
       text: userText,
       language: language,

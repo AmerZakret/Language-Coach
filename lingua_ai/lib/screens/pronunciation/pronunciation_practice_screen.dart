@@ -7,7 +7,6 @@ import 'package:permission_handler/permission_handler.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/localization/language_service.dart';
 import '../../core/localization/target_language_service.dart';
-import '../../services/auth_service.dart';
 import '../../services/progress_service.dart';
 import '../../services/flashcard_service.dart';
 import '../../services/pronunciation_service.dart';
@@ -191,14 +190,12 @@ class _PronunciationPracticeScreenState extends State<PronunciationPracticeScree
       _errorMessage = null;
     });
 
-    final auth = AuthService();
     final targetLang = TargetLanguageService().currentLanguage;
     final langCode = _languageCodes[targetLang] ?? 'en';
 
     try {
       final assessment = await _pronunciationService.assessPronunciation(
         audioPath: _recordPath!,
-        userId: auth.isLoggedIn ? auth.currentUserEmail : 'guest',
         targetText: _targetText,
         targetLanguage: langCode,
         nativeTranslation: _nativeTranslation.isNotEmpty ? _nativeTranslation : null,

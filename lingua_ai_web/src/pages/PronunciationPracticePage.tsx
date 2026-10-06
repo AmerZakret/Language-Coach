@@ -99,7 +99,7 @@ export function PronunciationPracticePage() {
     const fetchSources = async () => {
       try {
         if (user?.id && user.id !== "guest") {
-          const fcRes = await apiClient.get(`/flashcards/all?userId=${user.id}&targetLanguage=${targetLanguage}`);
+          const fcRes = await apiClient.get(`/flashcards/all?targetLanguage=${targetLanguage}`);
           setFlashcards(fcRes.data || []);
         }
       } catch (e) {
@@ -220,7 +220,6 @@ export function PronunciationPracticePage() {
     try {
       const assessment = await assessPronunciation({
         audio: audioBlob,
-        userId: user?.id || "guest",
         targetText: targetText.trim(),
         targetLanguage: langCode,
         nativeTranslation: nativeTranslation.trim() || undefined,

@@ -15,7 +15,7 @@ class DurableCardsApi extends FlashcardApiService {
   Completer<void>? started;
   Completer<void>? release;
   @override
-  Future<Flashcard> createFlashcard(String userId, String targetWord,
+  Future<Flashcard> createFlashcard(String targetWord,
       String turkishTranslation, String targetLanguage,
       {String? nativeLanguage,
       String? nativeTranslation,

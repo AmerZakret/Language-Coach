@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Param, Post, Query, UseGuards, Req, ForbiddenException } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Post, Query, UseGuards, Req } from '@nestjs/common';
 import { ProgressService } from './progress.service';
 import { CompleteLessonDto } from './dto/complete-lesson.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -8,11 +8,7 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 export class ProgressController {
   constructor(private readonly progressService: ProgressService) {}
 
-  private validateUserAccess(userId: string, req: any) {
-    if (req.user.id !== userId && req.user.email !== userId) {
-      throw new ForbiddenException('Access denied: Cannot access another user\'s progress');
-    }
-  }
+  // Keep the legacy URL parameter for route compatibility; JWT owns all access.
 
   @Get(':userId')
   async getUserProgress(

@@ -9,10 +9,6 @@ import {
 export class ChatDto {
   @IsNotEmpty()
   @IsString()
-  userId: string;
-
-  @IsNotEmpty()
-  @IsString()
   @MaxLength(500)
   message: string;
 

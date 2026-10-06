@@ -12,7 +12,6 @@ export interface PronunciationAssessmentResult {
 
 export interface AssessPronunciationRequest {
   audio: Blob | File;
-  userId: string;
   targetText: string;
   targetLanguage: string;
   nativeTranslation?: string;
@@ -26,7 +25,6 @@ export const assessPronunciation = async (
 ): Promise<PronunciationAssessmentResult> => {
   const formData = new FormData();
   formData.append('audio', request.audio, 'audio.webm');
-  formData.append('userId', request.userId);
   formData.append('targetText', request.targetText);
   formData.append('targetLanguage', request.targetLanguage);
   

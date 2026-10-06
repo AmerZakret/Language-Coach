@@ -31,7 +31,7 @@ describe('Queued flashcard idempotency', () => {
   let cardA: Flashcard;
   let cardB: Flashcard;
   const ai = { generateContext: jest.fn(async () => ({ sentences: ['example'], mnemonic: 'hint' })) };
-  const body = { userId: 'ignored@example.com', targetWord: 'word',
+  const body = { targetWord: 'word',
     turkishTranslation: 'translation', targetLanguage: 'English', note: 'original' };
   const review = (card = cardA, key = 'review-1', owner = a, score = 4) =>
     request(app.getHttpServer()).put(`/flashcards/${card._id}/review`)

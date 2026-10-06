@@ -23,7 +23,6 @@ export const QuickAddFlashcard: React.FC = () => {
     setLoading(true);
     try {
       await apiClient.post('/flashcards', {
-        userId: user.id || user.email,
         targetWord: word,
         turkishTranslation: translation,
         targetLanguage

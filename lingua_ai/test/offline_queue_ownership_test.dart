@@ -39,7 +39,7 @@ class FakeFlashcardApi extends FlashcardApiService {
   }
 
   @override
-  Future<Flashcard> createFlashcard(String userId, String targetWord,
+  Future<Flashcard> createFlashcard(String targetWord,
           String turkishTranslation, String targetLanguage,
           {String? nativeLanguage,
           String? nativeTranslation,

@@ -58,16 +58,15 @@ export class ProgressService implements OnModuleInit {
   }
 
   /**
-   * Helper function to find a user profile in MongoDB by email or ObjectId.
+   * Resolve only the MongoDB identity supplied by an authenticated controller.
    */
-  private async findUser(userId: string, session: ClientSession | null = null): Promise<User | null> {
-    const isObjectId = Types.ObjectId.isValid(userId);
-    return this.userModel.findOne({
-      $or: [
-        { email: userId },
-        ...(isObjectId ? [{ _id: new Types.ObjectId(userId) }] : []),
-      ],
-    }).session(session).exec();
+  private async findUser(userId: string, session: ClientSession | null = null): Promise<User> {
+    if (!Types.ObjectId.isValid(userId)) {
+      throw new NotFoundException('Authenticated user not found');
+    }
+    const user = await this.userModel.findById(userId).session(session).exec();
+    if (!user) throw new NotFoundException('Authenticated user not found');
+    return user;
   }
 
   /**
@@ -85,19 +84,6 @@ export class ProgressService implements OnModuleInit {
 
   private async getProgressSnapshot(userId: string, targetLanguage: string | undefined, session: ClientSession) {
     const user = await this.findUser(userId, session);
-    if (!user) {
-      // Return default empty state instead of crashing if user is not yet created
-      return {
-        userId,
-        stats: {
-          totalXp: 0,
-          streak: 0,
-          completedLessonsCount: 0,
-        },
-        completedLessons: [],
-        level: 'Beginner',
-      };
-    }
 
     const filter: Record<string, any> = { userId: user._id.toString() };
     if (targetLanguage) {
@@ -183,15 +169,6 @@ export class ProgressService implements OnModuleInit {
     try {
       const run = () => session.withTransaction(async () => {
         let user = await this.findUser(userId, session);
-        if (!user) {
-          if (!userId.includes('@') && userId !== 'guest') {
-            throw new NotFoundException(`User with ID ${userId} not found`);
-          }
-          [user] = await this.userModel.create([{
-            name: userId.split('@')[0].toUpperCase(), email: userId,
-            passwordHash: 'placeholder-hash',
-          }], { session });
-        }
         const lesson = await this.lessonModel.findOne({ id: lessonId }).session(session);
         if (!lesson) throw new NotFoundException(`Lesson with ID ${lessonId} not found`);
         const names: Record<string, string> = { en: 'English', de: 'German', es: 'Spanish', fr: 'French', ar: 'Arabic' };
@@ -242,7 +219,6 @@ export class ProgressService implements OnModuleInit {
     try {
       return await session.withTransaction(async () => {
         const user = await this.findUser(userId, session);
-        if (!user) throw new NotFoundException(`User with ID/Email ${userId} not found`);
         await this.progressModel.deleteMany({ userId: user._id.toString() }).session(session);
         await this.userModel.updateOne({ _id: user._id }, { $set: {
           totalXp: 0, streak: 0, level: 'Beginner', xpPerLanguage: {}, levelPerLanguage: {},

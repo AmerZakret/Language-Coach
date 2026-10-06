@@ -7,7 +7,6 @@ import 'sync_retry_policy.dart';
 
 class FlashcardApiService {
   Future<Flashcard> createFlashcard(
-    String userId,
     String targetWord,
     String turkishTranslation,
     String targetLanguage, {
@@ -32,7 +31,6 @@ class FlashcardApiService {
             Uri.parse('${ApiConfig.baseUrl}${ApiConfig.flashcards}'),
             headers: headers,
             body: json.encode({
-              'userId': userId,
               'targetWord': targetWord,
               'turkishTranslation': turkishTranslation,
               'targetLanguage': targetLanguage,
@@ -129,8 +127,7 @@ class FlashcardApiService {
     }
   }
 
-  Future<List<Flashcard>> getDueCards(String userId,
-      {String? targetLanguage}) async {
+  Future<List<Flashcard>> getDueCards({String? targetLanguage}) async {
     try {
       final headers = <String, String>{};
       final token = AuthService().token;
@@ -139,9 +136,9 @@ class FlashcardApiService {
       }
 
       var url =
-          '${ApiConfig.baseUrl}${ApiConfig.flashcards}/due?userId=$userId';
+          '${ApiConfig.baseUrl}${ApiConfig.flashcards}/due';
       if (targetLanguage != null && targetLanguage.isNotEmpty) {
-        url += '&targetLanguage=$targetLanguage';
+        url += '?targetLanguage=$targetLanguage';
       }
 
       final response = await http
@@ -162,8 +159,7 @@ class FlashcardApiService {
     }
   }
 
-  Future<List<Flashcard>> getAllCards(String userId,
-      {String? targetLanguage}) async {
+  Future<List<Flashcard>> getAllCards({String? targetLanguage}) async {
     try {
       final headers = <String, String>{};
       final token = AuthService().token;
@@ -172,9 +168,9 @@ class FlashcardApiService {
       }
 
       var url =
-          '${ApiConfig.baseUrl}${ApiConfig.flashcards}/all?userId=$userId';
+          '${ApiConfig.baseUrl}${ApiConfig.flashcards}/all';
       if (targetLanguage != null && targetLanguage.isNotEmpty) {
-        url += '&targetLanguage=$targetLanguage';
+        url += '?targetLanguage=$targetLanguage';
       }
 
       final response = await http

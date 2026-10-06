@@ -559,7 +559,6 @@ class OfflineQueueService {
                 break;
               case 'create-flashcard':
                 final card = await _flashcardApi.createFlashcard(
-                    userId,
                     payload['targetWord'].toString(),
                     payload['turkishTranslation'].toString(),
                     payload['targetLanguage'].toString(),

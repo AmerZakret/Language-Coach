@@ -3,10 +3,6 @@ import { IsNotEmpty, IsOptional, IsString, IsIn } from 'class-validator';
 export class AssessPronunciationDto {
   @IsString()
   @IsNotEmpty()
-  userId: string;
-
-  @IsString()
-  @IsNotEmpty()
   targetText: string;
 
   @IsString()

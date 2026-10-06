@@ -8,7 +8,6 @@ import 'auth_service.dart';
 class PronunciationService {
   Future<PronunciationAssessmentResult> assessPronunciation({
     required String audioPath,
-    required String userId,
     required String targetText,
     required String targetLanguage,
     String? nativeTranslation,
@@ -27,7 +26,6 @@ class PronunciationService {
       }
 
       // Populate form-data text fields
-      request.fields['userId'] = userId;
       request.fields['targetText'] = targetText;
       request.fields['targetLanguage'] = targetLanguage;
       

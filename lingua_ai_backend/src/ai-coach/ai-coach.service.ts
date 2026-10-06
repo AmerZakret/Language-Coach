@@ -45,22 +45,20 @@ export class AiCoachService {
   ) {}
 
   /**
-   * Helper function to find a user in the database by email or ObjectId.
-   * Isolates search patterns to ensure compatibility with both registered users and guest session profiles.
+   * Resolve only the MongoDB identity supplied by an authenticated controller.
    */
-  private async findUser(userId: string): Promise<User | null> {
-    const isObjectId = Types.ObjectId.isValid(userId);
-    return this.userModel.findOne({
-      $or: [
-        { email: userId },
-        ...(isObjectId ? [{ _id: new Types.ObjectId(userId) }] : []),
-      ],
-    }).exec();
+  private async findUser(userId: string): Promise<User> {
+    if (!Types.ObjectId.isValid(userId)) {
+      throw new NotFoundException('Authenticated user not found');
+    }
+    const user = await this.userModel.findById(userId).exec();
+    if (!user) throw new NotFoundException('Authenticated user not found');
+    return user;
   }
 
   /**
    * Main AI Coach Chat Handler:
-   * 1. Fetches or initializes the user profile.
+   * 1. Resolves the authenticated user profile.
    * 2. Resolves API configuration and system instructions (translated explanations for TR interface).
    * 3. Submits user message securely to Gemini API requesting structured JSON.
    * 4. Parses the reply, checks grammar, and saves records to MongoDB.
@@ -71,18 +69,7 @@ export class AiCoachService {
     language: string,
     targetLanguage?: string,
   ) {
-    // Locate the user profile or create a lazy-loaded placeholder to ensure guests function cleanly
-    let user = await this.findUser(userId);
-    if (!user) {
-      user = await this.userModel.create({
-        name: userId.split('@')[0].toUpperCase(),
-        email: userId,
-        passwordHash: 'placeholder-hash',
-        totalXp: 0,
-        streak: 0,
-        level: 'Beginner',
-      });
-    }
+    const user = await this.findUser(userId);
 
     // Retrieve secret variables securely from NestJS config provider (protects key from client bundles)
     const apiKey = this.configService.get<string>('GEMINI_API_KEY')?.trim();
@@ -250,17 +237,7 @@ Do not include markdown code block formatting like \`\`\`json. Return pure JSON.
     language: string,
     targetLanguage: string,
   ) {
-    let user = await this.findUser(userId);
-    if (!user) {
-      user = await this.userModel.create({
-        name: userId.split('@')[0].toUpperCase(),
-        email: userId,
-        passwordHash: 'placeholder-hash',
-        totalXp: 0,
-        streak: 0,
-        level: 'Beginner',
-      });
-    }
+    await this.findUser(userId);
 
     const apiKey = this.configService.get<string>('GEMINI_API_KEY')?.trim();
     const model = (
@@ -408,7 +385,6 @@ Return ONLY this JSON. Do not include markdown formatting like \`\`\`json.`;
    */
   async getHistory(userId: string, targetLanguage: string) {
     const user = await this.findUser(userId);
-    if (!user) return [];
 
     const targetLangName =
       LANGUAGE_NAMES[targetLanguage?.toLowerCase() || ''] ||
@@ -427,7 +403,6 @@ Return ONLY this JSON. Do not include markdown formatting like \`\`\`json.`;
    */
   async clearHistory(userId: string, targetLanguage: string) {
     const user = await this.findUser(userId);
-    if (!user) return { deletedCount: 0 };
 
     const targetLangName =
       LANGUAGE_NAMES[targetLanguage?.toLowerCase() || ''] ||

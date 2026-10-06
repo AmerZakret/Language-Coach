@@ -278,7 +278,7 @@ test('all operations pin owner credentials and create ignores a stale payload us
   assert.equal(await h.queue.processOfflineQueue(A), true);
   assert.equal(h.requests.length, 5);
   assert.ok(h.requests.every(r => r.headers.Authorization === `Bearer test-${A}`));
-  assert.equal(h.requests.find(r => r.url === '/flashcards').data.userId, A);
+  assert.equal('userId' in h.requests.find(r => r.url === '/flashcards').data, false);
 });
 
 test('new action has precisely the versioned ownership envelope without credentials', async () => {

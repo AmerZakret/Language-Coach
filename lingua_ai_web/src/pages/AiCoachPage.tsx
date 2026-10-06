@@ -15,7 +15,7 @@ const STARTER_PROMPTS = [
 ];
 
 export function AiCoachPage() {
-  const { user, isGuest } = useAuth();
+  const { user } = useAuth();
   const { language, t } = useLanguage();
   const { targetLanguage } = useTargetLanguage();
   const { isOffline } = useNetwork();
@@ -36,13 +36,11 @@ export function AiCoachPage() {
     );
   }
 
-  const userId = user?.id || user?.email || (isGuest ? 'guest' : 'unknown');
-
   useEffect(() => {
     const loadHistory = async () => {
       setHistoryLoading(true);
       try {
-        const history = await getChatHistory(userId, targetLanguage);
+        const history = await getChatHistory(targetLanguage);
         setMessages(history);
       } catch (e) {
         console.error('Failed to load chat history', e);
@@ -51,7 +49,7 @@ export function AiCoachPage() {
       }
     };
     loadHistory();
-  }, [userId, targetLanguage]);
+  }, [user?.id, targetLanguage]);
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, isTyping, historyLoading]);
 
@@ -65,7 +63,6 @@ export function AiCoachPage() {
 
     try {
       const response = await sendMessage({
-        userId,
         message: content,
         language: language,
         targetLanguage: targetLanguage
@@ -105,7 +102,7 @@ export function AiCoachPage() {
     if (window.confirm(t("clear_chat_confirm"))) {
       setHistoryLoading(true);
       try {
-        await clearChatHistory(userId, targetLanguage);
+        await clearChatHistory(targetLanguage);
         setMessages([]);
       } catch (e) {
         console.error('Failed to clear chat history', e);

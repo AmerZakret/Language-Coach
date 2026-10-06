@@ -70,19 +70,16 @@ export class FlashcardsService implements OnModuleInit {
   }
 
   /**
-   * Helper function to find a user profile in MongoDB by email or ObjectId.
+   * Resolve only the MongoDB identity supplied by an authenticated controller.
    */
-  private async findUser(userId: string, session?: ClientSession): Promise<User | null> {
-    // Authenticated controllers supply the JWT user's MongoDB ID. Retain email
-    // lookup compatibility, but never map a literal guest to the shared account.
-    const isObjectId = Types.ObjectId.isValid(userId);
-    const query = this.userModel.findOne({
-      $or: [
-        { email: userId },
-        ...(isObjectId ? [{ _id: new Types.ObjectId(userId) }] : []),
-      ],
-    });
-    return (session ? query.session(session) : query).exec();
+  private async findUser(userId: string, session?: ClientSession): Promise<User> {
+    if (!Types.ObjectId.isValid(userId)) {
+      throw new NotFoundException('Authenticated user not found');
+    }
+    const query = this.userModel.findById(userId);
+    const user = await (session ? query.session(session) : query).exec();
+    if (!user) throw new NotFoundException('Authenticated user not found');
+    return user;
   }
 
   /**
@@ -103,17 +100,7 @@ export class FlashcardsService implements OnModuleInit {
     note?: string,
     session?: ClientSession,
   ) {
-    let user = await this.findUser(userId, session);
-    if (!user) {
-      [user] = await this.userModel.create([{
-        name: userId.split('@')[0].toUpperCase(),
-        email: userId,
-        passwordHash: 'placeholder-hash',
-        totalXp: 0,
-        streak: 0,
-        level: 'Beginner',
-      }], { session });
-    }
+    const user = await this.findUser(userId, session);
 
     const mappedTargetLanguage = shortToFull[targetLanguage] || targetLanguage || 'English';
     const finalNativeLanguage = nativeLanguage || 'Turkish';
@@ -229,8 +216,7 @@ export class FlashcardsService implements OnModuleInit {
    * Fetches flashcards where nextReviewDate <= current time, ordered by priority.
    */
   async getDueCards(userId: string, targetLanguage?: string) {
-    let user = await this.findUser(userId);
-    if (!user) return [];
+    const user = await this.findUser(userId);
 
     const query: any = {
       userId: user._id.toString(),
@@ -281,8 +267,7 @@ export class FlashcardsService implements OnModuleInit {
    * Returns list of all cards owned by the target user.
    */
   async getAll(userId: string, targetLanguage?: string) {
-    let user = await this.findUser(userId);
-    if (!user) return [];
+    const user = await this.findUser(userId);
 
     const query: any = { userId: user._id.toString() };
     if (targetLanguage) {

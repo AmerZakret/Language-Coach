@@ -3,10 +3,6 @@ import { IsIn, IsNotEmpty, IsString, MaxLength } from 'class-validator';
 export class WritingDto {
   @IsNotEmpty()
   @IsString()
-  userId: string;
-
-  @IsNotEmpty()
-  @IsString()
   topic: string;
 
   @IsNotEmpty()

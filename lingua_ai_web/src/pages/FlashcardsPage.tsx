@@ -162,11 +162,11 @@ export function FlashcardsPage() {
         }
         return;
       }
-      const allRes = await apiClient.get(`/flashcards/all?userId=${userId}&targetLanguage=${targetLanguage}`, requestConfig);
+      const allRes = await apiClient.get(`/flashcards/all?targetLanguage=${targetLanguage}`, requestConfig);
       if (!isCurrent()) return;
       setAllCards(allRes.data);
 
-      const dueRes = await apiClient.get(`/flashcards/due?userId=${userId}&targetLanguage=${targetLanguage}`, requestConfig);
+      const dueRes = await apiClient.get(`/flashcards/due?targetLanguage=${targetLanguage}`, requestConfig);
       if (!isCurrent()) return;
       setDueCards(dueRes.data);
       setOriginalDueCards(dueRes.data);
@@ -269,7 +269,6 @@ export function FlashcardsPage() {
     try {
       if (modal === "add") {
         await apiClient.post("/flashcards", {
-          userId,
           targetLanguage,
           ...formData,
         }, requestConfig);
