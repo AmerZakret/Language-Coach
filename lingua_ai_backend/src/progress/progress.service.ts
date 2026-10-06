@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
+import { InjectConnection, InjectModel } from '@nestjs/mongoose';
+import { ClientSession, Connection, Model, Types } from 'mongoose';
 import { Progress } from './schemas/progress.schema';
 import { User } from '../users/schemas/user.schema';
 import { Lesson } from '../lessons/schemas/lesson.schema';
@@ -8,6 +8,7 @@ import { Lesson } from '../lessons/schemas/lesson.schema';
 @Injectable()
 export class ProgressService implements OnModuleInit {
   constructor(
+    @InjectConnection() private readonly connection: Connection,
     @InjectModel(Progress.name) private progressModel: Model<Progress>,
     @InjectModel(User.name) private userModel: Model<User>,
     @InjectModel(Lesson.name) private lessonModel: Model<Lesson>,
@@ -59,14 +60,14 @@ export class ProgressService implements OnModuleInit {
   /**
    * Helper function to find a user profile in MongoDB by email or ObjectId.
    */
-  private async findUser(userId: string): Promise<User | null> {
+  private async findUser(userId: string, session: ClientSession | null = null): Promise<User | null> {
     const isObjectId = Types.ObjectId.isValid(userId);
     return this.userModel.findOne({
       $or: [
         { email: userId },
         ...(isObjectId ? [{ _id: new Types.ObjectId(userId) }] : []),
       ],
-    }).exec();
+    }).session(session).exec();
   }
 
   /**
@@ -75,7 +76,15 @@ export class ProgressService implements OnModuleInit {
    * 2. Returns an array of completed lesson IDs.
    */
   async getUserProgress(userId: string, targetLanguage?: string) {
-    const user = await this.findUser(userId);
+    const session = await this.connection.startSession();
+    try {
+      return await session.withTransaction(() => this.getProgressSnapshot(userId, targetLanguage, session),
+        { readConcern: { level: 'snapshot' } });
+    } finally { await session.endSession(); }
+  }
+
+  private async getProgressSnapshot(userId: string, targetLanguage: string | undefined, session: ClientSession) {
+    const user = await this.findUser(userId, session);
     if (!user) {
       // Return default empty state instead of crashing if user is not yet created
       return {
@@ -110,6 +119,7 @@ export class ProgressService implements OnModuleInit {
 
     const completedProgressList = await this.progressModel
       .find(filter)
+      .session(session)
       .exec();
 
     const completedLessons = completedProgressList.map((p) => ({
@@ -167,139 +177,78 @@ export class ProgressService implements OnModuleInit {
    * 4. Updates MongoDB, calculates CEFR level boundaries based on total XP, and saves.
    */
   async completeLesson(userId: string, lessonId: string, score: number) {
-    let user = await this.findUser(userId);
-    if (!user) {
-      if (userId.includes('@') || userId === 'guest') {
-        user = await this.userModel.create({
-          name: userId.split('@')[0].toUpperCase(),
-          email: userId,
-          passwordHash: 'placeholder-hash',
-          totalXp: 0,
-          streak: 0,
-          level: 'Beginner',
-          xpPerLanguage: {},
-          levelPerLanguage: {},
-        });
-      } else {
-        throw new NotFoundException(`User with ID ${userId} not found`);
+    // The completion's unique key and the XP award commit together. MongoDB
+    // retries write conflicts, including simultaneous different lessons.
+    const session = await this.connection.startSession();
+    try {
+      const run = () => session.withTransaction(async () => {
+        let user = await this.findUser(userId, session);
+        if (!user) {
+          if (!userId.includes('@') && userId !== 'guest') {
+            throw new NotFoundException(`User with ID ${userId} not found`);
+          }
+          [user] = await this.userModel.create([{
+            name: userId.split('@')[0].toUpperCase(), email: userId,
+            passwordHash: 'placeholder-hash',
+          }], { session });
+        }
+        const lesson = await this.lessonModel.findOne({ id: lessonId }).session(session);
+        if (!lesson) throw new NotFoundException(`Lesson with ID ${lessonId} not found`);
+        const names: Record<string, string> = { en: 'English', de: 'German', es: 'Spanish', fr: 'French', ar: 'Arabic' };
+        const lang = names[lesson.targetLanguage] || lesson.targetLanguage || 'English';
+        const existing = await this.progressModel.findOne({ userId: user._id.toString(), lessonId }).session(session);
+        let xpEarned = 0;
+        if (!existing) {
+          await this.progressModel.create([{
+            userId: user._id.toString(), lessonId, score, status: 'completed', targetLanguage: lang,
+          }], { session });
+          xpEarned = lesson.xpReward;
+          if (!user.xpPerLanguage || !user.levelPerLanguage) {
+            await this.userModel.updateOne({ _id: user._id }, { $set: {
+              ...(!user.xpPerLanguage ? { xpPerLanguage: {} } : {}),
+              ...(!user.levelPerLanguage ? { levelPerLanguage: {} } : {}),
+            } }, { session });
+          }
+          user = (await this.userModel.findOneAndUpdate({ _id: user._id }, {
+            $inc: { totalXp: xpEarned, [`xpPerLanguage.${lang}`]: xpEarned },
+          }, { returnDocument: 'after', session }))!;
+          const xp = user.xpPerLanguage.get(lang) || 0;
+          const level = xp >= 2200 ? 'Advanced' : xp >= 1400 ? 'Upper-Intermediate'
+            : xp >= 900 ? 'Intermediate' : xp >= 500 ? 'Pre-Intermediate'
+            : xp >= 200 ? 'Elementary' : 'Beginner';
+          await this.userModel.updateOne({ _id: user._id }, {
+            $set: { level, [`levelPerLanguage.${lang}`]: level },
+          }, { session });
+        } else if (score > existing.score) {
+          await this.progressModel.updateOne({ _id: existing._id }, { $max: { score } }, { session });
+        }
+        return { message: 'Lesson marked as completed', data: {
+          userId: user.email, lessonId, score: Math.max(score, existing?.score ?? score),
+          xpEarned, newTotalXp: user.xpPerLanguage?.get(lang) || 0,
+        } };
+      }, { readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' } });
+      try { return await run(); }
+      catch (error) {
+        // Two first attempts may race on the unique completion index. Read the
+        // winner in a fresh transaction; this path never awards its XP again.
+        if (error?.code !== 11000) throw error;
+        return await run();
       }
-    }
-
-    const lesson = await this.lessonModel.findOne({ id: lessonId }).exec();
-    if (!lesson) {
-      throw new NotFoundException(`Lesson with ID ${lessonId} not found`);
-    }
-
-    const shortToFull: Record<string, string> = {
-      en: 'English',
-      de: 'German',
-      es: 'Spanish',
-      fr: 'French',
-      ar: 'Arabic',
-      English: 'English',
-      German: 'German',
-      Spanish: 'Spanish',
-      French: 'French',
-      Arabic: 'Arabic',
-    };
-    const lang = shortToFull[lesson.targetLanguage] || lesson.targetLanguage || 'English';
-
-    // Query composite unique index to prevent duplicate completion logs
-    let progress = await this.progressModel
-      .findOne({ userId: user._id.toString(), lessonId })
-      .exec();
-
-    let newXpEarned = 0;
-    if (!progress) {
-      // Create fresh progress log
-      progress = await this.progressModel.create({
-        userId: user._id.toString(),
-        lessonId,
-        score,
-        status: 'completed',
-        targetLanguage: lang,
-      });
-
-      newXpEarned = lesson.xpReward;
-
-      // Initialize language maps if null
-      if (!user.xpPerLanguage) {
-        user.xpPerLanguage = new Map();
-      }
-      if (!user.levelPerLanguage) {
-        user.levelPerLanguage = new Map();
-      }
-
-      // Add XP and recalculate language levels thresholds
-      const currentLangXp = user.xpPerLanguage.get(lang) || 0;
-      const newLangXp = currentLangXp + newXpEarned;
-      user.xpPerLanguage.set(lang, newLangXp);
-
-      let level = 'Beginner';
-      if (newLangXp >= 2200) level = 'Advanced';
-      else if (newLangXp >= 1400) level = 'Upper-Intermediate';
-      else if (newLangXp >= 900) level = 'Intermediate';
-      else if (newLangXp >= 500) level = 'Pre-Intermediate';
-      else if (newLangXp >= 200) level = 'Elementary';
-      user.levelPerLanguage.set(lang, level);
-
-      // Save global user progress variables
-      user.totalXp += newXpEarned;
-      user.level = level;
-
-      // Mark map modifications so Mongoose knows it needs to serialize updates
-      user.markModified('xpPerLanguage');
-      user.markModified('levelPerLanguage');
-      await user.save();
-    } else {
-      // If already completed, overwrite only if the new quiz score is higher
-      if (score > progress.score) {
-        progress.score = score;
-        await progress.save();
-      }
-    }
-
-    const langXp = user.xpPerLanguage ? (user.xpPerLanguage.get(lang) || 0) : user.totalXp;
-
-    return {
-      message: 'Lesson marked as completed',
-      data: {
-        userId: user.email,
-        lessonId,
-        score,
-        xpEarned: newXpEarned,
-        newTotalXp: langXp,
-      },
-    };
+    } finally { await session.endSession(); }
   }
 
-  /**
-   * Reset User Progress:
-   * Deletes all progress documents and wipes XP/level maps on the User profile.
-   */
   async resetProgress(userId: string) {
-    const user = await this.findUser(userId);
-    if (!user) {
-      throw new NotFoundException(`User with ID/Email ${userId} not found`);
-    }
-
-    // Clear progress collection references
-    await this.progressModel.deleteMany({ userId: user._id.toString() }).exec();
-
-    // Reset XP metrics
-    user.totalXp = 0;
-    user.streak = 0;
-    user.level = 'Beginner';
-    user.xpPerLanguage = new Map();
-    user.levelPerLanguage = new Map();
-    
-    user.markModified('xpPerLanguage');
-    user.markModified('levelPerLanguage');
-    await user.save();
-
-    return {
-      message: 'Progress successfully reset',
-      userId: user.email,
-    };
+    const session = await this.connection.startSession();
+    try {
+      return await session.withTransaction(async () => {
+        const user = await this.findUser(userId, session);
+        if (!user) throw new NotFoundException(`User with ID/Email ${userId} not found`);
+        await this.progressModel.deleteMany({ userId: user._id.toString() }).session(session);
+        await this.userModel.updateOne({ _id: user._id }, { $set: {
+          totalXp: 0, streak: 0, level: 'Beginner', xpPerLanguage: {}, levelPerLanguage: {},
+        } }, { session });
+        return { message: 'Progress successfully reset', userId: user.email };
+      }, { readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' } });
+    } finally { await session.endSession(); }
   }
 }

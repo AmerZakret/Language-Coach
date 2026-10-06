@@ -1,5 +1,6 @@
 import apiClient from './apiClient';
 import type { ProgressState } from '../types/progress';
+import { getSessionRequestConfig } from '../utils/queueSession';
 
 interface BackendProgressResponse {
   userId: string;
@@ -19,6 +20,7 @@ interface BackendProgressResponse {
 export const fetchProgress = async (userId: string, targetLanguage: string): Promise<ProgressState | null> => {
   try {
     const response = await apiClient.get<BackendProgressResponse>(`/progress/${userId}`, {
+      ...getSessionRequestConfig(),
       params: { targetLanguage }
     });
     const data = response.data;
@@ -35,9 +37,9 @@ export const fetchProgress = async (userId: string, targetLanguage: string): Pro
 };
 
 export const saveProgressToBackend = async (userId: string, lessonId: string, score: number = 100): Promise<void> => {
-  await apiClient.post(`/progress/${userId}/complete-lesson`, { lessonId, score });
+  await apiClient.post(`/progress/${userId}/complete-lesson`, { lessonId, score }, getSessionRequestConfig());
 };
 
 export const resetProgressInBackend = async (userId: string): Promise<void> => {
-  await apiClient.delete(`/progress/${userId}`);
+  await apiClient.delete(`/progress/${userId}`, getSessionRequestConfig());
 };

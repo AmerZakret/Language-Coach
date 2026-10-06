@@ -39,3 +39,32 @@ export const resetProgress = (userKey: string, targetLanguage: TargetLanguage): 
   const key = getProgressStorageKey(userKey, targetLanguage);
   localStorage.removeItem(key);
 };
+
+// This cache contains acknowledged server data, never pending XP. Pending
+// completion payloads stay in the existing owner queue and are overlaid afresh.
+export function overlayPendingProgress(base: ProgressState, payloads: any[], resetPending: boolean): ProgressState {
+  const state = { ...(resetPending ? DEFAULT_PROGRESS : base),
+    completedLessonIds: [...(resetPending ? [] : base.completedLessonIds)] };
+  for (const payload of payloads) {
+    if (!state.completedLessonIds.includes(payload.lessonId)) {
+      state.completedLessonIds.push(payload.lessonId);
+      state.totalXp += payload.xpReward ?? 0;
+    }
+  }
+  return state;
+}
+
+export function acknowledgeCompletion(owner: string, payload: any, result: any): void {
+  if (!payload.targetLanguage || typeof result?.newTotalXp !== 'number') return;
+  const language = payload.targetLanguage as TargetLanguage;
+  const base = loadProgress(owner, language);
+  saveProgress(owner, language, { ...base, totalXp: result.newTotalXp,
+    completedLessonIds: [...new Set([...base.completedLessonIds, payload.lessonId])] });
+}
+
+export function resetOwnerProgress(owner: string, legacyOwner?: string): void {
+  for (const language of ['English', 'German', 'Spanish', 'French', 'Arabic'] as TargetLanguage[]) {
+    resetProgress(owner, language);
+    if (legacyOwner) resetProgress(legacyOwner, language);
+  }
+}

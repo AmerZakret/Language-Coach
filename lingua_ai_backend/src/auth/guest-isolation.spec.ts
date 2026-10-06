@@ -20,6 +20,7 @@ import { AiCoachController } from '../ai-coach/ai-coach.controller';
 import { AiCoachService } from '../ai-coach/ai-coach.service';
 import { FlashcardsController } from '../flashcards/flashcards.controller';
 import { FlashcardsService } from '../flashcards/flashcards.service';
+import { FlashcardIdempotencyService } from '../flashcards/flashcard-idempotency.service';
 import { Flashcard } from '../flashcards/schemas/flashcard.schema';
 import { SrsCalculatorService } from '../flashcards/services/srs-calculator.service';
 import { AiContextService } from '../flashcards/services/ai-context.service';
@@ -42,7 +43,7 @@ describe('Guest session isolation', () => {
     deleteOne: jest.fn(),
   };
   const postModel = { findById: jest.fn(), findByIdAndDelete: jest.fn() };
-  const progress = { getUserProgress: jest.fn() };
+  const progress = { getUserProgress: jest.fn(), resetProgress: jest.fn() };
   const coach = { getHistory: jest.fn(), sendMessage: jest.fn() };
 
   beforeAll(async () => {
@@ -78,6 +79,9 @@ describe('Guest session isolation', () => {
         { provide: getModelToken(CommunityPost.name), useValue: postModel },
         { provide: SrsCalculatorService, useValue: {} },
         { provide: AiContextService, useValue: {} },
+        { provide: FlashcardIdempotencyService, useValue: {
+          execute: (_user, _key, _type, _input, work) => work(),
+        } },
         { provide: ProgressService, useValue: progress },
         { provide: AiCoachService, useValue: coach },
       ],
@@ -101,6 +105,7 @@ describe('Guest session isolation', () => {
     flashcardModel.find.mockImplementation(query => ({ exec: async () =>
       query.userId === guestB.user.id ? [cardB] : [] }));
     progress.getUserProgress.mockImplementation(async userId => ({ userId }));
+    progress.resetProgress.mockImplementation(async userId => ({ userId }));
     coach.getHistory.mockImplementation(async userId => [{ userId }]);
     coach.sendMessage.mockImplementation(async userId => ({ userId }));
     postModel.findById.mockReturnValue({ exec: async () => ({
@@ -145,6 +150,15 @@ describe('Guest session isolation', () => {
     const result = await request(app.getHttpServer()).get(`/progress/${guestB.user.id}`)
       .auth(guestA.access_token, { type: 'bearer' }).expect(200);
     expect(result.body.userId).toBe(guestA.user.id);
+  });
+
+  it('existing reset route uses JWT ownership even with Guest B in the URL', async () => {
+    const result = await request(app.getHttpServer()).delete(`/progress/${guestB.user.id}`)
+      .auth(guestA.access_token, { type: 'bearer' }).expect(200);
+    expect(result.body.userId).toBe(guestA.user.id);
+    expect(progress.resetProgress).toHaveBeenCalledWith(guestA.user.id);
+    await request(app.getHttpServer()).delete(`/progress/${guestA.user.id}`).expect(401);
+    expect(progress.resetProgress).toHaveBeenCalledTimes(1);
   });
 
   it('uses Guest A identity for AI history even with a Guest B query parameter', async () => {

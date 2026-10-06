@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, ForbiddenException, OnModuleInit } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import type { ClientSession } from 'mongoose';
 import { Flashcard } from './schemas/flashcard.schema';
 import { User } from '../users/schemas/user.schema';
 import { SrsCalculatorService } from './services/srs-calculator.service';
@@ -71,16 +72,17 @@ export class FlashcardsService implements OnModuleInit {
   /**
    * Helper function to find a user profile in MongoDB by email or ObjectId.
    */
-  private async findUser(userId: string): Promise<User | null> {
+  private async findUser(userId: string, session?: ClientSession): Promise<User | null> {
     // Authenticated controllers supply the JWT user's MongoDB ID. Retain email
     // lookup compatibility, but never map a literal guest to the shared account.
     const isObjectId = Types.ObjectId.isValid(userId);
-    return this.userModel.findOne({
+    const query = this.userModel.findOne({
       $or: [
         { email: userId },
         ...(isObjectId ? [{ _id: new Types.ObjectId(userId) }] : []),
       ],
-    }).exec();
+    });
+    return (session ? query.session(session) : query).exec();
   }
 
   /**
@@ -99,17 +101,18 @@ export class FlashcardsService implements OnModuleInit {
     nativeTranslation?: string,
     exampleSentence?: string,
     note?: string,
+    session?: ClientSession,
   ) {
-    let user = await this.findUser(userId);
+    let user = await this.findUser(userId, session);
     if (!user) {
-      user = await this.userModel.create({
+      [user] = await this.userModel.create([{
         name: userId.split('@')[0].toUpperCase(),
         email: userId,
         passwordHash: 'placeholder-hash',
         totalXp: 0,
         streak: 0,
         level: 'Beginner',
-      });
+      }], { session });
     }
 
     const mappedTargetLanguage = shortToFull[targetLanguage] || targetLanguage || 'English';
@@ -118,11 +121,12 @@ export class FlashcardsService implements OnModuleInit {
     const finalTurkishTranslation = turkishTranslation || nativeTranslation || '';
 
     // Check if flashcard already exists for this user, word, and target language
-    const existing = await this.flashcardModel.findOne({
+    const existingQuery = this.flashcardModel.findOne({
       userId: user._id.toString(),
       targetLanguage: mappedTargetLanguage,
       targetWord,
-    }).exec();
+    });
+    const existing = await (session ? existingQuery.session(session) : existingQuery).exec();
 
     // If it exists, update the details and trigger AI Context regeneration
     if (existing) {
@@ -133,7 +137,7 @@ export class FlashcardsService implements OnModuleInit {
       if (note !== undefined) existing.note = note;
       existing.nextReviewDate = new Date();
       existing.aiContext = await this.aiContext.generateContext(targetWord, finalTurkishTranslation);
-      return existing.save();
+      return existing.save({ session });
     }
 
     // Call Gemini helper to fetch definition context and study tips
@@ -152,7 +156,7 @@ export class FlashcardsService implements OnModuleInit {
       nextReviewDate: new Date(), // Set next review date to immediately so it appears in study deck
     });
 
-    return flashcard.save();
+    return flashcard.save({ session });
   }
 
   /**
@@ -171,8 +175,10 @@ export class FlashcardsService implements OnModuleInit {
     exampleSentence?: string,
     note?: string,
     authenticatedUserId?: string,
+    session?: ClientSession,
   ) {
-    const card = await this.flashcardModel.findById(cardId);
+    const query = this.flashcardModel.findById(cardId);
+    const card = await (session ? query.session(session) : query);
     if (!card) throw new NotFoundException('Flashcard not found');
 
     // Access control validation guard
@@ -197,15 +203,16 @@ export class FlashcardsService implements OnModuleInit {
 
     card.aiContext = await this.aiContext.generateContext(targetWord, finalTurkishTranslation);
 
-    return card.save();
+    return card.save({ session });
   }
 
   /**
    * Delete Flashcard:
    * Validates target document existence and confirms ownership before deleting.
    */
-  async delete(cardId: string, authenticatedUserId: string) {
-    const card = await this.flashcardModel.findById(cardId);
+  async delete(cardId: string, authenticatedUserId: string, session?: ClientSession) {
+    const query = this.flashcardModel.findById(cardId);
+    const card = await (session ? query.session(session) : query);
     if (!card) throw new NotFoundException('Flashcard not found');
 
     // Ownership guard
@@ -213,7 +220,7 @@ export class FlashcardsService implements OnModuleInit {
       throw new ForbiddenException('Access denied: Cannot delete another user\'s flashcards');
     }
 
-    await this.flashcardModel.deleteOne({ _id: card._id }).exec();
+    await this.flashcardModel.deleteOne({ _id: card._id, userId: authenticatedUserId }, { session }).exec();
     return { message: 'Flashcard deleted successfully' };
   }
 
@@ -243,8 +250,9 @@ export class FlashcardsService implements OnModuleInit {
    * 2. Passes previous Easiness Factor and interval statistics to the SRS Calculator service.
    * 3. Updates card intervals, schedules the new review date, and appends rating scores history.
    */
-  async review(cardId: string, score: number, authenticatedUserId: string) {
-    const card = await this.flashcardModel.findById(cardId);
+  async review(cardId: string, score: number, authenticatedUserId: string, session?: ClientSession) {
+    const query = this.flashcardModel.findById(cardId);
+    const card = await (session ? query.session(session) : query);
     if (!card) throw new NotFoundException('Flashcard not found');
 
     // Ownership guard
@@ -265,7 +273,7 @@ export class FlashcardsService implements OnModuleInit {
     card.reviewCount = (card.reviewCount || 0) + 1;
     card.history.push({ date: new Date(), score });
 
-    return card.save();
+    return card.save({ session });
   }
 
   /**

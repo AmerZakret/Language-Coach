@@ -38,6 +38,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   Future<void> _handleRegister() async {
     final lang = LanguageService();
     final auth = AuthService();
+    var session = auth.captureSession();
 
     final name = _nameController.text.trim();
     final email = _emailController.text.trim();
@@ -55,6 +56,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
 
     try {
       final response = await _apiService.register(name, email, password);
+      if (!mounted || !session.isCurrent) return;
       
       final userData = response['user'] ?? {};
       // Update session with backend data
@@ -65,19 +67,20 @@ class _RegisterScreenState extends State<RegisterScreen> {
         id: userData['id'] ?? '',
         targetLanguage: userData['targetLanguage'],
       );
+      session = auth.captureSession();
 
       // Sync progress
       await ProgressService().syncWithBackend();
 
-      if (mounted) {
+      if (mounted && session.isCurrent) {
         Navigator.pushNamedAndRemoveUntil(context, AppRoutes.home, (route) => false);
       }
     } catch (e) {
-      if (mounted) {
+      if (mounted && session.isCurrent) {
         _showError(e.toString().replaceAll('Exception: ', ''));
       }
     } finally {
-      if (mounted) {
+      if (mounted && session.isCurrent) {
         setState(() => _isLoading = false);
       }
     }

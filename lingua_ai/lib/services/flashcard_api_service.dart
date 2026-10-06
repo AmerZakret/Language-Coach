@@ -3,6 +3,7 @@ import 'package:http/http.dart' as http;
 import '../core/config/api_config.dart';
 import '../models/flashcard.dart';
 import 'auth_service.dart';
+import 'sync_retry_policy.dart';
 
 class FlashcardApiService {
   Future<Flashcard> createFlashcard(
@@ -14,35 +15,41 @@ class FlashcardApiService {
     String? nativeTranslation,
     String? exampleSentence,
     String? note,
+    String? operationId,
   }) async {
     try {
       final headers = <String, String>{
         'Content-Type': 'application/json',
+        if (operationId != null) 'X-Idempotency-Key': operationId,
       };
       final token = AuthService().token;
       if (token.isNotEmpty) {
         headers['Authorization'] = 'Bearer $token';
       }
 
-      final response = await http.post(
-        Uri.parse('${ApiConfig.baseUrl}${ApiConfig.flashcards}'),
-        headers: headers,
-        body: json.encode({
-          'userId': userId,
-          'targetWord': targetWord,
-          'turkishTranslation': turkishTranslation,
-          'targetLanguage': targetLanguage,
-          if (nativeLanguage != null) 'nativeLanguage': nativeLanguage,
-          if (nativeTranslation != null) 'nativeTranslation': nativeTranslation,
-          if (exampleSentence != null && exampleSentence.isNotEmpty) 'exampleSentence': exampleSentence,
-          if (note != null && note.isNotEmpty) 'note': note,
-        }),
-      );
+      final response = await http
+          .post(
+            Uri.parse('${ApiConfig.baseUrl}${ApiConfig.flashcards}'),
+            headers: headers,
+            body: json.encode({
+              'userId': userId,
+              'targetWord': targetWord,
+              'turkishTranslation': turkishTranslation,
+              'targetLanguage': targetLanguage,
+              if (nativeLanguage != null) 'nativeLanguage': nativeLanguage,
+              if (nativeTranslation != null)
+                'nativeTranslation': nativeTranslation,
+              if (exampleSentence != null && exampleSentence.isNotEmpty)
+                'exampleSentence': exampleSentence,
+              if (note != null && note.isNotEmpty) 'note': note,
+            }),
+          )
+          .timeout(replayTimeout);
 
       if (response.statusCode == 201 || response.statusCode == 200) {
         return Flashcard.fromJson(json.decode(response.body));
       } else {
-        throw Exception('Failed to create flashcard: ${response.body}');
+        throw SyncHttpException(response.statusCode);
       }
     } catch (e) {
       rethrow;
@@ -58,62 +65,72 @@ class FlashcardApiService {
     String? nativeTranslation,
     String? exampleSentence,
     String? note,
+    String? operationId,
   }) async {
     try {
       final headers = <String, String>{
         'Content-Type': 'application/json',
+        if (operationId != null) 'X-Idempotency-Key': operationId,
       };
       final token = AuthService().token;
       if (token.isNotEmpty) {
         headers['Authorization'] = 'Bearer $token';
       }
 
-      final response = await http.put(
-        Uri.parse('${ApiConfig.baseUrl}${ApiConfig.flashcards}/$cardId'),
-        headers: headers,
-        body: json.encode({
-          'targetWord': targetWord,
-          'turkishTranslation': turkishTranslation,
-          if (targetLanguage != null) 'targetLanguage': targetLanguage,
-          if (nativeLanguage != null) 'nativeLanguage': nativeLanguage,
-          if (nativeTranslation != null) 'nativeTranslation': nativeTranslation,
-          if (exampleSentence != null && exampleSentence.isNotEmpty) 'exampleSentence': exampleSentence,
-          if (note != null && note.isNotEmpty) 'note': note,
-        }),
-      );
+      final response = await http
+          .put(
+            Uri.parse('${ApiConfig.baseUrl}${ApiConfig.flashcards}/$cardId'),
+            headers: headers,
+            body: json.encode({
+              'targetWord': targetWord,
+              'turkishTranslation': turkishTranslation,
+              if (targetLanguage != null) 'targetLanguage': targetLanguage,
+              if (nativeLanguage != null) 'nativeLanguage': nativeLanguage,
+              if (nativeTranslation != null)
+                'nativeTranslation': nativeTranslation,
+              if (exampleSentence != null && exampleSentence.isNotEmpty)
+                'exampleSentence': exampleSentence,
+              if (note != null && note.isNotEmpty) 'note': note,
+            }),
+          )
+          .timeout(replayTimeout);
 
       if (response.statusCode == 200) {
         return Flashcard.fromJson(json.decode(response.body));
       } else {
-        throw Exception('Failed to update flashcard: ${response.body}');
+        throw SyncHttpException(response.statusCode);
       }
     } catch (e) {
       rethrow;
     }
   }
 
-  Future<void> deleteFlashcard(String cardId) async {
+  Future<void> deleteFlashcard(String cardId, {String? operationId}) async {
     try {
       final headers = <String, String>{};
+      if (operationId != null) headers['X-Idempotency-Key'] = operationId;
       final token = AuthService().token;
       if (token.isNotEmpty) {
         headers['Authorization'] = 'Bearer $token';
       }
 
-      final response = await http.delete(
-        Uri.parse('${ApiConfig.baseUrl}${ApiConfig.flashcards}/$cardId'),
-        headers: headers,
-      );
+      final response = await http
+          .delete(
+            Uri.parse('${ApiConfig.baseUrl}${ApiConfig.flashcards}/$cardId'),
+            headers: headers,
+          )
+          .timeout(replayTimeout);
 
       if (response.statusCode != 200) {
-        throw Exception('Failed to delete flashcard: ${response.body}');
+        throw SyncHttpException(response.statusCode);
       }
     } catch (e) {
       rethrow;
     }
   }
 
-  Future<List<Flashcard>> getDueCards(String userId, {String? targetLanguage}) async {
+  Future<List<Flashcard>> getDueCards(String userId,
+      {String? targetLanguage}) async {
     try {
       final headers = <String, String>{};
       final token = AuthService().token;
@@ -121,15 +138,18 @@ class FlashcardApiService {
         headers['Authorization'] = 'Bearer $token';
       }
 
-      var url = '${ApiConfig.baseUrl}${ApiConfig.flashcards}/due?userId=$userId';
+      var url =
+          '${ApiConfig.baseUrl}${ApiConfig.flashcards}/due?userId=$userId';
       if (targetLanguage != null && targetLanguage.isNotEmpty) {
         url += '&targetLanguage=$targetLanguage';
       }
 
-      final response = await http.get(
-        Uri.parse(url),
-        headers: headers,
-      );
+      final response = await http
+          .get(
+            Uri.parse(url),
+            headers: headers,
+          )
+          .timeout(replayTimeout);
 
       if (response.statusCode == 200) {
         final List body = json.decode(response.body);
@@ -142,7 +162,8 @@ class FlashcardApiService {
     }
   }
 
-  Future<List<Flashcard>> getAllCards(String userId, {String? targetLanguage}) async {
+  Future<List<Flashcard>> getAllCards(String userId,
+      {String? targetLanguage}) async {
     try {
       final headers = <String, String>{};
       final token = AuthService().token;
@@ -150,15 +171,18 @@ class FlashcardApiService {
         headers['Authorization'] = 'Bearer $token';
       }
 
-      var url = '${ApiConfig.baseUrl}${ApiConfig.flashcards}/all?userId=$userId';
+      var url =
+          '${ApiConfig.baseUrl}${ApiConfig.flashcards}/all?userId=$userId';
       if (targetLanguage != null && targetLanguage.isNotEmpty) {
         url += '&targetLanguage=$targetLanguage';
       }
 
-      final response = await http.get(
-        Uri.parse(url),
-        headers: headers,
-      );
+      final response = await http
+          .get(
+            Uri.parse(url),
+            headers: headers,
+          )
+          .timeout(replayTimeout);
 
       if (response.statusCode == 200) {
         final List body = json.decode(response.body);
@@ -171,28 +195,33 @@ class FlashcardApiService {
     }
   }
 
-  Future<Flashcard> reviewCard(String cardId, int score) async {
+  Future<Flashcard> reviewCard(String cardId, int score,
+      {String? operationId}) async {
     try {
       final headers = <String, String>{
         'Content-Type': 'application/json',
+        if (operationId != null) 'X-Idempotency-Key': operationId,
       };
       final token = AuthService().token;
       if (token.isNotEmpty) {
         headers['Authorization'] = 'Bearer $token';
       }
 
-      final response = await http.put(
-        Uri.parse('${ApiConfig.baseUrl}${ApiConfig.flashcards}/$cardId/review'),
-        headers: headers,
-        body: json.encode({
-          'score': score,
-        }),
-      );
+      final response = await http
+          .put(
+            Uri.parse(
+                '${ApiConfig.baseUrl}${ApiConfig.flashcards}/$cardId/review'),
+            headers: headers,
+            body: json.encode({
+              'score': score,
+            }),
+          )
+          .timeout(replayTimeout);
 
       if (response.statusCode == 200) {
         return Flashcard.fromJson(json.decode(response.body));
       } else {
-        throw Exception('Failed to review flashcard');
+        throw SyncHttpException(response.statusCode);
       }
     } catch (e) {
       rethrow;

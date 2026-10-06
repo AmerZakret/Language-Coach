@@ -8,6 +8,8 @@ import { useSound } from "../context/SoundContext";
 import { getLevelFromXp } from "../utils/levelUtils";
 import type { TargetLanguage } from "../types/language";
 import { updateProfile } from "../api/authApi";
+import { getUserProgressKey } from "../utils/userKey";
+import { useSessionGuard } from "../utils/useSessionGuard";
 
 const INTERFACE_LANGS = [
   { value: "en", label: "English" },
@@ -18,6 +20,7 @@ const TARGET_LANGS = ["English", "German", "Spanish", "French", "Arabic"];
 
 export function ProfilePage() {
   const { user, isGuest, logout, login, token } = useAuth();
+  const captureSession = useSessionGuard(getUserProgressKey(user, isGuest, token));
   const { language, setLanguage, t } = useLanguage();
   const { targetLanguage, setTargetLanguage } = useTargetLanguage();
   const { progress, resetProgress } = useProgress();
@@ -40,13 +43,16 @@ export function ProfilePage() {
   const userEmail = user?.email || 'guest@linguaai.com';
 
   const handleSave = async () => {
+    const isCurrent = captureSession();
+    if (!isCurrent()) return;
     try {
       if (name.trim() && name !== user?.name && !isGuest && token) {
         const updatedUser = await updateProfile({ name });
+        if (!isCurrent()) return;
         login({ ...updatedUser, isGuest: false }, token);
       }
       setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
+      setTimeout(() => { if (isCurrent()) setSaved(false); }, 2000);
     } catch (e) {
       console.error("Failed to update profile name", e);
     }
@@ -176,7 +182,12 @@ export function ProfilePage() {
             <p style={{ fontSize: "13px", color: "#F87171", marginBottom: "12px" }}>{t('reset_confirm_msg').replace('{lang}', t('lang_' + targetLanguage.toLowerCase()))}</p>
             <div className="flex gap-3">
               <button onClick={() => setResetConfirm(false)} className="btn-secondary py-2 px-4 text-xs">{t('cancel')}</button>
-              <button onClick={async () => { await resetProgress(); setResetConfirm(false); }} className="btn-danger py-2 px-4 text-xs">{t('yes_reset_all')}</button>
+              <button onClick={async () => {
+                const isCurrent = captureSession();
+                if (!isCurrent()) return;
+                await resetProgress();
+                if (isCurrent()) setResetConfirm(previous => isCurrent() ? false : previous);
+              }} className="btn-danger py-2 px-4 text-xs">{t('yes_reset_all')}</button>
             </div>
           </div>
         )}

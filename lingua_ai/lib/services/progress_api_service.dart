@@ -2,9 +2,11 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../core/config/api_config.dart';
 import 'auth_service.dart';
+import 'sync_retry_policy.dart';
 
 class ProgressApiService {
-  Future<Map<String, dynamic>> getProgress(String userId, String targetLanguage) async {
+  Future<Map<String, dynamic>> getProgress(
+      String userId, String targetLanguage) async {
     try {
       final headers = <String, String>{};
       final token = AuthService().token;
@@ -12,10 +14,13 @@ class ProgressApiService {
         headers['Authorization'] = 'Bearer $token';
       }
 
-      final response = await http.get(
-        Uri.parse('${ApiConfig.baseUrl}${ApiConfig.progress}/$userId?targetLanguage=$targetLanguage'),
-        headers: headers,
-      );
+      final response = await http
+          .get(
+            Uri.parse(
+                '${ApiConfig.baseUrl}${ApiConfig.progress}/$userId?targetLanguage=$targetLanguage'),
+            headers: headers,
+          )
+          .timeout(replayTimeout);
 
       if (response.statusCode == 200) {
         return json.decode(response.body);
@@ -28,32 +33,50 @@ class ProgressApiService {
   }
 
   Future<Map<String, dynamic>> completeLesson(
-      String userId, String lessonId, int score) async {
+      String userId, String lessonId, int score,
+      {String? operationId}) async {
     try {
       final headers = <String, String>{
         'Content-Type': 'application/json',
+        if (operationId != null) 'X-Idempotency-Key': operationId,
       };
       final token = AuthService().token;
       if (token.isNotEmpty) {
         headers['Authorization'] = 'Bearer $token';
       }
 
-      final response = await http.post(
-        Uri.parse('${ApiConfig.baseUrl}${ApiConfig.progress}/$userId/complete-lesson'),
-        headers: headers,
-        body: json.encode({
-          'lessonId': lessonId,
-          'score': score,
-        }),
-      );
+      final response = await http
+          .post(
+            Uri.parse(
+                '${ApiConfig.baseUrl}${ApiConfig.progress}/$userId/complete-lesson'),
+            headers: headers,
+            body: json.encode({
+              'lessonId': lessonId,
+              'score': score,
+            }),
+          )
+          .timeout(replayTimeout);
 
       if (response.statusCode == 201 || response.statusCode == 200) {
         return json.decode(response.body);
       } else {
-        throw Exception('Failed to update progress');
+        throw SyncHttpException(response.statusCode);
       }
     } catch (e) {
       rethrow;
+    }
+  }
+
+  Future<void> resetProgress(String userId, {String? operationId}) async {
+    final response = await http.delete(
+        Uri.parse('${ApiConfig.baseUrl}${ApiConfig.progress}/$userId'),
+        headers: {
+          if (AuthService().token.isNotEmpty)
+            'Authorization': 'Bearer ${AuthService().token}',
+          if (operationId != null) 'X-Idempotency-Key': operationId,
+        }).timeout(replayTimeout);
+    if (response.statusCode != 200) {
+      throw SyncHttpException(response.statusCode);
     }
   }
 }

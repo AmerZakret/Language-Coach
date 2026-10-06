@@ -11,9 +11,11 @@ class TargetLanguageService extends ChangeNotifier {
   TargetLanguageService._internal();
 
   String _currentLanguage = 'en';
+  int _languageVersion = 0;
   late SharedPreferences _prefs;
 
   String get currentLanguage => _currentLanguage;
+  int get languageVersion => _languageVersion;
 
   static String toShortCode(String lang) {
     switch (lang.toLowerCase()) {
@@ -38,14 +40,21 @@ class TargetLanguageService extends ChangeNotifier {
   }
 
   Future<void> init() async {
+    final session = AuthService().captureSession();
+    final version = ++_languageVersion;
     _prefs = await SharedPreferences.getInstance();
+    if (!session.isCurrent || version != _languageVersion) return;
     _currentLanguage = _prefs.getString('targetLanguage') ?? 'en';
     notifyListeners();
   }
 
   Future<void> setLanguage(String langCode, {bool syncToBackend = true}) async {
+    final session = AuthService().captureSession();
+    final version = ++_languageVersion;
+    bool isCurrent() => session.isCurrent && version == _languageVersion;
     _currentLanguage = langCode;
     await _prefs.setString('targetLanguage', _currentLanguage);
+    if (!isCurrent()) return;
 
     if (syncToBackend) {
       final auth = AuthService();
@@ -59,14 +68,18 @@ class TargetLanguageService extends ChangeNotifier {
         }
       }
     }
+    if (!isCurrent()) return;
     
     ProgressService().reloadProgress();
     notifyListeners();
   }
 
   Future<void> resetLanguage() async {
+    final session = AuthService().captureSession();
+    final version = ++_languageVersion;
     _currentLanguage = 'en';
     await _prefs.remove('targetLanguage');
+    if (!session.isCurrent || version != _languageVersion) return;
     notifyListeners();
   }
 

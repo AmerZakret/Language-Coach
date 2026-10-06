@@ -1,5 +1,6 @@
 import apiClient from './apiClient';
 import type { User } from '../types/auth';
+import { getSessionRequestConfig } from '../utils/queueSession';
 
 export const login = async (email: string, password: string): Promise<{ access_token: string, user: User }> => {
   const response = await apiClient.post('/auth/login', { email, password });
@@ -12,11 +13,11 @@ export const register = async (name: string, email: string, password: string): P
 };
 
 export const fetchMe = async (): Promise<User> => {
-  const response = await apiClient.get<User>('/users/me');
+  const response = await apiClient.get<User>('/users/me', getSessionRequestConfig());
   return response.data;
 };
 
 export const updateProfile = async (profileData: { name?: string; targetLanguage?: string }): Promise<User> => {
-  const response = await apiClient.patch<User>('/users/profile', profileData);
+  const response = await apiClient.patch<User>('/users/profile', profileData, getSessionRequestConfig());
   return response.data;
 };

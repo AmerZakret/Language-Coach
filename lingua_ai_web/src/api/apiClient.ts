@@ -1,6 +1,10 @@
 import axios from 'axios';
+import type { InternalAxiosRequestConfig } from 'axios';
+import { isOfflineQueueSessionActive, isSessionCurrent } from '../utils/queueSession';
+import type { QueueSession } from '../utils/queueSession';
 
 const apiClient = axios.create({
+  timeout: 45_000,
   baseURL: import.meta.env.VITE_API_URL || 'http://localhost:3000',
   headers: {
     'Content-Type': 'application/json',
@@ -10,6 +14,26 @@ const apiClient = axios.create({
 // Add a request interceptor for attaching the JWT token
 apiClient.interceptors.request.use(
   (config) => {
+    const queueSession = (config as InternalAxiosRequestConfig & {
+      offlineQueueSession?: QueueSession;
+    }).offlineQueueSession;
+    if (queueSession) {
+      // Axios interceptors run asynchronously: verify again at dispatch rather
+      // than replacing a queue request's credentials with the new user's token.
+      if (!isOfflineQueueSessionActive(queueSession)) {
+        throw new Error('Offline queue session changed before dispatch');
+      }
+      config.headers.Authorization = `Bearer ${queueSession.token}`;
+      return config;
+    }
+    const session = (config as InternalAxiosRequestConfig & {
+      sessionSnapshot?: QueueSession;
+    }).sessionSnapshot;
+    if (session) {
+      if (!isSessionCurrent(session)) throw new Error('Session changed before dispatch');
+      if (session.token) config.headers.Authorization = `Bearer ${session.token}`;
+      return config;
+    }
     const token = localStorage.getItem('linguaai_token');
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;

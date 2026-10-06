@@ -5,8 +5,12 @@ import { useTheme } from "../context/ThemeContext";
 import { useLanguage } from "../context/LanguageContext";
 import { useTargetLanguage } from "../context/TargetLanguageContext";
 import apiClient from "../api/apiClient";
+import { useSync } from "../context/SyncContext";
 import { useNetwork } from "../context/NetworkContext";
-import { pushToOfflineQueue, processOfflineQueue } from "../utils/offlineQueue";
+import { pushToOfflineQueue, isPendingBackendCard } from "../utils/offlineQueue";
+import { getUserProgressKey } from "../utils/userKey";
+import { useSessionGuard } from "../utils/useSessionGuard";
+import { getSessionRequestConfig } from "../utils/queueSession";
 
 interface CardData {
   _id: string;
@@ -46,28 +50,20 @@ const LANGUAGE_VOICES: Record<string, string> = {
 };
 
 export function FlashcardsPage() {
-  const { user, isGuest } = useAuth();
+  const { user, isGuest, token } = useAuth();
+  const queueOwner = getUserProgressKey(user, isGuest, token);
+  const localOnly = queueOwner === 'local_guest';
   const { isDark } = useTheme();
   const { t } = useLanguage();
   const { targetLanguage } = useTargetLanguage();
+  const captureContext = useSessionGuard(queueOwner, targetLanguage);
   const userId = user?.id || user?.email || (isGuest ? 'guest@lingua.ai' : 'unknown');
   const { isOffline } = useNetwork();
 
+  const { syncRevision, lastDrainSucceeded } = useSync();
   useEffect(() => {
-    const syncOfflineData = async () => {
-      if (!isOffline && userId) {
-        try {
-          const success = await processOfflineQueue(userId);
-          if (success) {
-            fetchCards();
-          }
-        } catch (e) {
-          console.error("Offline sync failed", e);
-        }
-      }
-    };
-    syncOfflineData();
-  }, [isOffline, userId]);
+    if (!isOffline && syncRevision > 0 && lastDrainSucceeded) void fetchCards();
+  }, [isOffline, syncRevision, lastDrainSucceeded, captureContext]);
 
   // View & Modal states
   const [view, setView] = useState<"list" | "study">("list");
@@ -111,8 +107,18 @@ export function FlashcardsPage() {
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   useEffect(() => {
+    setAllCards([]);
+    setDueCards([]);
+    setOriginalDueCards([]);
+    setModal(null);
+    setSelectedCard(null);
+    setDeleteConfirmId(null);
+    setSuccessMsg(null);
+    setIsPlaying(false);
+    setView('list');
+    setStudyResults([]);
     fetchCards();
-  }, [user, targetLanguage]);
+  }, [user, targetLanguage, captureContext]);
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -139,19 +145,36 @@ export function FlashcardsPage() {
   }, [isPlaying, flipped, currentStudyIndex, dueCards, view, studyFinished]);
 
   const fetchCards = async () => {
+    const isCurrent = captureContext();
+    if (!isCurrent()) return;
+    const requestConfig = getSessionRequestConfig();
     setLoading(true);
     setError(null);
     try {
-      const allRes = await apiClient.get(`/flashcards/all?userId=${userId}&targetLanguage=${targetLanguage}`);
+      if (localOnly) {
+        const cachedAll = localStorage.getItem(`flashcards_all_${userId}_${targetLanguage}`);
+        const cachedDue = localStorage.getItem(`flashcards_due_${userId}_${targetLanguage}`);
+        if (cachedAll) setAllCards(JSON.parse(cachedAll));
+        if (cachedDue) {
+          const cards = JSON.parse(cachedDue);
+          setDueCards(cards);
+          setOriginalDueCards(cards);
+        }
+        return;
+      }
+      const allRes = await apiClient.get(`/flashcards/all?userId=${userId}&targetLanguage=${targetLanguage}`, requestConfig);
+      if (!isCurrent()) return;
       setAllCards(allRes.data);
 
-      const dueRes = await apiClient.get(`/flashcards/due?userId=${userId}&targetLanguage=${targetLanguage}`);
+      const dueRes = await apiClient.get(`/flashcards/due?userId=${userId}&targetLanguage=${targetLanguage}`, requestConfig);
+      if (!isCurrent()) return;
       setDueCards(dueRes.data);
       setOriginalDueCards(dueRes.data);
 
       localStorage.setItem(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(allRes.data));
       localStorage.setItem(`flashcards_due_${userId}_${targetLanguage}`, JSON.stringify(dueRes.data));
     } catch (e) {
+      if (!isCurrent()) return;
       console.error("Failed to fetch cards from server, loading cached.", e);
       const cachedAll = localStorage.getItem(`flashcards_all_${userId}_${targetLanguage}`);
       const cachedDue = localStorage.getItem(`flashcards_due_${userId}_${targetLanguage}`);
@@ -162,9 +185,9 @@ export function FlashcardsPage() {
       }
       
       setError(t("offline_data"));
-      setTimeout(() => setError(null), 5000);
+      setTimeout(() => { if (isCurrent()) setError(null); }, 5000);
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   };
 
@@ -186,12 +209,15 @@ export function FlashcardsPage() {
 
   const handleSaveCard = async (e: React.FormEvent) => {
     e.preventDefault();
+    const isCurrent = captureContext();
+    if (!isCurrent()) return;
+    const requestConfig = getSessionRequestConfig();
     if (!formData.targetWord || !formData.turkishTranslation) {
       setError(t("field_required_error"));
       return;
     }
 
-    if (isOffline) {
+    if (localOnly || isOffline || (modal === 'edit' && selectedCard && isPendingBackendCard(selectedCard._id, queueOwner))) {
       if (modal === "add") {
         const tempId = `local_${Date.now()}`;
         const newCard: CardData = {
@@ -206,6 +232,9 @@ export function FlashcardsPage() {
           nextReviewDate: new Date().toISOString(),
           reviewCount: 0,
         };
+        if (!localOnly) pushToOfflineQueue('create-flashcard', {
+          tempId, userId, targetLanguage, ...formData
+        }, queueOwner);
         const updatedAll = [newCard, ...allCards];
         setAllCards(updatedAll);
         
@@ -217,14 +246,11 @@ export function FlashcardsPage() {
         localStorage.setItem(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(updatedAll));
         localStorage.setItem(`flashcards_due_${userId}_${targetLanguage}`, JSON.stringify(updatedDue));
         
-        pushToOfflineQueue('create-flashcard', {
-          tempId,
-          userId,
-          targetLanguage,
-          ...formData
-        });
         showSuccess(t("flashcard_created"));
       } else if (modal === "edit" && selectedCard) {
+        if (!localOnly) pushToOfflineQueue('update-flashcard', {
+          cardId: selectedCard._id, targetLanguage, ...formData
+        }, queueOwner);
         const updatedAll = allCards.map(c => c._id === selectedCard._id ? { ...c, ...formData } : c);
         const updatedDue = dueCards.map(c => c._id === selectedCard._id ? { ...c, ...formData } : c);
         setAllCards(updatedAll);
@@ -234,11 +260,6 @@ export function FlashcardsPage() {
         localStorage.setItem(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(updatedAll));
         localStorage.setItem(`flashcards_due_${userId}_${targetLanguage}`, JSON.stringify(updatedDue));
         
-        pushToOfflineQueue('update-flashcard', {
-          cardId: selectedCard._id,
-          targetLanguage,
-          ...formData
-        });
         showSuccess(t("flashcard_updated"));
       }
       setModal(null);
@@ -251,25 +272,31 @@ export function FlashcardsPage() {
           userId,
           targetLanguage,
           ...formData,
-        });
+        }, requestConfig);
+        if (!isCurrent()) return;
         showSuccess(t("flashcard_created"));
       } else if (modal === "edit" && selectedCard) {
         await apiClient.put(`/flashcards/${selectedCard._id}`, {
           ...formData,
           targetLanguage,
-        });
+        }, requestConfig);
+        if (!isCurrent()) return;
         showSuccess(t("flashcard_updated"));
       }
       setModal(null);
       fetchCards();
     } catch (err: any) {
+      if (!isCurrent()) return;
       console.error("Failed to save card", err);
       setError(err.response?.data?.message || t("failed_save_card"));
     }
   };
 
   const handleDeleteCard = async (cardId: string) => {
-    if (isOffline) {
+    const isCurrent = captureContext();
+    if (!isCurrent()) return;
+    if (localOnly || isOffline || isPendingBackendCard(cardId, queueOwner)) {
+      if (!localOnly) pushToOfflineQueue('delete-flashcard', { cardId }, queueOwner);
       const updatedAll = allCards.filter(c => c._id !== cardId);
       const updatedDue = dueCards.filter(c => c._id !== cardId);
       setAllCards(updatedAll);
@@ -279,26 +306,29 @@ export function FlashcardsPage() {
       localStorage.setItem(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(updatedAll));
       localStorage.setItem(`flashcards_due_${userId}_${targetLanguage}`, JSON.stringify(updatedDue));
       
-      pushToOfflineQueue('delete-flashcard', { cardId });
       showSuccess(t("flashcard_deleted"));
       setDeleteConfirmId(null);
       return;
     }
 
     try {
-      await apiClient.delete(`/flashcards/${cardId}`);
+      await apiClient.delete(`/flashcards/${cardId}`, getSessionRequestConfig());
+      if (!isCurrent()) return;
       showSuccess(t("flashcard_deleted"));
       setDeleteConfirmId(null);
       fetchCards();
     } catch (err: any) {
+      if (!isCurrent()) return;
       console.error("Failed to delete card", err);
       setError(t("failed_delete_card"));
     }
   };
 
   const showSuccess = (msg: string) => {
+    const isCurrent = captureContext();
+    if (!isCurrent()) return;
     setSuccessMsg(msg);
-    setTimeout(() => setSuccessMsg(null), 3000);
+    setTimeout(() => { if (isCurrent()) setSuccessMsg(null); }, 3000);
   };
 
   // Study functions
@@ -315,9 +345,12 @@ export function FlashcardsPage() {
   };
 
   const handleStudyScore = async (score: number, _manual: boolean = true) => {
+    const isCurrent = captureContext();
+    if (!isCurrent()) return;
     const card = dueCards[currentStudyIndex];
     if (card) {
-      if (isOffline) {
+      if (localOnly || isOffline || isPendingBackendCard(card._id, queueOwner)) {
+        if (!localOnly) pushToOfflineQueue('review-flashcard', { cardId: card._id, score }, queueOwner);
         // Local SM-2 calculation
         let easinessFactor = card.easinessFactor || 2.5;
         let interval = card.interval || 0;
@@ -354,16 +387,16 @@ export function FlashcardsPage() {
         setAllCards(updatedAll);
         localStorage.setItem(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(updatedAll));
 
-        pushToOfflineQueue('review-flashcard', { cardId: card._id, score });
       } else {
         try {
-          await apiClient.put(`/flashcards/${card._id}/review`, { score });
+          await apiClient.put(`/flashcards/${card._id}/review`, { score }, getSessionRequestConfig());
         } catch (e) {
           console.error("Failed to save review to backend", e);
         }
       }
     }
 
+    if (!isCurrent()) return;
     setStudyResults((prev) => [...prev, score]);
     if (currentStudyIndex + 1 >= dueCards.length) {
       setStudyFinished(true);
@@ -376,6 +409,7 @@ export function FlashcardsPage() {
   };
 
   const speakWord = (text: string, langKey?: string, e?: React.MouseEvent) => {
+    const isCurrent = captureContext();
     if (e) e.stopPropagation();
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
@@ -386,7 +420,7 @@ export function FlashcardsPage() {
       window.speechSynthesis.speak(utterance);
     } else {
       setError(t("tts_unsupported"));
-      setTimeout(() => setError(null), 3000);
+      setTimeout(() => { if (isCurrent()) setError(null); }, 3000);
     }
   };
 
@@ -413,10 +447,11 @@ export function FlashcardsPage() {
   };
 
   const toggleFullscreen = () => {
+    const isCurrent = captureContext();
     const element = document.getElementById("study-container");
     if (!element) return;
     if (!document.fullscreenElement) {
-      element.requestFullscreen().then(() => setIsFullscreen(true)).catch(err => {
+      element.requestFullscreen().then(() => { if (isCurrent()) setIsFullscreen(true); }).catch(err => {
         console.error("Error entering fullscreen mode", err);
       });
     } else {

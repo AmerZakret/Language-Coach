@@ -17,6 +17,7 @@ class ProfileScreen extends StatelessWidget {
 
   void _showEditNameDialog(BuildContext context, AuthService auth, LanguageService lang) {
     if (auth.isGuest) return;
+    final session = auth.captureSession();
 
     final controller = TextEditingController(text: auth.currentUserName);
 
@@ -51,16 +52,18 @@ class ProfileScreen extends StatelessWidget {
             ),
             TextButton(
               onPressed: () async {
+                if (!session.isCurrent || !context.mounted) return;
                 final newName = controller.text.trim();
                 if (newName.isNotEmpty && newName != auth.currentUserName) {
                   try {
                     await UserApiService().updateProfile(name: newName);
+                    if (!session.isCurrent || !context.mounted) return;
                     auth.updateName(newName);
                   } catch (e) {
                     debugPrint('Failed to update name: $e');
                   }
                 }
-                if (context.mounted) {
+                if (context.mounted && session.isCurrent) {
                   Navigator.pop(context);
                 }
               },
