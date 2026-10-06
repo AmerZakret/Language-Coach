@@ -6,13 +6,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:lingua_ai/services/auth_service.dart';
 import 'package:lingua_ai/services/flashcard_service.dart';
 import 'package:lingua_ai/services/progress_service.dart';
+import 'package:lingua_ai/services/progress_cache.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   const idA = '507f1f77bcf86cd799439011';
   const idB = '507f1f77bcf86cd799439012';
 
-  test('progress and cards isolate backend guests, restoration, and local guests', () async {
+  test(
+      'progress and cards isolate backend guests, restoration, and local guests',
+      () async {
     SharedPreferences.setMockInitialValues({
       'progress_guest_en_totalXp': 999,
       'flashcards_guest_en_list': '[{"targetWord":"shared legacy card"}]',
@@ -21,7 +24,8 @@ void main() {
     final progress = ProgressService();
     final cards = FlashcardService();
     await auth.init();
-    await auth.setGuestSession(id: idA, email: 'guest-a@guest.lingua.local', token: 'token-a');
+    await auth.setGuestSession(
+        id: idA, email: 'guest-a@guest.lingua.local', token: 'token-a');
     await progress.init();
     await cards.init();
     final prefs = await SharedPreferences.getInstance();
@@ -33,36 +37,51 @@ void main() {
       await Future<void>.delayed(Duration.zero);
     }
 
-    expect(auth.isLoggedIn, false, reason: 'Backend guests must not need the member flag');
+    expect(auth.isLoggedIn, false,
+        reason: 'Backend guests must not need the member flag');
     expect(auth.localStorageNamespace, 'guest_$idA');
     expect(progress.totalXp, 0);
     expect(cards.allCards, isEmpty);
     await writeData(10, 'Guest A word');
-    expect(prefs.getInt('progress_guest_${idA}_en_totalXp'), 10);
-    expect(jsonDecode(prefs.getString('flashcards_guest_${idA}_en_list')!)[0]['targetWord'], 'Guest A word');
+    expect(ProgressSnapshot.read(prefs, 'guest_$idA', 'en').totalXp, 10);
+    expect(
+        jsonDecode(prefs.getString('flashcards_guest_${idA}_en_list')!)[0]
+            ['targetWord'],
+        'Guest A word');
     final persistedA = {
-      for (final key in ['isLoggedIn', 'isGuest', 'currentUserName', 'currentUserEmail', 'currentUserId', 'token'])
+      for (final key in [
+        'isLoggedIn',
+        'isGuest',
+        'currentUserName',
+        'currentUserEmail',
+        'currentUserId',
+        'token'
+      ])
         key: prefs.get(key)!,
     };
     final namespaceA = auth.localStorageNamespace;
 
     auth.logout();
-    await auth.setGuestSession(id: idB, email: 'guest-b@guest.lingua.local', token: 'token-b');
+    await auth.setGuestSession(
+        id: idB, email: 'guest-b@guest.lingua.local', token: 'token-b');
     expect(auth.localStorageNamespace, 'guest_$idB');
     expect(auth.localStorageNamespace, isNot(namespaceA));
     expect(progress.totalXp, 0);
     expect(cards.allCards, isEmpty);
     await writeData(20, 'Guest B word');
-    expect(prefs.getInt('progress_guest_${idB}_en_totalXp'), 20);
-    expect(jsonDecode(prefs.getString('flashcards_guest_${idB}_en_list')!)[0]['targetWord'], 'Guest B word');
-    expect(prefs.getInt('progress_guest_${idA}_en_totalXp'), 10);
+    expect(ProgressSnapshot.read(prefs, 'guest_$idB', 'en').totalXp, 20);
+    expect(
+        jsonDecode(prefs.getString('flashcards_guest_${idB}_en_list')!)[0]
+            ['targetWord'],
+        'Guest B word');
+    expect(ProgressSnapshot.read(prefs, 'guest_$idA', 'en').totalXp, 10);
 
     await auth.loginAsGuest();
     expect(auth.localStorageNamespace, 'local_guest');
     expect(progress.totalXp, 0);
     expect(cards.allCards, isEmpty);
     await writeData(30, 'Offline word');
-    expect(prefs.getInt('progress_local_guest_en_totalXp'), 30);
+    expect(ProgressSnapshot.read(prefs, 'local_guest', 'en').totalXp, 30);
     expect(prefs.getString('flashcards_local_guest_en_list'), isNotNull);
 
     // Restore the saved session through init(), as on restart, without using
@@ -76,29 +95,45 @@ void main() {
     }
     await auth.init();
     expect(auth.localStorageNamespace, namespaceA);
+    await progress.reloadProgress();
     expect(progress.totalXp, 10);
     expect(cards.allCards.single.targetWord, 'Guest A word');
 
-    await auth.setGuestSession(id: idB, email: 'guest-b@guest.lingua.local', token: 'token-b');
+    await auth.setGuestSession(
+        id: idB, email: 'guest-b@guest.lingua.local', token: 'token-b');
+    await progress.reloadProgress();
     expect(progress.totalXp, 20);
     expect(cards.allCards.single.targetWord, 'Guest B word');
     await auth.loginAsGuest();
+    await progress.reloadProgress();
     expect(progress.totalXp, 30);
     expect(cards.allCards.single.targetWord, 'Offline word');
 
     // Session switches between preference writes must not redirect the rest of
     // a save or reset into the next guest's keys.
+    final baseB = ProgressSnapshot.read(prefs, 'guest_$idB', 'en');
+    await ProgressSnapshot(
+            totalXp: baseB.totalXp,
+            streak: 7,
+            lessonIds: baseB.lessonIds,
+            activity: baseB.activity)
+        .save(prefs, 'guest_$idB', 'en');
     await prefs.setInt('progress_guest_${idB}_en_streak', 7);
-    await auth.setGuestSession(id: idA, email: 'guest-a@guest.lingua.local', token: 'token-a');
+    await auth.setGuestSession(
+        id: idA, email: 'guest-a@guest.lingua.local', token: 'token-a');
     progress.addXp(0);
-    await auth.setGuestSession(id: idB, email: 'guest-b@guest.lingua.local', token: 'token-b');
+    await auth.setGuestSession(
+        id: idB, email: 'guest-b@guest.lingua.local', token: 'token-b');
     await Future<void>.delayed(Duration.zero);
     expect(progress.streak, 7);
     expect(prefs.getInt('progress_guest_${idB}_en_streak'), 7);
-    await auth.setGuestSession(id: idA, email: 'guest-a@guest.lingua.local', token: 'token-a');
+    await auth.setGuestSession(
+        id: idA, email: 'guest-a@guest.lingua.local', token: 'token-a');
     final resettingA = progress.resetProgress();
-    await auth.setGuestSession(id: idB, email: 'guest-b@guest.lingua.local', token: 'token-b');
+    await auth.setGuestSession(
+        id: idB, email: 'guest-b@guest.lingua.local', token: 'token-b');
     await resettingA;
+    await progress.reloadProgress();
     expect(progress.totalXp, 20);
     expect(progress.streak, 7);
     expect(prefs.getInt('progress_guest_${idB}_en_streak'), 7);
@@ -107,8 +142,11 @@ void main() {
       // Attributable registered email caches migrate; resets never revive them.
       await prefs.setInt('progress_member_example_com_en_totalXp', 40);
       await prefs.setInt('progress_member_example_com_en_streak', 2);
-      await prefs.setStringList('progress_member_example_com_en_completedLessonIds', ['member-lesson']);
-      await prefs.setStringList('progress_member_example_com_en_weeklyActivity', ['0.4']);
+      await prefs.setStringList(
+          'progress_member_example_com_en_completedLessonIds',
+          ['member-lesson']);
+      await prefs.setStringList(
+          'progress_member_example_com_en_weeklyActivity', ['0.4']);
       await prefs.setString('flashcards_member_example_com_en_list',
           prefs.getString('flashcards_guest_${idA}_en_list')!);
       await prefs.setBool('isGuest', false);
@@ -125,15 +163,19 @@ void main() {
       expect(progress.completedLessonIds, {'member-lesson'});
       expect(progress.weeklyActivity, [0.4]);
       expect(cards.allCards.single.targetWord, 'Guest A word');
-      expect(prefs.getString('flashcards_registered_${idA}_en_list'), isNotNull);
+      expect(
+          prefs.getString('flashcards_registered_${idA}_en_list'), isNotNull);
       expect(prefs.containsKey('flashcards_member_example_com_en_list'), false);
-      expect(prefs.containsKey('progress_member_example_com_en_totalXp'), false);
-      expect(prefs.getInt('progress_guest_${idB}_en_totalXp'), 20);
+      expect(
+          prefs.containsKey('progress_member_example_com_en_totalXp'), false);
+      expect(ProgressSnapshot.read(prefs, 'guest_$idB', 'en').totalXp, 20);
       await progress.resetProgress();
       await progress.reloadProgress();
       expect(progress.totalXp, 0);
       await Future<void>.delayed(Duration.zero);
-    }, createHttpClient: (_) => throw StateError('Offline test: network disabled'));
+    },
+        createHttpClient: (_) =>
+            throw StateError('Offline test: network disabled'));
     progress.dispose();
     cards.dispose();
   });
@@ -142,12 +184,20 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     final auth = AuthService();
     await auth.init();
-    auth.setBackendSession(name: 'Member', email: 'first@example.com', token: 'member-token', id: idA);
+    auth.setBackendSession(
+        name: 'Member',
+        email: 'first@example.com',
+        token: 'member-token',
+        id: idA);
     await Future<void>.delayed(Duration.zero);
     final namespace = auth.localStorageNamespace;
     expect(namespace, 'registered_$idA');
     expect(namespace, isNot('guest_$idA'));
-    auth.setBackendSession(name: 'Member', email: 'changed@example.com', token: 'member-token', id: idA);
+    auth.setBackendSession(
+        name: 'Member',
+        email: 'changed@example.com',
+        token: 'member-token',
+        id: idA);
     await Future<void>.delayed(Duration.zero);
     expect(auth.localStorageNamespace, namespace);
   });

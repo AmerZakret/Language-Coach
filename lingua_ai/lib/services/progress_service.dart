@@ -5,6 +5,7 @@ import 'progress_api_service.dart';
 import '../core/localization/target_language_service.dart';
 import 'connectivity_service.dart';
 import 'offline_queue_service.dart';
+import 'progress_cache.dart';
 
 class ProgressService extends ChangeNotifier {
   static final ProgressService _instance = ProgressService._internal();
@@ -14,6 +15,8 @@ class ProgressService extends ChangeNotifier {
   late SharedPreferences _prefs;
   final ProgressApiService _apiService = ProgressApiService();
 
+  int _resetRevision = 0;
+  int _requestRevision = 0;
   int _totalXp = 0;
   int _streak = 0;
   Set<String> _completedLessonIds = {};
@@ -26,10 +29,13 @@ class ProgressService extends ChangeNotifier {
   List<double> get weeklyActivity => _weeklyActivity;
 
   bool Function() _captureContext() {
+    final reset = _resetRevision;
     final session = AuthService().captureSession();
     final language = TargetLanguageService().currentLanguage;
     final version = TargetLanguageService().languageVersion;
-    return () => session.isCurrent &&
+    return () =>
+        reset == _resetRevision &&
+        session.isCurrent &&
         TargetLanguageService().currentLanguage == language &&
         TargetLanguageService().languageVersion == version;
   }
@@ -49,12 +55,12 @@ class ProgressService extends ChangeNotifier {
   String _getScopedKey(String suffix) {
     final auth = AuthService();
     final targetLang = TargetLanguageService();
-    
+
     final userPart = auth.localStorageNamespace;
-    
+
     // Language part
     String langPart = targetLang.currentLanguage;
-    
+
     return 'progress_${userPart}_${langPart}_$suffix';
   }
 
@@ -86,7 +92,12 @@ class ProgressService extends ChangeNotifier {
   Future<void> reloadProgress() async {
     final isCurrent = _captureContext();
     final scopedKeys = {
-      for (final suffix in ['totalXp', 'streak', 'completedLessonIds', 'weeklyActivity'])
+      for (final suffix in [
+        'totalXp',
+        'streak',
+        'completedLessonIds',
+        'weeklyActivity'
+      ])
         suffix: _getScopedKey(suffix),
     };
     // 1. Reset in-memory state
@@ -99,7 +110,12 @@ class ProgressService extends ChangeNotifier {
     final legacyUserPart = AuthService().legacyRegisteredStorageNamespace;
     if (legacyUserPart != null) {
       final lang = TargetLanguageService().currentLanguage;
-      for (final suffix in ['totalXp', 'streak', 'completedLessonIds', 'weeklyActivity']) {
+      for (final suffix in [
+        'totalXp',
+        'streak',
+        'completedLessonIds',
+        'weeklyActivity'
+      ]) {
         if (!isCurrent()) return;
         final key = scopedKeys[suffix]!;
         final legacyKey = 'progress_${legacyUserPart}_${lang}_$suffix';
@@ -115,159 +131,102 @@ class ProgressService extends ChangeNotifier {
     }
     // Another auth/language listener may have reloaded while migration yielded.
     if (!isCurrent()) return;
-    _totalXp = _prefs.getInt(_getScopedKey('totalXp')) ?? 0;
-    _streak = _prefs.getInt(_getScopedKey('streak')) ?? 0;
-
-    final savedIds = _prefs.getStringList(_getScopedKey('completedLessonIds'));
-    if (savedIds != null) {
-      _completedLessonIds = savedIds.toSet();
-    }
-
-    final savedActivity = _prefs.getStringList(_getScopedKey('weeklyActivity'));
-    if (savedActivity != null) {
-      _weeklyActivity =
-          savedActivity.map((e) => double.tryParse(e) ?? 0.0).toList();
-    } else {
-      // Default placeholder activity if new user
-      _weeklyActivity = [0.2, 0.5, 0.8, 0.4, 0.9, 0.3, 0.0];
-    }
-
-    // 3. If logged in (not guest), try to sync with backend
+    await _refreshDisplay(isCurrent);
+    if (!isCurrent()) return;
     final auth = AuthService();
-    if (auth.isLoggedIn && !auth.isGuest) {
+    if (auth.token.isNotEmpty && ConnectivityService().isOnline) {
       syncWithBackend();
     }
+  }
 
+  Future<void> _refreshDisplay(bool Function() isCurrent) async {
+    final owner = AuthService().localStorageNamespace;
+    final language = TargetLanguageService().currentLanguage;
+    await OfflineQueueService().preparePendingProgress(owner);
+    if (!isCurrent()) return;
+    final actions = await OfflineQueueService().getQueue();
+    if (!isCurrent()) return;
+    final base = ProgressSnapshot.read(_prefs, owner, language);
+    final current = base.overlay(
+        actions
+            .where((a) =>
+                a.ownerNamespace == owner &&
+                a.type == 'complete-lesson' &&
+                a.payload['targetLanguage'] == language)
+            .map((a) => a.payload),
+        reset: actions.any(
+            (a) => a.ownerNamespace == owner && a.type == 'reset-progress'));
+    _totalXp = current.totalXp;
+    _streak = current.streak;
+    _completedLessonIds = current.lessonIds;
+    _weeklyActivity = current.activity;
     notifyListeners();
   }
 
   Future<void> syncWithBackend() async {
     final auth = AuthService();
-    final isCurrent = _captureContext();
+    final contextCurrent = _captureContext();
+    final request = ++_requestRevision;
+    bool isCurrent() => contextCurrent() && request == _requestRevision;
+    final owner = auth.localStorageNamespace;
     final language = TargetLanguageService().currentLanguage;
-    if (!auth.isLoggedIn || auth.isGuest) return;
-
-    final userId = auth.currentUserId.isNotEmpty ? auth.currentUserId : auth.currentUserEmail;
-
-    // Drain the offline queue first
-    await OfflineQueueService().processQueue(userId);
-    if (!isCurrent()) return;
-
+    if (auth.token.isEmpty) return;
+    final userId = auth.currentUserId.isNotEmpty
+        ? auth.currentUserId
+        : auth.currentUserEmail;
+    final queue = OfflineQueueService();
     try {
-      final langFullName = TargetLanguageService.toFullName(language);
-      
-      final response = await _apiService.getProgress(userId, langFullName);
+      await queue.processQueue(userId, waitForActive: true);
       if (!isCurrent()) return;
-      final stats = response['stats'];
-
-      final completed = response['completedLessons'] as List?;
-      final backendIds = <String>{};
-      if (completed != null) {
-        for (var item in completed) {
-          backendIds.add(item['lessonId'].toString());
-        }
-      }
-
-      // Sync any local offline completed lessons that are missing on the backend
-      bool syncedAny = false;
-      for (var localId in _completedLessonIds.toList()) {
-        if (!isCurrent()) return;
-        if (!backendIds.contains(localId)) {
-          try {
-            await _apiService.completeLesson(userId, localId, 100);
-            if (!isCurrent()) return;
-            syncedAny = true;
-            debugPrint('Synced offline completion for lesson: $localId');
-          } catch (err) {
-            if (!isCurrent()) return;
-            debugPrint('Failed to sync offline lesson $localId to backend: $err');
-          }
-        }
-      }
-
-      if (syncedAny) {
-        final updatedResponse = await _apiService.getProgress(userId, langFullName);
-        if (!isCurrent()) return;
-        final updatedStats = updatedResponse['stats'];
-        if (updatedStats != null) {
-          _totalXp = updatedStats['totalXp'] as int? ?? 0;
-          _streak = updatedStats['streak'] as int? ?? 0;
-        }
-        final updatedCompleted = updatedResponse['completedLessons'] as List?;
-        _completedLessonIds.clear();
-        if (updatedCompleted != null) {
-          for (var item in updatedCompleted) {
-            _completedLessonIds.add(item['lessonId'].toString());
-          }
-        }
-      } else {
-        if (stats != null) {
-          _totalXp = stats['totalXp'] as int? ?? 0;
-          _streak = stats['streak'] as int? ?? 0;
-        }
-        _completedLessonIds = backendIds;
-      }
-
-      _saveLocalData();
-      notifyListeners();
+      final revision = await queue.progressRevision(owner);
+      if (!isCurrent()) return;
+      final response = await _apiService.getProgress(
+          userId, TargetLanguageService.toFullName(language));
+      if (!isCurrent()) return;
+      await queue.saveServerProgress(
+          owner, language, revision, ProgressSnapshot.fromServer(response));
+      if (!isCurrent()) return;
     } catch (e) {
+      if (!isCurrent()) return;
       debugPrint('Progress sync failed: $e');
     }
+    await _refreshDisplay(isCurrent);
   }
 
-  Future<void> completeLesson(String lessonId, int xpReward, {int score = 100}) async {
+  Future<void> completeLesson(String lessonId, int xpReward,
+      {int score = 100}) async {
     final auth = AuthService();
     final isCurrent = _captureContext();
+    final owner = auth.localStorageNamespace;
     final language = TargetLanguageService().currentLanguage;
-    final ownerNamespace = auth.localStorageNamespace;
-
-    if (!_completedLessonIds.contains(lessonId)) {
-      final hasToken = auth.token.isNotEmpty;
-      if ((auth.isLoggedIn && !auth.isGuest) || (auth.isGuest && hasToken)) {
-        try {
-          final userId = auth.currentUserId.isNotEmpty ? auth.currentUserId : auth.currentUserEmail;
-          if (ConnectivityService().isOffline) {
-            throw Exception('Device is offline');
-          }
-          await _apiService.completeLesson(userId, lessonId, score);
-          if (!isCurrent()) return;
-          
-          final langFullName = TargetLanguageService.toFullName(language);
-          final response = await _apiService.getProgress(userId, langFullName);
-          if (!isCurrent()) return;
-          final stats = response['stats'];
-          if (stats != null) {
-            _totalXp = stats['totalXp'] as int? ?? 0;
-            _streak = stats['streak'] as int? ?? 0;
-          }
-          final completed = response['completedLessons'] as List?;
-          _completedLessonIds.clear();
-          if (completed != null) {
-            for (var item in completed) {
-              _completedLessonIds.add(item['lessonId'].toString());
-            }
-          }
-          _saveLocalData();
-          notifyListeners();
-        } catch (e) {
-          if (!isCurrent()) return;
-          debugPrint('Backend progress update failed, falling back to local: $e');
-          await OfflineQueueService().pushAction('complete-lesson', {
+    final queue = OfflineQueueService();
+    if (_completedLessonIds.contains(lessonId)) return;
+    if (auth.token.isNotEmpty) {
+      // Persist the score, reward and language before the first request. The
+      // queue supplies the same operation ID on every ambiguous retry.
+      await queue.pushAction(
+          'complete-lesson',
+          {
             'lessonId': lessonId,
             'score': score,
-          }, ownerNamespace: ownerNamespace);
-          if (!isCurrent()) return;
-          _completedLessonIds.add(lessonId);
-          _totalXp += xpReward;
-          _saveLocalData();
-          notifyListeners();
-        }
-      } else {
-        _completedLessonIds.add(lessonId);
-        _totalXp += xpReward;
-        _saveLocalData();
-        notifyListeners();
-      }
+            'xpReward': xpReward,
+            'targetLanguage': language,
+          },
+          ownerNamespace: owner);
+    } else {
+      await queue.modifyLocalProgress(
+          owner,
+          language,
+          (base) => base.overlay([
+                {'lessonId': lessonId, 'xpReward': xpReward}
+              ]));
+    }
+    if (!isCurrent()) return;
+    await _refreshDisplay(isCurrent);
+    if (isCurrent() &&
+        auth.token.isNotEmpty &&
+        ConnectivityService().isOnline) {
+      await syncWithBackend();
     }
   }
 
@@ -276,51 +235,49 @@ class ProgressService extends ChangeNotifier {
   }
 
   void addXp(int amount) {
-    _totalXp += amount;
-    _saveLocalData();
-    notifyListeners();
-  }
-
-  Future<void> _saveLocalData() async {
     final isCurrent = _captureContext();
-    // Capture keys and values before yielding so a session change cannot split
-    // this local write across two accounts.
-    final xpKey = _getScopedKey('totalXp');
-    final streakKey = _getScopedKey('streak');
-    final lessonsKey = _getScopedKey('completedLessonIds');
-    final activityKey = _getScopedKey('weeklyActivity');
-    final xp = _totalXp;
-    final streak = _streak;
-    final lessonIds = _completedLessonIds.toList();
-    final activity = _weeklyActivity.map((e) => e.toString()).toList();
-    await _prefs.setInt(xpKey, xp);
-    if (!isCurrent()) return;
-    await _prefs.setInt(streakKey, streak);
-    if (!isCurrent()) return;
-    await _prefs.setStringList(
-        lessonsKey, lessonIds);
-    if (!isCurrent()) return;
-    await _prefs.setStringList(
-        activityKey, activity);
+    final owner = AuthService().localStorageNamespace;
+    final language = TargetLanguageService().currentLanguage;
+    OfflineQueueService()
+        .modifyLocalProgress(
+            owner,
+            language,
+            (base) => ProgressSnapshot(
+                totalXp: base.totalXp + amount,
+                streak: base.streak,
+                lessonIds: base.lessonIds,
+                activity: base.activity))
+        .then((_) {
+      if (isCurrent()) _refreshDisplay(isCurrent);
+    });
   }
 
   Future<void> resetProgress() async {
+    ++_resetRevision;
+    ++_requestRevision;
     final isCurrent = _captureContext();
-    final keys = [
-      for (final suffix in ['totalXp', 'streak', 'completedLessonIds', 'weeklyActivity'])
-        _getScopedKey(suffix),
-    ];
-    _totalXp = 0;
-    _streak = 0;
-    _completedLessonIds.clear();
-    _weeklyActivity = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
-
-    for (final key in keys) {
-      if (!isCurrent()) return;
-      await _prefs.remove(key);
+    final auth = AuthService();
+    final owner = auth.localStorageNamespace;
+    if (auth.token.isNotEmpty) {
+      await OfflineQueueService().pushAction(
+          'reset-progress',
+          {
+            'legacyOwnerNamespace': auth.legacyRegisteredStorageNamespace,
+          },
+          ownerNamespace: owner);
+    } else {
+      await ProgressSnapshot.resetOwner(_prefs, owner);
+      final legacyOwner = auth.legacyRegisteredStorageNamespace;
+      if (legacyOwner != null) {
+        await ProgressSnapshot.resetOwner(_prefs, legacyOwner);
+      }
     }
-
     if (!isCurrent()) return;
-    notifyListeners();
+    await _refreshDisplay(isCurrent);
+    if (isCurrent() &&
+        auth.token.isNotEmpty &&
+        ConnectivityService().isOnline) {
+      await syncWithBackend();
+    }
   }
 }

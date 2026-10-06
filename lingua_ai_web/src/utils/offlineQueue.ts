@@ -1,3 +1,6 @@
+import { acknowledgeCompletion, resetOwnerProgress, saveProgress, loadProgress } from './progressStorage';
+import type { ProgressState } from '../types/progress';
+import type { TargetLanguage } from '../types/language';
 import apiClient from '../api/apiClient';
 import type { AxiosRequestConfig } from 'axios';
 import { getOfflineQueueSession, isOfflineQueueSessionActive } from './queueSession';
@@ -5,7 +8,7 @@ import type { QueueSession } from './queueSession';
 
 export interface OfflineAction {
   readonly id: string;
-  readonly type: 'complete-lesson' | 'create-flashcard' | 'update-flashcard' | 'delete-flashcard' | 'review-flashcard';
+  readonly type: 'reset-progress' | 'complete-lesson' | 'create-flashcard' | 'update-flashcard' | 'delete-flashcard' | 'review-flashcard';
   readonly ownerNamespace: string;
   readonly payload: any;
   readonly createdAt: string;
@@ -19,11 +22,13 @@ interface QueueState {
   // Dispatched creates stay dependency-backed after restart/ambiguous failure;
   // only creates never dispatched may be edited in place or cancelled.
   startedCreates: string[];
+  progressRevision?: string;
 }
 const QUEUE_STORAGE_KEY = 'linguaai_offline_queue';
 const QUARANTINE_STORAGE_KEY = `${QUEUE_STORAGE_KEY}_legacy_unowned`;
 const ownerStorageKey = (owner: string) => `${QUEUE_STORAGE_KEY}_${encodeURIComponent(owner)}`;
 const drainingOwners = new Set<string>();
+const drainWaiters = new Map<string, Promise<void>>();
 
 function quarantineLegacyQueue(): void {
   const legacy = localStorage.getItem(QUEUE_STORAGE_KEY);
@@ -79,6 +84,35 @@ function resolvePayload(state: QueueState, type: string, payload: any): any {
   return value;
 }
 
+// Enrich existing owned completion actions only from recorded lesson metadata
+// or a uniquely attributable owner cache. Never invent a score or an owner.
+export function preparePendingProgress(owner: string): void {
+  const state = readState(owner);
+  let changed = false;
+  state.actions = state.actions.map(action => {
+    if (action.ownerNamespace !== owner || action.type !== 'complete-lesson' || action.payload.targetLanguage) return action;
+    const matches: { language: TargetLanguage; reward?: number }[] = [];
+    for (const language of ['English', 'German', 'Spanish', 'French', 'Arabic'] as TargetLanguage[]) {
+      let catalog: any[] = [];
+      try { catalog = JSON.parse(localStorage.getItem(`linguaai_lessons_${language}`) || '[]'); } catch { /* Unusable catalog stays untouched. */ }
+      const lesson = Array.isArray(catalog) ? catalog.find(row => row.id === action.payload.lessonId) : undefined;
+      if (lesson || loadProgress(owner, language).completedLessonIds.includes(action.payload.lessonId)) {
+        matches.push({ language, reward: lesson?.xpReward });
+      }
+    }
+    if (matches.length !== 1) return action; // Unknown/ambiguous context remains retained.
+    changed = true;
+    return { ...action, payload: { ...action.payload, targetLanguage: matches[0].language,
+      ...(typeof matches[0].reward === 'number' ? { xpReward: matches[0].reward } : {}) } };
+  });
+  if (changed) { state.progressRevision = `migration_${Date.now()}_${Math.random()}`; writeState(state); }
+}
+
+export const getProgressQueueRevision = (owner: string): string => readState(owner).progressRevision || '';
+export const saveServerProgress = (owner: string, language: TargetLanguage, revision: string, progress: ProgressState): boolean => {
+  if (getProgressQueueRevision(owner) !== revision) return false;
+  saveProgress(owner, language, progress); return true;
+};
 export const getOfflineQueue = (): OfflineAction[] => readState(getOfflineQueueSession().ownerNamespace).actions;
 export const isPendingBackendCard = (id: string, owner: string): boolean => {
   if (owner === 'local_guest') return false;
@@ -88,6 +122,11 @@ export const isPendingBackendCard = (id: string, owner: string): boolean => {
 };
 export const pushToOfflineQueue = (type: OfflineAction['type'], payload: any, ownerNamespace: string): void => {
   const state = readState(ownerNamespace);
+  if (type === 'reset-progress') {
+    state.actions = state.actions.filter(a => a.type !== 'complete-lesson' && a.type !== 'reset-progress');
+    // A durable reset barrier is visible before the cache is cleared. An old
+    // in-flight completion is cancelled locally; the barrier runs after HTTP.
+  }
   const id = cardId(payload);
   const create = id && state.actions.find(a => a.type === 'create-flashcard' && a.payload.tempId === id);
   if (dependent(type) && create && !state.startedCreates.includes(create.id)) {
@@ -111,7 +150,9 @@ export const pushToOfflineQueue = (type: OfflineAction['type'], payload: any, ow
   }
   state.actions.push({ id: `action_${Date.now()}_${Math.random().toString(36).slice(2)}`, type,
     ownerNamespace, payload: resolvePayload(state, type, payload), createdAt: new Date().toISOString(), schemaVersion: 1 });
+  if (type === 'complete-lesson' || type === 'reset-progress') state.progressRevision = state.actions.at(-1)!.id;
   writeState(state);
+  if (type === 'reset-progress') resetOwnerProgress(ownerNamespace, payload.legacyOwnerNamespace);
 };
 export const clearOfflineQueue = (): void => {
   const state = readState(getOfflineQueueSession().ownerNamespace);
@@ -119,13 +160,20 @@ export const clearOfflineQueue = (): void => {
   writeState(state); // Keep mappings for cached local IDs.
 };
 
-export const processOfflineQueue = async (userId: string): Promise<boolean> => {
+export const processOfflineQueue = async (userId: string, waitForActive = false): Promise<boolean> => {
   const session = getOfflineQueueSession();
   const owner = session.ownerNamespace;
+  if (waitForActive && drainWaiters.has(owner)) {
+    await drainWaiters.get(owner);
+    if (!isOfflineQueueSessionActive(session)) return false;
+    return processOfflineQueue(userId, true);
+  }
   const initial = readState(owner);
   if (userId !== session.userId || !isOfflineQueueSessionActive(session)
     || initial.actions.some(a => a.ownerNamespace !== owner) || drainingOwners.has(owner)) return false;
   drainingOwners.add(owner);
+  let release!: () => void;
+  drainWaiters.set(owner, new Promise<void>(resolve => { release = resolve; }));
   try {
     // New appends remain for the next drain; acknowledgements use the latest
     // stored state, never replace it with this starting snapshot.
@@ -144,13 +192,18 @@ export const processOfflineQueue = async (userId: string): Promise<boolean> => {
         headers: { 'X-Idempotency-Key': action.id },
       };
       let serverId: string | undefined;
+      let completion: any;
       try {
         const payload = action.payload;
         const id = cardId(payload);
         if (dependent(action.type) && (!id || id.startsWith('local_'))) throw new Error('Pending card has no durable server mapping');
         switch (action.type) {
+          case 'reset-progress':
+            await apiClient.delete(`/progress/${session.userId}/reset`, config); break;
           case 'complete-lesson':
-            await apiClient.post(`/progress/${session.userId}/complete-lesson`, { lessonId: payload.lessonId, score: payload.score || 100 }, config); break;
+            if (!Number.isInteger(payload.score)) throw new Error('Completion has no recorded score');
+            completion = (await apiClient.post(`/progress/${session.userId}/complete-lesson`, { lessonId: payload.lessonId, score: payload.score }, config)).data?.data;
+            break;
           case 'create-flashcard': {
             const response = await apiClient.post('/flashcards', {
               userId: session.userId, targetWord: payload.targetWord, turkishTranslation: payload.turkishTranslation,
@@ -175,6 +228,14 @@ export const processOfflineQueue = async (userId: string): Promise<boolean> => {
       }
       if (!isOfflineQueueSessionActive(session)) return false;
       const latest = readState(owner);
+      if (latest.actions.some(a => a.id === action.id) && action.type === 'complete-lesson') {
+        acknowledgeCompletion(owner, action.payload, completion);
+        latest.progressRevision = `ack_${action.id}`;
+      }
+      if (action.type === 'reset-progress') {
+        resetOwnerProgress(owner, action.payload.legacyOwnerNamespace);
+        latest.progressRevision = `ack_${action.id}`;
+      }
       if (action.type === 'create-flashcard' && action.payload.tempId) latest.tempIds[action.payload.tempId] = serverId!;
       latest.actions = latest.actions.filter(a => a.id !== action.id)
         .map(a => ({ ...a, payload: resolvePayload(latest, a.type, a.payload) }));
@@ -183,5 +244,5 @@ export const processOfflineQueue = async (userId: string): Promise<boolean> => {
       writeState(latest);
     }
     return isOfflineQueueSessionActive(session);
-  } finally { drainingOwners.delete(owner); }
+  } finally { drainingOwners.delete(owner); drainWaiters.delete(owner); release(); }
 };

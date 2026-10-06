@@ -4,7 +4,8 @@ import '../core/config/api_config.dart';
 import 'auth_service.dart';
 
 class ProgressApiService {
-  Future<Map<String, dynamic>> getProgress(String userId, String targetLanguage) async {
+  Future<Map<String, dynamic>> getProgress(
+      String userId, String targetLanguage) async {
     try {
       final headers = <String, String>{};
       final token = AuthService().token;
@@ -13,7 +14,8 @@ class ProgressApiService {
       }
 
       final response = await http.get(
-        Uri.parse('${ApiConfig.baseUrl}${ApiConfig.progress}/$userId?targetLanguage=$targetLanguage'),
+        Uri.parse(
+            '${ApiConfig.baseUrl}${ApiConfig.progress}/$userId?targetLanguage=$targetLanguage'),
         headers: headers,
       );
 
@@ -28,7 +30,8 @@ class ProgressApiService {
   }
 
   Future<Map<String, dynamic>> completeLesson(
-      String userId, String lessonId, int score, {String? operationId}) async {
+      String userId, String lessonId, int score,
+      {String? operationId}) async {
     try {
       final headers = <String, String>{
         'Content-Type': 'application/json',
@@ -40,7 +43,8 @@ class ProgressApiService {
       }
 
       final response = await http.post(
-        Uri.parse('${ApiConfig.baseUrl}${ApiConfig.progress}/$userId/complete-lesson'),
+        Uri.parse(
+            '${ApiConfig.baseUrl}${ApiConfig.progress}/$userId/complete-lesson'),
         headers: headers,
         body: json.encode({
           'lessonId': lessonId,
@@ -55,6 +59,19 @@ class ProgressApiService {
       }
     } catch (e) {
       rethrow;
+    }
+  }
+
+  Future<void> resetProgress(String userId, {String? operationId}) async {
+    final response = await http.delete(
+        Uri.parse('${ApiConfig.baseUrl}${ApiConfig.progress}/$userId/reset'),
+        headers: {
+          if (AuthService().token.isNotEmpty)
+            'Authorization': 'Bearer ${AuthService().token}',
+          if (operationId != null) 'X-Idempotency-Key': operationId,
+        });
+    if (response.statusCode != 200) {
+      throw StateError('Failed to reset progress');
     }
   }
 }

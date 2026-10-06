@@ -84,6 +84,7 @@ function harness(saved = storage()) {
   transport.delete = (url, config) => request('delete', url, undefined, config);
 
   const sources = {
+    storage: 'utils/progressStorage.ts', types: 'types/progress.ts',
     userKey: 'utils/userKey.ts', queueSession: 'utils/queueSession.ts',
     apiClient: 'api/apiClient.ts', offlineQueue: 'utils/offlineQueue.ts',
     auth: 'context/AuthContext.tsx',
@@ -107,6 +108,8 @@ function harness(saved = storage()) {
         if (name === 'react') return react;
         if (name === 'axios') return { create: () => transport };
         if (name === '../api/authApi') return { fetchMe: () => control.fetchMe() };
+        if (name.endsWith('/progressStorage')) return load('storage');
+        if (name.endsWith('/types/progress')) return load('types');
         if (name.endsWith('/userKey')) return load('userKey');
         if (name.endsWith('/queueSession')) return load('queueSession');
         if (name.endsWith('/apiClient')) return load('apiClient');
@@ -365,7 +368,7 @@ for (const type of ['create-flashcard', 'update-flashcard', 'delete-flashcard', 
 }
 
 test('durable acknowledgement survives interrupted successor and page restart', async () => {
-  const h = await durableHarness(); h.enqueue(); h.enqueue('complete-lesson', { lessonId: 'second' });
+  const h = await durableHarness(); h.enqueue(); h.enqueue('complete-lesson', { lessonId: 'second', score: 73 });
   const second = deferred(); const release = deferred();
   h.control.dispatch = async request => {
     if (request.data.lessonId === 'second') { second.resolve(); return release.promise; }
@@ -479,7 +482,7 @@ test('append during drain remains persisted without being overwritten by acknowl
   const h = await durableHarness(); h.enqueue(); const started = deferred(); const release = deferred();
   h.control.dispatch = () => { started.resolve(); return release.promise; };
   const drain = h.queue.processOfflineQueue(A); await started.promise;
-  h.enqueue('complete-lesson', { lessonId: 'new' });
+  h.enqueue('complete-lesson', { lessonId: 'new', score: 73 });
   release.resolve({ data: {} }); assert.equal(await drain, true);
   assert.equal(h.requests.length, 1); assert.equal(h.queue.getOfflineQueue()[0].payload.lessonId, 'new');
   const restarted = await durableHarness(h.saved); assert.equal(restarted.queue.getOfflineQueue().length, 1);

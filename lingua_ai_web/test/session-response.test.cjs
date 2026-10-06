@@ -27,7 +27,7 @@ function harness(initial = {}) {
   const modules = new Map();
   const calls = [];
   const timers = [];
-  const h = { localStorage, calls, timers, language: 'English', isOffline: true };
+  const h = { deferredState: [], snapshot: () => Object.fromEntries(values), localStorage, calls, timers, language: 'English', isOffline: true };
   const api = {
     fetchMe: async () => user(A), updateProfile: async () => user(A),
     login: async () => ({ user: user(A), access_token: `test-${A}` }),
@@ -54,10 +54,14 @@ function harness(initial = {}) {
       const r = activeRunner, i = r.cursor++;
       if (!(i in r.slots)) r.slots[i] = typeof initial === 'function' ? initial() : initial;
       return [r.slots[i], value => {
-        const next = typeof value === 'function' ? value(r.slots[i]) : value;
-        r.writes++;
-        if (!Object.is(next, r.slots[i])) r.dirty = true;
-        r.slots[i] = next;
+        const apply = () => {
+          const next = typeof value === 'function' ? value(r.slots[i]) : value;
+          r.writes++;
+          if (!Object.is(next, r.slots[i])) r.dirty = true;
+          r.slots[i] = next;
+        };
+        if (h.deferChildState && r === h.child) h.deferredState.push(apply);
+        else apply();
       }];
     },
     useRef: initial => {
@@ -136,12 +140,21 @@ function harness(initial = {}) {
           resetProgressInBackend: (...args) => h.resetProgress(...args),
         };
         if (path.endsWith('/offlineQueue')) return {
-          processOfflineQueue: (...args) => h.drain(...args),
+          ...load('queue'),
+          processOfflineQueue: (...args) => h.progressQueue ? load('queue').processOfflineQueue(...args) : h.drain(...args),
           isPendingBackendCard: (...args) => h.queue?.isPendingBackendCard(...args) ?? false,
-          pushToOfflineQueue: (...args) => h.queue?.pushToOfflineQueue(...args),
+          pushToOfflineQueue: (...args) => load('queue').pushToOfflineQueue(...args),
         };
         if (path.endsWith('/apiClient')) return Object.fromEntries(['get', 'post', 'put', 'delete'].map(method => [method,
-          (url, data) => { calls.push([method, url]); return h.transport(method, url, data); }]));
+          (url, data, config) => {
+            calls.push([method, url]);
+            if (url.includes('/progress/') && method === 'post') {
+              const id = url.split('/')[2]; calls.push(['complete', id, data.lessonId, data.score]);
+              return Promise.resolve(h.saveProgress(id, data.lessonId, data.score, config)).then(result => ({ data: result }));
+            }
+            if (url.includes('/progress/') && method === 'delete') return h.resetProgress(url.split('/')[2]);
+            return h.transport(method, url, data, config);
+          }]));
         throw new Error(`Unexpected import: ${path}`);
       },
     });
@@ -160,10 +173,11 @@ function harness(initial = {}) {
     r.render();
     return r;
   }
+  h.progressQueue = true;
   h.mountAuth = () => { h.authRunner = runner('auth', 'AuthProvider'); };
   h.auth = () => h.authRunner.result.props.value;
   h.login = id => { h.auth().login(user(id), `test-${id}`); h.authRunner.render(); };
-  h.mount = (name, symbol) => { h.child = runner(name, symbol); };
+  h.mount = (name, symbol) => { h.progressQueue = name === 'progress'; h.child = runner(name, symbol); };
   h.settle = async () => {
     for (let i = 0; i < 5; i++) {
       await tick();
@@ -263,7 +277,7 @@ test('ordinary same-session profile update does not advance revision', async () 
 
 for (const kind of ['fetch', 'completion-success', 'completion-failure', 'reset', 'language', 'unmount']) {
   test(`progress discards stale ${kind} response and follow-ups`, async () => {
-    const h = harness(); h.mountAuth(); h.login(A); h.mount('progress', 'ProgressProvider'); await h.settle();
+    const h = harness(); h.isOffline = false; h.mountAuth(); h.login(A); h.mount('progress', 'ProgressProvider'); await h.settle();
     const pending = deferred();
     let operation;
     if (kind.startsWith('completion')) {
@@ -367,10 +381,186 @@ test('login screen cannot apply an old login response after B is active', async 
   assert.equal(h.auth().user.id, B); assert.equal(h.calls.length, count);
 });
 test('current-session progress and flashcard responses still apply and cache', async () => {
-  const h = harness(); h.mountAuth(); h.login(B); h.mount('progress', 'ProgressProvider'); await h.settle();
+  const h = harness(); h.isOffline = false; h.mountAuth(); h.login(B); h.mount('progress', 'ProgressProvider'); await h.settle();
   assert.equal(h.child.result.props.value.progress.totalXp, 20);
   assert.equal(JSON.parse(h.localStorage.getItem(`progress_registered_${B}_English`)).totalXp, 20);
   h.child.unmount(); h.isOffline = false; h.mount('cards', 'FlashcardsPage'); await h.settle();
   assert.equal(h.child.exposed.allCards[0].userId, B);
   assert.equal(JSON.parse(h.localStorage.getItem(`flashcards_all_${B}_English`))[0].userId, B);
+});
+
+async function offlineProgressHarness(initial) {
+  const h = harness(initial); h.mountAuth(); if (!initial) h.login(A);
+  await h.settle();
+  h.serverProgress = progress(0); h.sent = [];
+  h.fetchProgress = async () => h.serverProgress;
+  h.saveProgress = async (id, lessonId, score, config) => {
+    h.sent.push({ id, lessonId, score, operationId: config.headers['X-Idempotency-Key'] });
+    h.serverProgress = { ...h.serverProgress, totalXp: h.serverProgress.totalXp + 50,
+      completedLessonIds: [...h.serverProgress.completedLessonIds, lessonId] };
+    return { data: { newTotalXp: h.serverProgress.totalXp, lessonId, score, xpEarned: 50 } };
+  };
+  h.mount('progress', 'ProgressProvider'); await h.settle();
+  h.value = () => h.child.result.props.value;
+  h.online = async () => { h.isOffline = false; h.child.render(); await h.settle(); };
+  return h;
+}
+
+test('Phase 4E: offline 73 survives restart with owner, language, time and stable action ID', async () => {
+  const h = await offlineProgressHarness();
+  await h.value().completeLesson('one', 50, 73); await h.settle();
+  const action = h.load('queue').getOfflineQueue()[0];
+  assert.equal(action.payload.score, 73); assert.equal(action.payload.targetLanguage, 'English');
+  assert.equal(action.ownerNamespace, `registered_${A}`); assert.ok(Date.parse(action.createdAt));
+  const restarted = await offlineProgressHarness(h.snapshot());
+  assert.equal(restarted.value().progress.totalXp, 50);
+  await restarted.online();
+  assert.equal(restarted.sent[0].score, 73); assert.equal(restarted.sent[0].operationId, action.id);
+  assert.equal(restarted.load('queue').getOfflineQueue().length, 0);
+  assert.equal(restarted.value().progress.totalXp, 50);
+  assert.deepEqual(copy(restarted.value().progress.completedLessonIds), ['one']);
+});
+
+test('Phase 4E: failed completion remains over fresh server progress and never doubles XP', async () => {
+  const h = await offlineProgressHarness(); await h.value().completeLesson('one', 50, 73);
+  h.saveProgress = async () => { throw new Error('Upload failed'); };
+  await h.online(); await h.value().reloadProgress(); await h.settle();
+  assert.equal(h.load('queue').getOfflineQueue().length, 1);
+  assert.equal(h.value().progress.totalXp, 50); assert.deepEqual(copy(h.value().progress.completedLessonIds), ['one']);
+  assert.equal(JSON.parse(h.localStorage.getItem(`progress_registered_${A}_English`)).totalXp, 0);
+  // The server may already have accepted a response-lost request.
+  h.serverProgress = { ...progress(50), completedLessonIds: ['one'] };
+  await h.value().reloadProgress(); await h.settle();
+  assert.equal(h.value().progress.totalXp, 50); assert.equal(h.load('queue').getOfflineQueue().length, 1);
+});
+
+test('Phase 4E: acknowledgement retains server state even if subsequent GET fails', async () => {
+  const h = await offlineProgressHarness(); await h.value().completeLesson('one', 50, 73);
+  h.fetchProgress = async () => { throw new Error('GET failed'); }; await h.online();
+  assert.equal(h.load('queue').getOfflineQueue().length, 0);
+  assert.equal(h.value().progress.totalXp, 50); assert.deepEqual(copy(h.value().progress.completedLessonIds), ['one']);
+  const restarted = await offlineProgressHarness(h.snapshot());
+  assert.equal(restarted.value().progress.totalXp, 50);
+});
+
+test('Phase 4E: overlapping offline completions from the same render both survive', async () => {
+  const h = await offlineProgressHarness(); const complete = h.value().completeLesson;
+  await Promise.all([complete('one', 50, 73), complete('two', 80, 42)]); await h.settle();
+  assert.equal(h.value().progress.totalXp, 130);
+  assert.deepEqual(copy(h.value().progress.completedLessonIds), ['one', 'two']);
+  assert.deepEqual(copy(h.load('queue').getOfflineQueue().map(a => a.payload.score)), [73, 42]);
+  const restarted = await offlineProgressHarness(h.snapshot()); assert.equal(restarted.value().progress.totalXp, 130);
+});
+
+test('Phase 4E: append during GET wins over server snapshot, without lost pending progress', async () => {
+  const h = await offlineProgressHarness(); await h.online();
+  const pending = deferred(); h.fetchProgress = () => pending.promise;
+  const refresh = h.value().reloadProgress(); await tick();
+  h.load('queue').pushToOfflineQueue('complete-lesson', { lessonId: 'new', score: 73,
+    xpReward: 50, targetLanguage: 'English' }, `registered_${A}`);
+  pending.resolve(progress(0)); await refresh; await h.settle();
+  assert.equal(h.value().progress.totalXp, 50); assert.deepEqual(copy(h.value().progress.completedLessonIds), ['new']);
+});
+
+test('Phase 4E: pending completions cannot cross account or language boundaries', async () => {
+  const h = await offlineProgressHarness(); await h.value().completeLesson('english-one', 50, 73); await h.settle();
+  h.language = 'German'; h.localStorage.setItem('linguaai_target_language', 'German'); h.child.render(); await h.settle();
+  assert.equal(h.value().progress.totalXp, 0);
+  await h.switchToB(); assert.equal(h.value().progress.totalXp, 0);
+  h.auth().logout(); h.login(A); h.language = 'English'; h.localStorage.setItem('linguaai_target_language', 'English');
+  h.child.render(); await h.settle(); assert.equal(h.value().progress.totalXp, 50);
+});
+
+test('Phase 4E: offline reset cancels obsolete completions, survives restart, keeps later work', async () => {
+  const h = await offlineProgressHarness(); await h.value().completeLesson('obsolete', 50, 73);
+  await h.value().resetProgress(); await h.settle();
+  assert.equal(h.value().progress.totalXp, 0);
+  await h.value().completeLesson('after-reset', 50, 42); await h.settle();
+  const restarted = await offlineProgressHarness(h.snapshot()); let resets = 0;
+  restarted.resetProgress = async () => { resets++; restarted.serverProgress = progress(0); };
+  await restarted.online();
+  assert.equal(resets, 1); assert.deepEqual(restarted.sent.map(a => a.lessonId), ['after-reset']);
+  assert.equal(restarted.value().progress.totalXp, 50);
+});
+
+test('Phase 4E: pending reset masks old server GET when reset upload fails', async () => {
+  const h = await offlineProgressHarness(); await h.value().completeLesson('obsolete', 50, 73);
+  await h.value().resetProgress(); h.serverProgress = { ...progress(500), completedLessonIds: ['obsolete'] };
+  h.resetProgress = async () => { throw new Error('Reset unavailable'); }; await h.online();
+  assert.equal(h.value().progress.totalXp, 0); assert.deepEqual(copy(h.value().progress.completedLessonIds), []);
+  assert.equal(h.load('queue').getOfflineQueue()[0].type, 'reset-progress');
+});
+
+test('Phase 4E: reset waits behind active completion and cannot be undone by its response', async () => {
+  const h = await offlineProgressHarness(); await h.online();
+  const started = deferred(), release = deferred(); const events = [];
+  h.saveProgress = async () => { started.resolve(); await release.promise; events.push('complete');
+    h.serverProgress = { ...progress(50), completedLessonIds: ['obsolete'] };
+    return { data: { newTotalXp: 50 } }; };
+  h.resetProgress = async () => { events.push('reset'); h.serverProgress = progress(0); };
+  const complete = h.value().completeLesson('obsolete', 50, 73); await started.promise;
+  const reset = h.value().resetProgress(); await tick();
+  assert.equal(h.load('queue').getOfflineQueue()[0].type, 'reset-progress');
+  release.resolve(); await Promise.all([complete, reset]); await h.settle();
+  assert.deepEqual(events, ['complete', 'reset']); assert.equal(h.value().progress.totalXp, 0);
+  assert.equal(h.load('queue').getOfflineQueue().length, 0);
+});
+
+test('Phase 4E: owner-scoped legacy action lacking a score is retained without inventing 100', async () => {
+  const h = await offlineProgressHarness(); h.load('queue').pushToOfflineQueue('complete-lesson', { lessonId: 'unknown-score' }, `registered_${A}`);
+  await h.online(); assert.equal(h.sent.length, 0); assert.equal(h.load('queue').getOfflineQueue().length, 1);
+});
+
+
+test('Phase 4E: valid legacy owned score gains cached lesson context without ID replacement', async () => {
+  const h = await offlineProgressHarness();
+  h.localStorage.setItem('linguaai_lessons_English', JSON.stringify([{ id: 'legacy', xpReward: 50, targetLanguage: 'English' }]));
+  h.load('queue').pushToOfflineQueue('complete-lesson', { lessonId: 'legacy', score: 73 }, `registered_${A}`);
+  const id = h.load('queue').getOfflineQueue()[0].id;
+  await h.value().reloadProgress(); await h.settle();
+  assert.equal(h.value().progress.totalXp, 50);
+  const migrated = h.load('queue').getOfflineQueue()[0];
+  assert.equal(migrated.id, id); assert.equal(migrated.payload.score, 73);
+  h.saveProgress = async () => { throw new Error('Unavailable'); }; await h.online();
+  assert.deepEqual(copy(h.value().progress.completedLessonIds), ['legacy']);
+  h.language = 'German'; h.localStorage.setItem('linguaai_target_language', 'German'); h.isOffline = true;
+  h.child.render(); await h.settle(); assert.equal(h.value().progress.totalXp, 0);
+});
+
+test('Phase 4E: score zero stays zero and cached unscored IDs never generate uploads', async () => {
+  const h = await offlineProgressHarness();
+  h.localStorage.setItem(`progress_registered_${A}_English`, JSON.stringify({ ...progress(0), completedLessonIds: ['unscored'] }));
+  await h.value().completeLesson('zero', 50, 0); await h.online();
+  assert.equal(h.sent.length, 1); assert.equal(h.sent[0].score, 0);
+});
+
+test('Phase 4E: reset clears attributable legacy caches in every language', async () => {
+  const h = await offlineProgressHarness();
+  const legacy = h.load('userKey').getLegacyRegisteredProgressKey(user(A).email, false);
+  h.localStorage.setItem(`progress_${legacy}_German`, JSON.stringify({ ...progress(500), completedLessonIds: ['old-german'] }));
+  await h.value().resetProgress();
+  h.language = 'German'; h.localStorage.setItem('linguaai_target_language', 'German'); h.child.render(); await h.settle();
+  assert.equal(h.value().progress.totalXp, 0); assert.equal(h.localStorage.getItem(`progress_${legacy}_German`), null);
+});
+
+test('Phase 4E: older same-session refresh cannot replace newer acknowledged state', async () => {
+  const h = await offlineProgressHarness(); await h.online();
+  const old = deferred(); h.fetchProgress = () => old.promise;
+  const first = h.value().reloadProgress(); await tick();
+  h.fetchProgress = async () => ({ ...progress(100), completedLessonIds: ['newer'] });
+  await h.value().reloadProgress(); old.resolve(progress(0)); await first; await h.settle();
+  assert.equal(h.value().progress.totalXp, 100); assert.deepEqual(copy(h.value().progress.completedLessonIds), ['newer']);
+});
+
+
+test('Phase 4E: deferred React updater checks session again before applying pending overlay', async () => {
+  const h = await offlineProgressHarness(); h.deferChildState = true;
+  await h.value().completeLesson('a-pending', 50, 73);
+  await h.switchToB();
+  for (const update of h.deferredState.splice(0)) update();
+  h.deferChildState = false; await h.settle();
+  assert.equal(h.value().progress.totalXp, 0); assert.deepEqual(copy(h.value().progress.completedLessonIds), []);
+  assert.equal(h.load('queue').getOfflineQueue().length, 0);
+  h.auth().logout(); h.login(A); h.child.render(); await h.settle();
+  assert.equal(h.value().progress.totalXp, 50);
 });

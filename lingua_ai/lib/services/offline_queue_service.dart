@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'progress_api_service.dart';
 import 'flashcard_api_service.dart';
 import 'auth_service.dart';
+import 'progress_cache.dart';
 
 class OfflineQueueAction {
   final String id;
@@ -58,7 +59,9 @@ class _QueueState {
   // A dispatched create cannot safely be compacted as unsent, including after
   // a restart or an ambiguous network failure. Later mutations stay dependent.
   final Set<String> startedCreates;
-  _QueueState(this.actions, this.tempIds, this.startedCreates);
+  String progressRevision;
+  _QueueState(this.actions, this.tempIds, this.startedCreates,
+      [this.progressRevision = '']);
 }
 
 class OfflineQueueService {
@@ -84,6 +87,7 @@ class OfflineQueueService {
   // holding the write lock during HTTP. New appends can proceed during a drain.
   static final Map<String, Future<void>> _writeTails = {};
   static final Set<String> _drainingOwners = {};
+  static final Map<String, Completer<void>> _drainWaiters = {};
   static int _actionSequence = 0;
   String createOperationId() =>
       'action_${DateTime.now().microsecondsSinceEpoch}_${_actionSequence++}';
@@ -141,7 +145,8 @@ class OfflineQueueService {
                 OfflineQueueAction.fromJson(Map<String, dynamic>.from(a)))
             .toList(),
         Map<String, String>.from(data['tempIds']),
-        Set<String>.from(data['startedCreates']));
+        Set<String>.from(data['startedCreates']),
+        data['progressRevision'] as String? ?? '');
   }
 
   Future<bool> _write(String owner, _QueueState state,
@@ -156,7 +161,8 @@ class OfflineQueueService {
       'ownerNamespace': owner,
       'actions': state.actions.map((a) => a.toJson()).toList(),
       'tempIds': state.tempIds,
-      'startedCreates': state.startedCreates.toList()
+      'startedCreates': state.startedCreates.toList(),
+      'progressRevision': state.progressRevision
     });
     if (!await prefs.setString(_storageKey(owner), encoded)) {
       throw StateError('Could not persist the offline queue');
@@ -190,7 +196,12 @@ class OfflineQueueService {
   }
 
   void _append(_QueueState state, String owner, String type,
-      Map<String, dynamic> payload, {String? operationId, bool dispatched = false}) {
+      Map<String, dynamic> payload,
+      {String? operationId, bool dispatched = false}) {
+    if (type == 'reset-progress') {
+      state.actions.removeWhere(
+          (a) => a.type == 'complete-lesson' || a.type == 'reset-progress');
+    }
     final originalId = _cardId(payload);
     final creates = state.actions
         .where((a) =>
@@ -241,16 +252,105 @@ class OfflineQueueService {
         payload: _resolve(state, type, payload),
         createdAt: DateTime.now().toUtc());
     state.actions.add(action);
-    if (type == 'create-flashcard' && dispatched) state.startedCreates.add(action.id);
+    if (type == 'complete-lesson' || type == 'reset-progress') {
+      state.progressRevision = action.id;
+    }
+    if (type == 'create-flashcard' && dispatched) {
+      state.startedCreates.add(action.id);
+    }
   }
 
   Future<void> pushAction(String type, Map<String, dynamic> payload,
-          {required String ownerNamespace, String? operationId, bool dispatched = false}) =>
+          {required String ownerNamespace,
+          String? operationId,
+          bool dispatched = false}) =>
       _locked(ownerNamespace, () async {
         final state = await _read(ownerNamespace);
         _append(state, ownerNamespace, type, payload,
             operationId: operationId, dispatched: dispatched);
         await _write(ownerNamespace, state);
+        if (type == 'reset-progress') {
+          await ProgressSnapshot.resetOwner(
+              await SharedPreferences.getInstance(), ownerNamespace);
+          final legacyOwner = payload['legacyOwnerNamespace'] as String?;
+          if (legacyOwner != null) {
+            await ProgressSnapshot.resetOwner(
+                await SharedPreferences.getInstance(), legacyOwner);
+          }
+        }
+      });
+
+  Future<void> preparePendingProgress(String owner) => _locked(owner, () async {
+        final state = await _read(owner);
+        final prefs = await SharedPreferences.getInstance();
+        var changed = false;
+        state.actions = state.actions.map((action) {
+          if (action.ownerNamespace != owner ||
+              action.type != 'complete-lesson' ||
+              action.payload['targetLanguage'] != null) {
+            return action;
+          }
+          final matches = <Map<String, dynamic>>[];
+          const names = {
+            'en': 'English',
+            'de': 'German',
+            'es': 'Spanish',
+            'fr': 'French',
+            'ar': 'Arabic'
+          };
+          for (final entry in names.entries) {
+            Map<String, dynamic>? lesson;
+            for (final language in [entry.key, entry.value]) {
+              try {
+                final rows = jsonDecode(
+                    prefs.getString('lessons_cache_$language') ?? '[]');
+                if (rows is List) {
+                  for (final row in rows) {
+                    if (row is Map && row['id'] == action.payload['lessonId']) {
+                      lesson = Map<String, dynamic>.from(row);
+                    }
+                  }
+                }
+              } catch (_) {/* Unusable catalog stays untouched. */}
+            }
+            if (lesson != null ||
+                ProgressSnapshot.read(prefs, owner, entry.key)
+                    .lessonIds
+                    .contains(action.payload['lessonId'])) {
+              matches.add({
+                'targetLanguage': entry.key,
+                if (lesson?['xpReward'] is int) 'xpReward': lesson!['xpReward']
+              });
+            }
+          }
+          if (matches.length != 1) return action;
+          changed = true;
+          return action.withPayload({...action.payload, ...matches.single});
+        }).toList();
+        if (changed) {
+          state.progressRevision = 'migration_${createOperationId()}';
+          await _write(owner, state);
+        }
+      });
+
+  Future<String> progressRevision(String owner) =>
+      _locked(owner, () async => (await _read(owner)).progressRevision);
+
+  Future<bool> saveServerProgress(String owner, String language,
+          String revision, ProgressSnapshot progress) =>
+      _locked(owner, () async {
+        if ((await _read(owner)).progressRevision != revision) return false;
+        await progress.save(
+            await SharedPreferences.getInstance(), owner, language);
+        return true;
+      });
+
+  Future<void> modifyLocalProgress(String owner, String language,
+          ProgressSnapshot Function(ProgressSnapshot) update) =>
+      _locked(owner, () async {
+        final prefs = await SharedPreferences.getInstance();
+        await update(ProgressSnapshot.read(prefs, owner, language))
+            .save(prefs, owner, language);
       });
 
   /// A local ID is backend-pending only if its owner has a create or mapping.
@@ -271,10 +371,15 @@ class OfflineQueueService {
         return true;
       });
 
-  Future<bool> processQueue(String userId) async {
+  Future<bool> processQueue(String userId, {bool waitForActive = false}) async {
     final auth = AuthService();
     final session = auth.captureSession();
     final owner = session.ownerNamespace;
+    if (waitForActive && _drainWaiters.containsKey(owner)) {
+      await _drainWaiters[owner]!.future;
+      if (!session.isCurrent) return false;
+      return processQueue(userId, waitForActive: true);
+    }
     if (owner == 'local_guest' ||
         auth.token.trim().isEmpty ||
         userId != session.userId ||
@@ -282,6 +387,8 @@ class OfflineQueueService {
         !_drainingOwners.add(owner)) {
       return false;
     }
+    final released = Completer<void>();
+    _drainWaiters[owner] = released;
     try {
       final batch =
           await _locked(owner, () async => (await _read(owner)).actions);
@@ -314,6 +421,7 @@ class OfflineQueueService {
         if (!session.isCurrent) return false;
         if (action == null) continue;
         String? serverId;
+        Map<String, dynamic>? completion;
         try {
           final payload = action.payload;
           final cardId = _cardId(payload);
@@ -322,11 +430,15 @@ class OfflineQueueService {
             throw StateError('Pending card has no durable server mapping');
           }
           switch (action.type) {
+            case 'reset-progress':
+              await _progressApi.resetProgress(userId, operationId: action.id);
+              break;
             case 'complete-lesson':
-              await _progressApi.completeLesson(
-                  userId,
-                  payload['lessonId'].toString(),
-                  payload['score'] as int? ?? 100,
+              if (payload['score'] is! int) {
+                throw StateError('Completion has no recorded score');
+              }
+              completion = await _progressApi.completeLesson(userId,
+                  payload['lessonId'].toString(), payload['score'] as int,
                   operationId: action.id);
               break;
             case 'create-flashcard':
@@ -357,7 +469,8 @@ class OfflineQueueService {
                   operationId: action.id);
               break;
             case 'delete-flashcard':
-              await _flashcardApi.deleteFlashcard(cardId!, operationId: action.id);
+              await _flashcardApi.deleteFlashcard(cardId!,
+                  operationId: action.id);
               break;
             case 'review-flashcard':
               await _flashcardApi.reviewCard(
@@ -375,6 +488,35 @@ class OfflineQueueService {
         final acknowledged = await _locked(owner, () async {
           final state = await _read(owner);
           if (!session.isCurrent) return false;
+          final prefs = await SharedPreferences.getInstance();
+          if (!session.isCurrent) return false;
+          if (state.actions.any((a) => a.id == action.id) &&
+              action.type == 'complete-lesson') {
+            final language = action.payload['targetLanguage'] as String?;
+            final result = completion?['data'];
+            if (language != null && result?['newTotalXp'] is int) {
+              final base = ProgressSnapshot.read(prefs, owner, language);
+              await ProgressSnapshot(
+                      totalXp: result['newTotalXp'] as int,
+                      streak: base.streak,
+                      lessonIds: {
+                        ...base.lessonIds,
+                        action.payload['lessonId'].toString()
+                      },
+                      activity: base.activity)
+                  .save(prefs, owner, language);
+            }
+            state.progressRevision = 'ack_${action.id}';
+          }
+          if (action.type == 'reset-progress') {
+            await ProgressSnapshot.resetOwner(prefs, owner);
+            final legacyOwner =
+                action.payload['legacyOwnerNamespace'] as String?;
+            if (legacyOwner != null) {
+              await ProgressSnapshot.resetOwner(prefs, legacyOwner);
+            }
+            state.progressRevision = 'ack_${action.id}';
+          }
           final tempId = action.payload['tempId']?.toString();
           if (action.type == 'create-flashcard' && tempId != null) {
             state.tempIds[tempId] = serverId!;
@@ -393,6 +535,8 @@ class OfflineQueueService {
       return session.isCurrent;
     } finally {
       _drainingOwners.remove(owner);
+      _drainWaiters.remove(owner);
+      released.complete();
     }
   }
 }
