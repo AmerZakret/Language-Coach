@@ -28,10 +28,11 @@ class ProgressApiService {
   }
 
   Future<Map<String, dynamic>> completeLesson(
-      String userId, String lessonId, int score) async {
+      String userId, String lessonId, int score, {String? operationId}) async {
     try {
       final headers = <String, String>{
         'Content-Type': 'application/json',
+        if (operationId != null) 'X-Idempotency-Key': operationId,
       };
       final token = AuthService().token;
       if (token.isNotEmpty) {

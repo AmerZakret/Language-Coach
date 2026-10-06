@@ -20,7 +20,8 @@ class DurableCardsApi extends FlashcardApiService {
       {String? nativeLanguage,
       String? nativeTranslation,
       String? exampleSentence,
-      String? note}) async {
+      String? note,
+      String? operationId}) async {
     calls.add({'type': 'create', 'word': targetWord, 'note': note});
     started?.complete();
     if (release != null) await release!.future;
@@ -34,19 +35,20 @@ class DurableCardsApi extends FlashcardApiService {
       String? nativeLanguage,
       String? nativeTranslation,
       String? exampleSentence,
-      String? note}) async {
+      String? note,
+      String? operationId}) async {
     calls.add({'type': 'update', 'id': cardId});
     if (failUpdate) throw StateError('Update unavailable');
     return Flashcard.fromJson({'_id': cardId});
   }
 
   @override
-  Future<void> deleteFlashcard(String cardId) async {
+  Future<void> deleteFlashcard(String cardId, {String? operationId}) async {
     calls.add({'type': 'delete', 'id': cardId});
   }
 
   @override
-  Future<Flashcard> reviewCard(String cardId, int score) async {
+  Future<Flashcard> reviewCard(String cardId, int score, {String? operationId}) async {
     calls.add({'type': 'review', 'id': cardId, 'score': score});
     if (failReview) throw StateError('Review unavailable');
     return Flashcard.fromJson({'_id': cardId});

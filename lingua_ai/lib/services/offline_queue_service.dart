@@ -85,6 +85,8 @@ class OfflineQueueService {
   static final Map<String, Future<void>> _writeTails = {};
   static final Set<String> _drainingOwners = {};
   static int _actionSequence = 0;
+  String createOperationId() =>
+      'action_${DateTime.now().microsecondsSinceEpoch}_${_actionSequence++}';
   Future<T> _locked<T>(String owner, Future<T> Function() work) async {
     final previous = _writeTails[owner] ?? Future<void>.value();
     final released = Completer<void>();
@@ -188,7 +190,7 @@ class OfflineQueueService {
   }
 
   void _append(_QueueState state, String owner, String type,
-      Map<String, dynamic> payload) {
+      Map<String, dynamic> payload, {String? operationId, bool dispatched = false}) {
     final originalId = _cardId(payload);
     final creates = state.actions
         .where((a) =>
@@ -232,19 +234,22 @@ class OfflineQueueService {
         return;
       }
     }
-    state.actions.add(OfflineQueueAction(
-        id: 'action_${DateTime.now().microsecondsSinceEpoch}_${_actionSequence++}',
+    final action = OfflineQueueAction(
+        id: operationId ?? createOperationId(),
         type: type,
         ownerNamespace: owner,
         payload: _resolve(state, type, payload),
-        createdAt: DateTime.now().toUtc()));
+        createdAt: DateTime.now().toUtc());
+    state.actions.add(action);
+    if (type == 'create-flashcard' && dispatched) state.startedCreates.add(action.id);
   }
 
   Future<void> pushAction(String type, Map<String, dynamic> payload,
-          {required String ownerNamespace}) =>
+          {required String ownerNamespace, String? operationId, bool dispatched = false}) =>
       _locked(ownerNamespace, () async {
         final state = await _read(ownerNamespace);
-        _append(state, ownerNamespace, type, payload);
+        _append(state, ownerNamespace, type, payload,
+            operationId: operationId, dispatched: dispatched);
         await _write(ownerNamespace, state);
       });
 
@@ -321,7 +326,8 @@ class OfflineQueueService {
               await _progressApi.completeLesson(
                   userId,
                   payload['lessonId'].toString(),
-                  payload['score'] as int? ?? 100);
+                  payload['score'] as int? ?? 100,
+                  operationId: action.id);
               break;
             case 'create-flashcard':
               final card = await _flashcardApi.createFlashcard(
@@ -332,7 +338,8 @@ class OfflineQueueService {
                   nativeLanguage: payload['nativeLanguage']?.toString(),
                   nativeTranslation: payload['nativeTranslation']?.toString(),
                   exampleSentence: payload['exampleSentence']?.toString(),
-                  note: payload['note']?.toString());
+                  note: payload['note']?.toString(),
+                  operationId: action.id);
               serverId = card.id;
               if (payload['tempId'] != null &&
                   (serverId.isEmpty || serverId.startsWith('local_'))) {
@@ -346,14 +353,16 @@ class OfflineQueueService {
                   payload['turkishTranslation'].toString(),
                   targetLanguage: payload['targetLanguage']?.toString(),
                   exampleSentence: payload['exampleSentence']?.toString(),
-                  note: payload['note']?.toString());
+                  note: payload['note']?.toString(),
+                  operationId: action.id);
               break;
             case 'delete-flashcard':
-              await _flashcardApi.deleteFlashcard(cardId!);
+              await _flashcardApi.deleteFlashcard(cardId!, operationId: action.id);
               break;
             case 'review-flashcard':
               await _flashcardApi.reviewCard(
-                  cardId!, payload['score'] as int? ?? 4);
+                  cardId!, payload['score'] as int? ?? 4,
+                  operationId: action.id);
               break;
             default:
               throw StateError('Unsupported queued action');

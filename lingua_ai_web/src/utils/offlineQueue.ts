@@ -139,7 +139,10 @@ export const processOfflineQueue = async (userId: string): Promise<boolean> => {
       if (action.type === 'create-flashcard' && action.payload.tempId && !state.startedCreates.includes(action.id)) state.startedCreates.push(action.id);
       state.actions = state.actions.map(a => a.id === action.id ? action : a);
       writeState(state);
-      const config: AxiosRequestConfig & { offlineQueueSession: QueueSession } = { offlineQueueSession: session };
+      const config: AxiosRequestConfig & { offlineQueueSession: QueueSession } = {
+        offlineQueueSession: session,
+        headers: { 'X-Idempotency-Key': action.id },
+      };
       let serverId: string | undefined;
       try {
         const payload = action.payload;

@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -8,6 +9,7 @@ import 'package:lingua_ai/services/flashcard_service.dart';
 import 'package:lingua_ai/services/progress_service.dart';
 import 'package:lingua_ai/services/offline_queue_service.dart';
 import 'package:lingua_ai/services/srs_calculator.dart';
+import 'package:lingua_ai/services/connectivity_service.dart';
 import 'package:lingua_ai/core/localization/target_language_service.dart';
 
 void main() {
@@ -23,6 +25,16 @@ void main() {
   }
 
   setUpAll(() async {
+    // Unsent-create compaction needs an actually offline device, rather than
+    // an ambiguous HTTP failure after a create may already have reached MongoDB.
+    final messenger = TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+    messenger.setMockMethodCallHandler(
+        const MethodChannel('dev.fluttercommunity.plus/connectivity'),
+        (call) async => 'none');
+    messenger.setMockMethodCallHandler(
+        const MethodChannel('dev.fluttercommunity.plus/connectivity_status'),
+        (call) async => null);
+    await ConnectivityService().init();
     SharedPreferences.setMockInitialValues({});
     await auth.init();
     await TargetLanguageService().init();
@@ -30,6 +42,7 @@ void main() {
     await cards.init();
     prefs = await SharedPreferences.getInstance();
   });
+  tearDownAll(() => ConnectivityService().dispose());
   setUp(() async {
     await prefs.clear();
     await auth.setGuestSession(

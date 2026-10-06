@@ -14,10 +14,12 @@ class FlashcardApiService {
     String? nativeTranslation,
     String? exampleSentence,
     String? note,
+    String? operationId,
   }) async {
     try {
       final headers = <String, String>{
         'Content-Type': 'application/json',
+        if (operationId != null) 'X-Idempotency-Key': operationId,
       };
       final token = AuthService().token;
       if (token.isNotEmpty) {
@@ -58,10 +60,12 @@ class FlashcardApiService {
     String? nativeTranslation,
     String? exampleSentence,
     String? note,
+    String? operationId,
   }) async {
     try {
       final headers = <String, String>{
         'Content-Type': 'application/json',
+        if (operationId != null) 'X-Idempotency-Key': operationId,
       };
       final token = AuthService().token;
       if (token.isNotEmpty) {
@@ -92,9 +96,10 @@ class FlashcardApiService {
     }
   }
 
-  Future<void> deleteFlashcard(String cardId) async {
+  Future<void> deleteFlashcard(String cardId, {String? operationId}) async {
     try {
       final headers = <String, String>{};
+      if (operationId != null) headers['X-Idempotency-Key'] = operationId;
       final token = AuthService().token;
       if (token.isNotEmpty) {
         headers['Authorization'] = 'Bearer $token';
@@ -171,10 +176,11 @@ class FlashcardApiService {
     }
   }
 
-  Future<Flashcard> reviewCard(String cardId, int score) async {
+  Future<Flashcard> reviewCard(String cardId, int score, {String? operationId}) async {
     try {
       final headers = <String, String>{
         'Content-Type': 'application/json',
+        if (operationId != null) 'X-Idempotency-Key': operationId,
       };
       final token = AuthService().token;
       if (token.isNotEmpty) {

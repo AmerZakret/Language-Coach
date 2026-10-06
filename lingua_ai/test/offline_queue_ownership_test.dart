@@ -21,7 +21,7 @@ class FakeProgressApi extends ProgressApiService {
   Completer<void>? release;
   @override
   Future<Map<String, dynamic>> completeLesson(
-      String userId, String lessonId, int score) async {
+      String userId, String lessonId, int score, {String? operationId}) async {
     calls.add(RecordedDispatch('complete-lesson'));
     expect(userId, AuthService().currentUserId);
     started?.complete();
@@ -44,7 +44,8 @@ class FakeFlashcardApi extends FlashcardApiService {
           {String? nativeLanguage,
           String? nativeTranslation,
           String? exampleSentence,
-          String? note}) async =>
+          String? note,
+          String? operationId}) async =>
       record('create-flashcard');
   @override
   Future<Flashcard> updateFlashcard(
@@ -53,15 +54,16 @@ class FakeFlashcardApi extends FlashcardApiService {
           String? nativeLanguage,
           String? nativeTranslation,
           String? exampleSentence,
-          String? note}) async =>
+          String? note,
+          String? operationId}) async =>
       record('update-flashcard');
   @override
-  Future<void> deleteFlashcard(String cardId) async {
+  Future<void> deleteFlashcard(String cardId, {String? operationId}) async {
     record('delete-flashcard');
   }
 
   @override
-  Future<Flashcard> reviewCard(String cardId, int score) async =>
+  Future<Flashcard> reviewCard(String cardId, int score, {String? operationId}) async =>
       record('review-flashcard');
 }
 

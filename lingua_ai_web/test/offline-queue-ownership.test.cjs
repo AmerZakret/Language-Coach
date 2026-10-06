@@ -69,7 +69,7 @@ function harness(saved = storage()) {
     },
   };
   function request(method, url, data, config = {}) {
-    let pending = Promise.resolve({ ...config, method, url, data, headers: {} });
+    let pending = Promise.resolve({ ...config, method, url, data, headers: { ...config.headers } });
     // Match Axios's asynchronous interceptor boundary before actual dispatch.
     for (const interceptor of requestInterceptors) pending = pending.then(interceptor);
     return pending.then(prepared => {
@@ -346,6 +346,22 @@ async function durableHarness(saved) {
   const h = harness(saved); await h.mount();
   if (!saved) h.auth().login(user(A), `test-${A}`);
   return h;
+}
+
+for (const type of ['create-flashcard', 'update-flashcard', 'delete-flashcard', 'review-flashcard', 'complete-lesson']) {
+  test(`${type} retries send the same durable action ID after page restart`, async () => {
+    const h = await durableHarness();
+    h.enqueue(type, { ...createPayload, id: 'mongo-real', lessonId: 'lesson-1', score: 4 });
+    const operationId = h.queue.getOfflineQueue()[0].id;
+    h.control.dispatch = async () => { throw new Error('Response lost after dispatch'); };
+    assert.equal(await h.queue.processOfflineQueue(A), false);
+    assert.equal(h.requests[0].headers['X-Idempotency-Key'], operationId);
+    const restarted = await durableHarness(h.saved);
+    assert.equal(restarted.queue.getOfflineQueue()[0].id, operationId);
+    assert.equal(await restarted.queue.processOfflineQueue(A), true);
+    assert.equal(restarted.requests[0].headers['X-Idempotency-Key'], operationId);
+    assert.equal(restarted.queue.getOfflineQueue().length, 0);
+  });
 }
 
 test('durable acknowledgement survives interrupted successor and page restart', async () => {

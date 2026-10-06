@@ -181,6 +181,7 @@ class FlashcardService extends ChangeNotifier {
   }) async {
     final auth = AuthService();
     final isCurrent = _captureContext();
+    final operationId = OfflineQueueService().createOperationId();
     final userId = auth.currentUserId.isNotEmpty ? auth.currentUserId : auth.currentUserEmail;
     final ownerNamespace = auth.localStorageNamespace;
     final targetLang = TargetLanguageService().currentLanguage;
@@ -197,7 +198,7 @@ class FlashcardService extends ChangeNotifier {
           'targetLanguage': targetLang,
           'exampleSentence': exampleSentence,
           'note': note,
-        }, ownerNamespace: ownerNamespace);
+        }, ownerNamespace: ownerNamespace, operationId: operationId);
         if (!isCurrent()) return;
         _createLocalCard(userId, targetWord, turkishTranslation, targetLang, exampleSentence, note, localId: localId);
         return;
@@ -211,6 +212,7 @@ class FlashcardService extends ChangeNotifier {
           targetLang,
           exampleSentence: exampleSentence,
           note: note,
+          operationId: operationId,
         );
         if (!isCurrent()) return;
         _cards.add(newCard);
@@ -226,7 +228,7 @@ class FlashcardService extends ChangeNotifier {
           'targetLanguage': targetLang,
           'exampleSentence': exampleSentence,
           'note': note,
-        }, ownerNamespace: ownerNamespace);
+        }, ownerNamespace: ownerNamespace, operationId: operationId, dispatched: true);
         if (!isCurrent()) return;
         _createLocalCard(userId, targetWord, turkishTranslation, targetLang, exampleSentence, note, localId: localId);
       }
@@ -276,6 +278,7 @@ class FlashcardService extends ChangeNotifier {
   }) async {
     final auth = AuthService();
     final isCurrent = _captureContext();
+    final operationId = OfflineQueueService().createOperationId();
     final isLocal = cardId.startsWith('local_') || auth.localStorageNamespace == 'local_guest' || auth.token.isEmpty;
     final ownerNamespace = auth.localStorageNamespace;
     final targetLang = TargetLanguageService().currentLanguage;
@@ -302,7 +305,7 @@ class FlashcardService extends ChangeNotifier {
           'targetLanguage': targetLang,
           'exampleSentence': exampleSentence,
           'note': note,
-        }, ownerNamespace: ownerNamespace);
+        }, ownerNamespace: ownerNamespace, operationId: operationId);
         if (!isCurrent()) return;
         _updateLocalCard(cardId, targetWord, turkishTranslation, targetLang, exampleSentence, note);
         return;
@@ -316,6 +319,7 @@ class FlashcardService extends ChangeNotifier {
           targetLanguage: targetLang,
           exampleSentence: exampleSentence,
           note: note,
+          operationId: operationId,
         );
         if (!isCurrent()) return;
         final index = _cards.indexWhere((c) => c.id == cardId);
@@ -334,7 +338,7 @@ class FlashcardService extends ChangeNotifier {
           'targetLanguage': targetLang,
           'exampleSentence': exampleSentence,
           'note': note,
-        }, ownerNamespace: ownerNamespace);
+        }, ownerNamespace: ownerNamespace, operationId: operationId);
         if (!isCurrent()) return;
       }
     }
@@ -368,6 +372,7 @@ class FlashcardService extends ChangeNotifier {
   Future<void> deleteFlashcard(String cardId) async {
     final auth = AuthService();
     final isCurrent = _captureContext();
+    final operationId = OfflineQueueService().createOperationId();
     final ownerNamespace = auth.localStorageNamespace;
     final isLocal = cardId.startsWith('local_') || ownerNamespace == 'local_guest' || auth.token.isEmpty;
 
@@ -383,14 +388,14 @@ class FlashcardService extends ChangeNotifier {
         debugPrint('Device is offline. Queueing deleteFlashcard.');
         await OfflineQueueService().pushAction('delete-flashcard', {
           'id': cardId,
-        }, ownerNamespace: ownerNamespace);
+        }, ownerNamespace: ownerNamespace, operationId: operationId);
         if (!isCurrent()) return;
         _deleteLocalCard(cardId);
         return;
       }
 
       try {
-        await _apiService.deleteFlashcard(cardId);
+        await _apiService.deleteFlashcard(cardId, operationId: operationId);
         if (!isCurrent()) return;
         _deleteLocalCard(cardId);
         return;
@@ -399,7 +404,7 @@ class FlashcardService extends ChangeNotifier {
         debugPrint('Failed to delete flashcard on backend: $e. Queueing delete.');
         await OfflineQueueService().pushAction('delete-flashcard', {
           'id': cardId,
-        }, ownerNamespace: ownerNamespace);
+        }, ownerNamespace: ownerNamespace, operationId: operationId);
         if (!isCurrent()) return;
       }
     }
@@ -416,6 +421,7 @@ class FlashcardService extends ChangeNotifier {
   Future<void> reviewCard(Flashcard card, int score) async {
     final auth = AuthService();
     final isCurrent = _captureContext();
+    final operationId = OfflineQueueService().createOperationId();
     final ownerNamespace = auth.localStorageNamespace;
     final isLocal = card.id.startsWith('local_') || ownerNamespace == 'local_guest' || auth.token.isEmpty;
 
@@ -432,14 +438,14 @@ class FlashcardService extends ChangeNotifier {
         await OfflineQueueService().pushAction('review-flashcard', {
           'id': card.id,
           'score': score,
-        }, ownerNamespace: ownerNamespace);
+        }, ownerNamespace: ownerNamespace, operationId: operationId);
         if (!isCurrent()) return;
         _reviewLocalCard(card, score);
         return;
       }
 
       try {
-        final updatedCard = await _apiService.reviewCard(card.id, score);
+        final updatedCard = await _apiService.reviewCard(card.id, score, operationId: operationId);
         if (!isCurrent()) return;
         final index = _cards.indexWhere((c) => c.id == card.id);
         if (index != -1) {
@@ -455,7 +461,7 @@ class FlashcardService extends ChangeNotifier {
         await OfflineQueueService().pushAction('review-flashcard', {
           'id': card.id,
           'score': score,
-        }, ownerNamespace: ownerNamespace);
+        }, ownerNamespace: ownerNamespace, operationId: operationId);
         if (!isCurrent()) return;
       }
     }

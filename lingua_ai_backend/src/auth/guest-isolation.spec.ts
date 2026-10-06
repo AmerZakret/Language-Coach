@@ -20,6 +20,7 @@ import { AiCoachController } from '../ai-coach/ai-coach.controller';
 import { AiCoachService } from '../ai-coach/ai-coach.service';
 import { FlashcardsController } from '../flashcards/flashcards.controller';
 import { FlashcardsService } from '../flashcards/flashcards.service';
+import { FlashcardIdempotencyService } from '../flashcards/flashcard-idempotency.service';
 import { Flashcard } from '../flashcards/schemas/flashcard.schema';
 import { SrsCalculatorService } from '../flashcards/services/srs-calculator.service';
 import { AiContextService } from '../flashcards/services/ai-context.service';
@@ -78,6 +79,9 @@ describe('Guest session isolation', () => {
         { provide: getModelToken(CommunityPost.name), useValue: postModel },
         { provide: SrsCalculatorService, useValue: {} },
         { provide: AiContextService, useValue: {} },
+        { provide: FlashcardIdempotencyService, useValue: {
+          execute: (_user, _key, _type, _input, work) => work(),
+        } },
         { provide: ProgressService, useValue: progress },
         { provide: AiCoachService, useValue: coach },
       ],
