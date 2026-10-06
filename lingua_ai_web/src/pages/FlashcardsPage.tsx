@@ -6,7 +6,7 @@ import { useLanguage } from "../context/LanguageContext";
 import { useTargetLanguage } from "../context/TargetLanguageContext";
 import apiClient from "../api/apiClient";
 import { useNetwork } from "../context/NetworkContext";
-import { pushToOfflineQueue, processOfflineQueue } from "../utils/offlineQueue";
+import { pushToOfflineQueue, processOfflineQueue, isPendingBackendCard } from "../utils/offlineQueue";
 import { getUserProgressKey } from "../utils/userKey";
 import { useSessionGuard } from "../utils/useSessionGuard";
 import { getSessionRequestConfig } from "../utils/queueSession";
@@ -218,7 +218,7 @@ export function FlashcardsPage() {
       return;
     }
 
-    if (isOffline) {
+    if (isOffline || (modal === 'edit' && selectedCard && isPendingBackendCard(selectedCard._id, queueOwner))) {
       if (modal === "add") {
         const tempId = `local_${Date.now()}`;
         const newCard: CardData = {
@@ -233,6 +233,9 @@ export function FlashcardsPage() {
           nextReviewDate: new Date().toISOString(),
           reviewCount: 0,
         };
+        pushToOfflineQueue('create-flashcard', {
+          tempId, userId, targetLanguage, ...formData
+        }, queueOwner);
         const updatedAll = [newCard, ...allCards];
         setAllCards(updatedAll);
         
@@ -244,14 +247,11 @@ export function FlashcardsPage() {
         localStorage.setItem(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(updatedAll));
         localStorage.setItem(`flashcards_due_${userId}_${targetLanguage}`, JSON.stringify(updatedDue));
         
-        pushToOfflineQueue('create-flashcard', {
-          tempId,
-          userId,
-          targetLanguage,
-          ...formData
-        }, queueOwner);
         showSuccess(t("flashcard_created"));
       } else if (modal === "edit" && selectedCard) {
+        pushToOfflineQueue('update-flashcard', {
+          cardId: selectedCard._id, targetLanguage, ...formData
+        }, queueOwner);
         const updatedAll = allCards.map(c => c._id === selectedCard._id ? { ...c, ...formData } : c);
         const updatedDue = dueCards.map(c => c._id === selectedCard._id ? { ...c, ...formData } : c);
         setAllCards(updatedAll);
@@ -261,11 +261,6 @@ export function FlashcardsPage() {
         localStorage.setItem(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(updatedAll));
         localStorage.setItem(`flashcards_due_${userId}_${targetLanguage}`, JSON.stringify(updatedDue));
         
-        pushToOfflineQueue('update-flashcard', {
-          cardId: selectedCard._id,
-          targetLanguage,
-          ...formData
-        }, queueOwner);
         showSuccess(t("flashcard_updated"));
       }
       setModal(null);
@@ -301,7 +296,8 @@ export function FlashcardsPage() {
   const handleDeleteCard = async (cardId: string) => {
     const isCurrent = captureContext();
     if (!isCurrent()) return;
-    if (isOffline) {
+    if (isOffline || isPendingBackendCard(cardId, queueOwner)) {
+      pushToOfflineQueue('delete-flashcard', { cardId }, queueOwner);
       const updatedAll = allCards.filter(c => c._id !== cardId);
       const updatedDue = dueCards.filter(c => c._id !== cardId);
       setAllCards(updatedAll);
@@ -311,7 +307,6 @@ export function FlashcardsPage() {
       localStorage.setItem(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(updatedAll));
       localStorage.setItem(`flashcards_due_${userId}_${targetLanguage}`, JSON.stringify(updatedDue));
       
-      pushToOfflineQueue('delete-flashcard', { cardId }, queueOwner);
       showSuccess(t("flashcard_deleted"));
       setDeleteConfirmId(null);
       return;
@@ -355,7 +350,8 @@ export function FlashcardsPage() {
     if (!isCurrent()) return;
     const card = dueCards[currentStudyIndex];
     if (card) {
-      if (isOffline) {
+      if (isOffline || isPendingBackendCard(card._id, queueOwner)) {
+        pushToOfflineQueue('review-flashcard', { cardId: card._id, score }, queueOwner);
         // Local SM-2 calculation
         let easinessFactor = card.easinessFactor || 2.5;
         let interval = card.interval || 0;
@@ -392,7 +388,6 @@ export function FlashcardsPage() {
         setAllCards(updatedAll);
         localStorage.setItem(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(updatedAll));
 
-        pushToOfflineQueue('review-flashcard', { cardId: card._id, score }, queueOwner);
       } else {
         try {
           await apiClient.put(`/flashcards/${card._id}/review`, { score }, getSessionRequestConfig());

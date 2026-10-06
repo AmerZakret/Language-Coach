@@ -84,7 +84,7 @@ function harness(initial = {}) {
     guard: 'utils/useSessionGuard.ts', auth: 'context/AuthContext.tsx',
     storage: 'utils/progressStorage.ts', types: 'types/progress.ts',
     progress: 'context/ProgressContext.tsx', target: 'context/TargetLanguageContext.tsx',
-    cards: 'pages/FlashcardsPage.tsx', authPage: 'components/auth/AuthPage.tsx',
+    cards: 'pages/FlashcardsPage.tsx', queue: 'utils/offlineQueue.ts', authPage: 'components/auth/AuthPage.tsx',
     profile: 'pages/ProfilePage.tsx' };
   const exposed = {
     cards: 'fetchCards, handleSaveCard, handleDeleteCard, handleStudyScore, handleOpenAdd, handleOpenEdit, setFormData, allCards, dueCards, loading, error, successMsg, modal, studyResults',
@@ -135,7 +135,11 @@ function harness(initial = {}) {
           saveProgressToBackend: (...args) => { calls.push(['complete', ...args]); return h.saveProgress(...args); },
           resetProgressInBackend: (...args) => h.resetProgress(...args),
         };
-        if (path.endsWith('/offlineQueue')) return { processOfflineQueue: (...args) => h.drain(...args) };
+        if (path.endsWith('/offlineQueue')) return {
+          processOfflineQueue: (...args) => h.drain(...args),
+          isPendingBackendCard: (...args) => h.queue?.isPendingBackendCard(...args) ?? false,
+          pushToOfflineQueue: (...args) => h.queue?.pushToOfflineQueue(...args),
+        };
         if (path.endsWith('/apiClient')) return Object.fromEntries(['get', 'post', 'put', 'delete'].map(method => [method,
           (url, data) => { calls.push([method, url]); return h.transport(method, url, data); }]));
         throw new Error(`Unexpected import: ${path}`);
@@ -170,6 +174,65 @@ function harness(initial = {}) {
   h.load = load;
   return h;
 }
+
+async function pendingCardHarness() {
+  const h = harness(); h.mountAuth(); h.login(A); h.queue = h.load('queue');
+  h.transport = async method => {
+    if (method === 'get') throw new Error('Offline');
+    return { data: card(A) };
+  };
+  h.mount('cards', 'FlashcardsPage'); await h.settle();
+  h.child.exposed.handleOpenAdd(); h.child.render();
+  h.child.exposed.setFormData({ targetWord: 'old', turkishTranslation: 'translation', exampleSentence: '', note: '' });
+  h.child.render(); await h.child.exposed.handleSaveCard({ preventDefault() {} }); await h.settle();
+  assert.equal(h.queue.getOfflineQueue().length, 1);
+  return h;
+}
+
+test('FlashcardsPage pending create edit compacts latest form fields into durable create', async () => {
+  const h = await pendingCardHarness(); const pending = h.child.exposed.allCards[0];
+  h.child.exposed.handleOpenEdit(pending); h.child.render();
+  h.child.exposed.setFormData({ targetWord: 'new', turkishTranslation: 'new translation', exampleSentence: 'example', note: 'latest' });
+  h.child.render(); await h.child.exposed.handleSaveCard({ preventDefault() {} }); await h.settle();
+  assert.equal(h.queue.getOfflineQueue().length, 1);
+  assert.equal(h.queue.getOfflineQueue()[0].payload.targetWord, 'new');
+  assert.equal(h.child.exposed.allCards[0].targetWord, 'new');
+  assert.equal(await h.queue.processOfflineQueue(A), true);
+  const create = h.calls.filter(([method]) => method === 'post'); assert.equal(create.length, 1);
+});
+
+test('FlashcardsPage pending create review delete cancels server creation and local cache', async () => {
+  const h = await pendingCardHarness(); const pending = h.child.exposed.allCards[0];
+  await h.child.exposed.handleStudyScore(4); await h.settle();
+  await h.child.exposed.handleDeleteCard(pending._id); await h.settle();
+  assert.equal(h.queue.getOfflineQueue().length, 0); assert.equal(h.child.exposed.allCards.length, 0);
+  assert.deepEqual(JSON.parse(h.localStorage.getItem(`flashcards_all_${A}_English`)), []);
+  assert.equal(await h.queue.processOfflineQueue(A), true);
+  assert.equal(h.calls.filter(([method]) => method === 'post').length, 0);
+});
+
+test('FlashcardsPage pending review queues original score and preserves existing SRS result', async () => {
+  const h = await pendingCardHarness(); const pending = h.child.exposed.allCards[0];
+  await h.child.exposed.handleStudyScore(4); await h.settle();
+  const actions = h.queue.getOfflineQueue(); assert.equal(actions.length, 2);
+  assert.equal(actions[1].payload.cardId, pending._id); assert.equal(actions[1].payload.score, 4);
+  const reviewed = h.child.exposed.allCards[0];
+  assert.equal(reviewed.interval, 1); assert.equal(reviewed.reviewCount, 1); assert.equal(reviewed.easinessFactor, 2.5);
+  assert.equal(await h.queue.processOfflineQueue(A), true);
+  assert.ok(h.calls.some(([method, url]) => method === 'put' && url === `/flashcards/card-${A}/review`));
+});
+
+test('FlashcardsPage queue write failure cannot locally hide an uncancelled pending create', async () => {
+  const h = await pendingCardHarness(); const pending = h.child.exposed.allCards[0];
+  const write = h.localStorage.setItem;
+  h.localStorage.setItem = (key, value) => {
+    if (key.startsWith('linguaai_offline_queue_')) throw new Error('Disk full');
+    write(key, value);
+  };
+  await assert.rejects(h.child.exposed.handleDeleteCard(pending._id), /Disk full/);
+  assert.equal(h.child.exposed.allCards[0]._id, pending._id);
+  assert.equal(h.queue.getOfflineQueue().length, 1);
+});
 
 test('startup A profile response cannot overwrite B auth/storage', async () => {
   const h = harness({ linguaai_user: JSON.stringify(user(A)), linguaai_token: `test-${A}` });

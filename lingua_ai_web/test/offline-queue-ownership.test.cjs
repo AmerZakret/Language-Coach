@@ -267,7 +267,7 @@ test('misfiled action owner fails closed without changing stored data', async ()
   h.auth().login(user(A), `test-${A}`);
   h.enqueue();
   const raw = JSON.parse(h.saved.getItem(key(`registered_${A}`)));
-  raw[0].ownerNamespace = `registered_${B}`;
+  raw.actions[0].ownerNamespace = `registered_${B}`;
   const tampered = JSON.stringify(raw);
   h.saved.setItem(key(`registered_${A}`), tampered);
   assert.equal(await h.queue.processOfflineQueue(A), false);
@@ -340,3 +340,174 @@ for (const operation of ['profile-fetch', 'profile-update', 'progress-fetch', 'l
     assert.equal(h.requests.length, 0);
   });
 }
+
+const createPayload = { tempId: 'local_123', targetWord: 'old', turkishTranslation: 'translation', targetLanguage: 'English' };
+async function durableHarness(saved) {
+  const h = harness(saved); await h.mount();
+  if (!saved) h.auth().login(user(A), `test-${A}`);
+  return h;
+}
+
+test('durable acknowledgement survives interrupted successor and page restart', async () => {
+  const h = await durableHarness(); h.enqueue(); h.enqueue('complete-lesson', { lessonId: 'second' });
+  const second = deferred(); const release = deferred();
+  h.control.dispatch = async request => {
+    if (request.data.lessonId === 'second') { second.resolve(); return release.promise; }
+    return { data: {} };
+  };
+  const drain = h.queue.processOfflineQueue(A); await second.promise;
+  assert.equal(h.queue.getOfflineQueue().length, 1);
+  assert.equal(h.queue.getOfflineQueue()[0].payload.lessonId, 'second');
+  h.auth().logout(); release.resolve({ data: {} }); assert.equal(await drain, false);
+  h.auth().login(user(A), `test-${A}`);
+  const restarted = await durableHarness(h.saved);
+  assert.equal(await restarted.queue.processOfflineQueue(A), true);
+  assert.equal(restarted.requests.length, 1);
+  assert.equal(restarted.requests[0].data.lessonId, 'second');
+});
+
+test('Phase 4A actions migrate; failed dependent retries real ID after page restart', async () => {
+  const h = await durableHarness(); h.enqueue('create-flashcard', createPayload);
+  const create = h.queue.getOfflineQueue()[0];
+  const update = { ...create, id: 'legacy-update', type: 'update-flashcard', payload: { id: 'local_123', targetWord: 'new' } };
+  // Old owned arrays must preserve their dependency order and action IDs.
+  h.saved.setItem(key(`registered_${A}`), JSON.stringify([create, update]));
+  h.control.dispatch = async request => {
+    if (request.method === 'put') throw new Error('Update unavailable');
+    return { data: { _id: 'mongo-real' } };
+  };
+  assert.equal(await h.queue.processOfflineQueue(A), false);
+  const persisted = JSON.parse(h.saved.getItem(key(`registered_${A}`)));
+  assert.equal(persisted.schemaVersion, 2); assert.equal(persisted.tempIds.local_123, 'mongo-real');
+  assert.equal(persisted.actions[0].id, 'legacy-update'); assert.equal(persisted.actions[0].payload.id, 'mongo-real');
+  const restarted = await durableHarness(h.saved);
+  assert.equal(await restarted.queue.processOfflineQueue(A), true);
+  assert.equal(restarted.requests.length, 1); assert.equal(restarted.requests[0].url, '/flashcards/mongo-real');
+});
+
+test('pending create plus edits sends latest fields in one create', async () => {
+  const h = await durableHarness(); h.enqueue('create-flashcard', createPayload);
+  h.enqueue('update-flashcard', { id: 'local_123', targetWord: 'new', note: 'latest' });
+  h.enqueue('update-flashcard', { cardId: 'local_123', turkishTranslation: 'new translation' });
+  assert.equal(h.queue.getOfflineQueue().length, 1);
+  assert.equal(await h.queue.processOfflineQueue(A), true);
+  assert.equal(h.requests.length, 1); assert.equal(h.requests[0].data.targetWord, 'new');
+  assert.equal(h.requests[0].data.turkishTranslation, 'new translation'); assert.equal(h.requests[0].data.note, 'latest');
+});
+
+test('compaction preserves earlier migrated edits and review order', async () => {
+  const h = await durableHarness(); h.enqueue('create-flashcard', createPayload);
+  const create = h.queue.getOfflineQueue()[0];
+  const edit = { ...create, id: 'legacy-edit', type: 'update-flashcard', payload: {
+    id: 'local_123', turkishTranslation: 'earlier translation', exampleSentence: 'earlier example', note: 'earlier note',
+  } };
+  const review = { ...create, id: 'legacy-review', type: 'review-flashcard', payload: { id: 'local_123', score: 2 } };
+  h.saved.setItem(key(`registered_${A}`), JSON.stringify([create, edit, review]));
+  h.enqueue('update-flashcard', { id: 'local_123', targetWord: 'latest', note: null });
+  const actions = h.queue.getOfflineQueue();
+  assert.deepEqual(Array.from(actions, a => a.id), [create.id, 'legacy-review']);
+  const restarted = await durableHarness(h.saved);
+  assert.equal(await restarted.queue.processOfflineQueue(A), true);
+  const sent = restarted.requests[0].data;
+  assert.equal(sent.targetWord, 'latest'); assert.equal(sent.turkishTranslation, 'earlier translation');
+  assert.equal(sent.exampleSentence, 'earlier example'); assert.equal(sent.note, null);
+  assert.equal(restarted.requests[1].data.score, 2);
+});
+
+test('failed review retains real ID and exact score after restart', async () => {
+  const h = await durableHarness(); h.enqueue('create-flashcard', createPayload);
+  h.enqueue('review-flashcard', { id: 'local_123', score: 2 });
+  h.enqueue('review-flashcard', { cardId: 'local_123', score: 5 });
+  h.control.dispatch = async request => {
+    if (request.method === 'put') throw new Error('Review unavailable');
+    return { data: { _id: 'mongo-real' } };
+  };
+  assert.equal(await h.queue.processOfflineQueue(A), false);
+  const pending = h.queue.getOfflineQueue();
+  assert.deepEqual(Array.from(pending, a => a.payload.score), [2, 5]);
+  assert.equal(pending[0].payload.id, 'mongo-real'); assert.equal(pending[1].payload.cardId, 'mongo-real');
+  const restarted = await durableHarness(h.saved);
+  assert.equal(await restarted.queue.processOfflineQueue(A), true);
+  assert.deepEqual(restarted.requests.map(r => r.data.score), [2, 5]);
+  assert.ok(restarted.requests.every(r => r.url === '/flashcards/mongo-real/review'));
+});
+
+test('overlapping owner drains do not dispatch or acknowledge twice', async () => {
+  const h = await durableHarness(); h.enqueue(); const started = deferred(); const release = deferred();
+  h.control.dispatch = () => { started.resolve(); return release.promise; };
+  const drain = h.queue.processOfflineQueue(A); await started.promise;
+  assert.equal(await h.queue.processOfflineQueue(A), false); assert.equal(h.requests.length, 1);
+  release.resolve({ data: {} }); assert.equal(await drain, true);
+  assert.equal(h.queue.getOfflineQueue().length, 0);
+});
+
+test('pending create plus review plus delete cancels all dependents without server creation', async () => {
+  const h = await durableHarness(); h.enqueue('create-flashcard', createPayload);
+  h.enqueue('review-flashcard', { id: 'local_123', score: 4 });
+  h.enqueue('delete-flashcard', { id: 'local_123' });
+  const restarted = await durableHarness(h.saved);
+  assert.equal(await restarted.queue.processOfflineQueue(A), true);
+  assert.equal(restarted.requests.length, 0); assert.equal(restarted.queue.getOfflineQueue().length, 0);
+});
+
+test('pending reviews remain ordered and retain exact scores behind create', async () => {
+  const h = await durableHarness(); h.enqueue('create-flashcard', createPayload);
+  h.enqueue('review-flashcard', { cardId: 'local_123', score: 2 });
+  h.enqueue('review-flashcard', { id: 'local_123', score: 5 });
+  assert.equal(await h.queue.processOfflineQueue(A), true);
+  assert.deepEqual(h.requests.map(r => r.url), ['/flashcards', '/flashcards/server-card/review', '/flashcards/server-card/review']);
+  assert.deepEqual(h.requests.slice(1).map(r => r.data.score), [2, 5]);
+});
+
+test('append during drain remains persisted without being overwritten by acknowledgement', async () => {
+  const h = await durableHarness(); h.enqueue(); const started = deferred(); const release = deferred();
+  h.control.dispatch = () => { started.resolve(); return release.promise; };
+  const drain = h.queue.processOfflineQueue(A); await started.promise;
+  h.enqueue('complete-lesson', { lessonId: 'new' });
+  release.resolve({ data: {} }); assert.equal(await drain, true);
+  assert.equal(h.requests.length, 1); assert.equal(h.queue.getOfflineQueue()[0].payload.lessonId, 'new');
+  const restarted = await durableHarness(h.saved); assert.equal(restarted.queue.getOfflineQueue().length, 1);
+});
+
+test('edits and delete during in-flight create become durable real-ID dependents', async () => {
+  const h = await durableHarness(); h.enqueue('create-flashcard', createPayload);
+  const started = deferred(); const release = deferred();
+  h.control.dispatch = () => { started.resolve(); return release.promise; };
+  const drain = h.queue.processOfflineQueue(A); await started.promise;
+  h.enqueue('update-flashcard', { id: 'local_123', targetWord: 'new' });
+  h.enqueue('review-flashcard', { id: 'local_123', score: 4 });
+  h.enqueue('delete-flashcard', { id: 'local_123' });
+  assert.equal(h.queue.getOfflineQueue().length, 4);
+  release.resolve({ data: { _id: 'mongo-real' } }); assert.equal(await drain, true);
+  assert.ok(h.queue.getOfflineQueue().every(a => a.payload.id === 'mongo-real'));
+  const restarted = await durableHarness(h.saved); assert.equal(await restarted.queue.processOfflineQueue(A), true);
+  assert.deepEqual(restarted.requests.map(r => r.method), ['put', 'put', 'delete']);
+  assert.equal(restarted.requests[2].url, '/flashcards/mongo-real');
+});
+
+test('owner-scoped mappings never cross registered, guest, or local queues', async () => {
+  const h = await durableHarness(); h.enqueue('create-flashcard', createPayload);
+  assert.equal(await h.queue.processOfflineQueue(A), true);
+  h.auth().login(user(B), `test-${B}`);
+  assert.equal(h.queue.isPendingBackendCard('local_123', `registered_${B}`), false);
+  h.enqueue('create-flashcard', createPayload); assert.equal(await h.queue.processOfflineQueue(B), true);
+  h.control.fetchGuest = async () => ({ ok: true, json: async () => guest(A) }); await h.auth().loginAsGuest();
+  assert.equal(h.queue.isPendingBackendCard('local_123', `guest_${A}`), false);
+  h.enqueue('create-flashcard', createPayload); assert.equal(await h.queue.processOfflineQueue(A), true);
+  assert.equal(h.queue.isPendingBackendCard('local_123', `guest_${B}`), false);
+  assert.equal(h.queue.isPendingBackendCard('local_123', 'local_guest'), false);
+  h.auth().login(user(A), `test-${A}`);
+  h.enqueue('review-flashcard', { id: 'local_123', score: 4 });
+  assert.equal(h.queue.getOfflineQueue()[0].payload.id, 'server-card');
+});
+
+test('acknowledgement persistence failure retains action and stops successor dispatch', async () => {
+  const h = await durableHarness(); h.enqueue(); h.enqueue();
+  const original = h.saved.setItem;
+  h.control.dispatch = async () => {
+    h.saved.setItem = (name, value) => { if (name === key(`registered_${A}`)) throw new Error('Disk full'); original(name, value); };
+    return { data: {} };
+  };
+  await assert.rejects(h.queue.processOfflineQueue(A), /Disk full/);
+  assert.equal(h.requests.length, 1); assert.equal(h.queue.getOfflineQueue().length, 2);
+});

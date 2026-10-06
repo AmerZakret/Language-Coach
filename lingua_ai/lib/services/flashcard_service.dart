@@ -145,7 +145,7 @@ class FlashcardService extends ChangeNotifier {
     final auth = AuthService();
     final isCurrent = _captureContext();
     final language = TargetLanguageService().currentLanguage;
-    if (!auth.isLoggedIn || auth.isGuest) return;
+    if (auth.localStorageNamespace == 'local_guest' || auth.token.isEmpty) return;
 
     final userId = auth.currentUserId.isNotEmpty ? auth.currentUserId : auth.currentUserEmail;
 
@@ -186,7 +186,7 @@ class FlashcardService extends ChangeNotifier {
     final targetLang = TargetLanguageService().currentLanguage;
     final localId = 'local_${DateTime.now().microsecondsSinceEpoch}';
 
-    if (auth.isLoggedIn && !auth.isGuest) {
+    if (ownerNamespace != 'local_guest' && auth.token.isNotEmpty) {
       if (ConnectivityService().isOffline) {
         debugPrint('Device is offline. Queueing createFlashcard.');
         await OfflineQueueService().pushAction('create-flashcard', {
@@ -276,9 +276,21 @@ class FlashcardService extends ChangeNotifier {
   }) async {
     final auth = AuthService();
     final isCurrent = _captureContext();
-    final isLocal = cardId.startsWith('local_') || auth.isGuest || !auth.isLoggedIn;
+    final isLocal = cardId.startsWith('local_') || auth.localStorageNamespace == 'local_guest' || auth.token.isEmpty;
     final ownerNamespace = auth.localStorageNamespace;
     final targetLang = TargetLanguageService().currentLanguage;
+
+    if (cardId.startsWith('local_')) {
+      final pending = await OfflineQueueService().mutatePendingCard('update-flashcard', {
+        'id': cardId, 'targetWord': targetWord, 'turkishTranslation': turkishTranslation,
+        'targetLanguage': targetLang, 'exampleSentence': exampleSentence, 'note': note,
+      }, ownerNamespace: ownerNamespace);
+      if (!isCurrent()) return;
+      if (pending) {
+        _updateLocalCard(cardId, targetWord, turkishTranslation, targetLang, exampleSentence, note);
+        return;
+      }
+    }
 
     if (!isLocal) {
       if (ConnectivityService().isOffline) {
@@ -357,7 +369,14 @@ class FlashcardService extends ChangeNotifier {
     final auth = AuthService();
     final isCurrent = _captureContext();
     final ownerNamespace = auth.localStorageNamespace;
-    final isLocal = cardId.startsWith('local_') || auth.isGuest || !auth.isLoggedIn;
+    final isLocal = cardId.startsWith('local_') || ownerNamespace == 'local_guest' || auth.token.isEmpty;
+
+    if (cardId.startsWith('local_')) {
+      final pending = await OfflineQueueService().mutatePendingCard('delete-flashcard',
+        {'id': cardId}, ownerNamespace: ownerNamespace);
+      if (!isCurrent()) return;
+      if (pending) { _deleteLocalCard(cardId); return; }
+    }
 
     if (!isLocal) {
       if (ConnectivityService().isOffline) {
@@ -398,7 +417,14 @@ class FlashcardService extends ChangeNotifier {
     final auth = AuthService();
     final isCurrent = _captureContext();
     final ownerNamespace = auth.localStorageNamespace;
-    final isLocal = card.id.startsWith('local_') || auth.isGuest || !auth.isLoggedIn;
+    final isLocal = card.id.startsWith('local_') || ownerNamespace == 'local_guest' || auth.token.isEmpty;
+
+    if (card.id.startsWith('local_')) {
+      final pending = await OfflineQueueService().mutatePendingCard('review-flashcard',
+        {'id': card.id, 'score': score}, ownerNamespace: ownerNamespace);
+      if (!isCurrent()) return;
+      if (pending) { _reviewLocalCard(card, score); return; }
+    }
 
     if (!isLocal) {
       if (ConnectivityService().isOffline) {

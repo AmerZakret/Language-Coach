@@ -115,8 +115,7 @@ void main() {
       () async {
     await login(a);
     await enqueue();
-    final savedA =
-        List<String>.from(prefs.getStringList(key('registered_$a'))!);
+    final savedA = prefs.getString(key('registered_$a'));
     auth.logout();
     await login(b);
     expect(await queue.getQueue(), isEmpty);
@@ -124,7 +123,7 @@ void main() {
     await enqueue();
     expect(await queue.processQueue(b), true);
     expect(progress.calls.single.owner, 'registered_$b');
-    expect(prefs.getStringList(key('registered_$a')), savedA);
+    expect(prefs.getString(key('registered_$a')), savedA);
     auth.logout();
     await login(a);
     expect((await queue.getQueue()).single.ownerNamespace, 'registered_$a');
@@ -138,11 +137,11 @@ void main() {
       () async {
     await auth.loginAsGuest();
     await enqueue();
-    final local = prefs.getStringList(key('local_guest'));
+    final local = prefs.getString(key('local_guest'));
     expect(await queue.processQueue('guest'), false);
     await login(a, guest: true);
     await enqueue();
-    final savedA = prefs.getStringList(key('guest_$a'));
+    final savedA = prefs.getString(key('guest_$a'));
     await auth.init();
     expect((await queue.getQueue()).single.ownerNamespace, 'guest_$a');
     auth.logout();
@@ -150,10 +149,10 @@ void main() {
     expect(await queue.getQueue(), isEmpty);
     await enqueue();
     expect(await queue.processQueue(b), true);
-    expect(prefs.getStringList(key('guest_$a')), savedA);
+    expect(prefs.getString(key('guest_$a')), savedA);
     await login(a);
     expect(await queue.getQueue(), isEmpty);
-    expect(prefs.getStringList(key('local_guest')), local);
+    expect(prefs.getString(key('local_guest')), local);
     await login(a, guest: true);
     expect(await queue.processQueue(a), true);
     expect(progress.calls.map((c) => c.owner), ['guest_$b', 'guest_$a']);
@@ -166,8 +165,7 @@ void main() {
       await login(a);
       await enqueue();
       await enqueue();
-      final savedA =
-          List<String>.from(prefs.getStringList(key('registered_$a'))!);
+      final savedA = prefs.getString(key('registered_$a'));
       final started = Completer<void>();
       progress.started = started;
       progress.release = Completer<void>();
@@ -180,7 +178,7 @@ void main() {
       expect(progress.calls, hasLength(1));
       expect(progress.calls.single.owner, 'registered_$a');
       expect(progress.calls.single.token, 'test-$a');
-      expect(prefs.getStringList(key('registered_$a')), savedA);
+      expect(prefs.getString(key('registered_$a')), savedA);
       if (!returnToSameAccount) expect(await queue.getQueue(), isEmpty);
       await login(a);
       progress.release = null;
@@ -232,8 +230,7 @@ void main() {
       () async {
     await login(a);
     await enqueue();
-    final raw = json.decode(prefs.getStringList(key('registered_$a'))!.single)
-        as Map<String, dynamic>;
+    final raw = (await queue.getQueue()).single.toJson();
     raw['ownerNamespace'] = 'registered_$b';
     final tampered = [json.encode(raw)];
     await prefs.setStringList(key('registered_$a'), tampered);
@@ -251,7 +248,10 @@ void main() {
     await login(b);
     await write;
     expect(await queue.getQueue(), isEmpty);
-    expect(prefs.getStringList(key('registered_$a')), hasLength(1));
+    expect(
+        (json.decode(prefs.getString(key('registered_$a'))!)['actions']
+            as List),
+        hasLength(1));
   });
 
   test('legacy ownerless and malformed queues are quarantined as raw snapshots',
