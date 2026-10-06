@@ -182,7 +182,12 @@ export function ProfilePage() {
             <p style={{ fontSize: "13px", color: "#F87171", marginBottom: "12px" }}>{t('reset_confirm_msg').replace('{lang}', t('lang_' + targetLanguage.toLowerCase()))}</p>
             <div className="flex gap-3">
               <button onClick={() => setResetConfirm(false)} className="btn-secondary py-2 px-4 text-xs">{t('cancel')}</button>
-              <button onClick={async () => { await resetProgress(); setResetConfirm(false); }} className="btn-danger py-2 px-4 text-xs">{t('yes_reset_all')}</button>
+              <button onClick={async () => {
+                const isCurrent = captureSession();
+                if (!isCurrent()) return;
+                await resetProgress();
+                if (isCurrent()) setResetConfirm(previous => isCurrent() ? false : previous);
+              }} className="btn-danger py-2 px-4 text-xs">{t('yes_reset_all')}</button>
             </div>
           </div>
         )}

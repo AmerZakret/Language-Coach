@@ -69,7 +69,7 @@ class ProgressApiService {
 
   Future<void> resetProgress(String userId, {String? operationId}) async {
     final response = await http.delete(
-        Uri.parse('${ApiConfig.baseUrl}${ApiConfig.progress}/$userId/reset'),
+        Uri.parse('${ApiConfig.baseUrl}${ApiConfig.progress}/$userId'),
         headers: {
           if (AuthService().token.isNotEmpty)
             'Authorization': 'Bearer ${AuthService().token}',

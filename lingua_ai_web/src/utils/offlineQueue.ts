@@ -225,7 +225,7 @@ export const processOfflineQueue = async (userId: string, waitForActive = false)
         config.signal = signal;
         switch (action.type) {
           case 'reset-progress':
-            await apiClient.delete(`/progress/${session.userId}/reset`, config); break;
+            await apiClient.delete(`/progress/${session.userId}`, config); break;
           case 'complete-lesson':
             if (!Number.isInteger(payload.score)) throw new InvalidQueuedPayload('Completion has no recorded score');
             completion = (await apiClient.post(`/progress/${session.userId}/complete-lesson`, { lessonId: payload.lessonId, score: payload.score }, config)).data?.data;

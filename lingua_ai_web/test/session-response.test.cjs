@@ -93,7 +93,7 @@ function harness(initial = {}) {
   const exposed = {
     cards: 'fetchCards, handleSaveCard, handleDeleteCard, handleStudyScore, handleOpenAdd, handleOpenEdit, setFormData, allCards, dueCards, loading, error, successMsg, modal, studyResults',
     authPage: 'handleSubmit, setEmail, setPassword, loading, error',
-    profile: 'handleSave, setName, saved',
+    profile: 'handleSave, setName, saved, resetConfirm, setResetConfirm',
   };
   function load(name) {
     if (modules.has(name)) return modules.get(name).exports;
@@ -134,7 +134,7 @@ function harness(initial = {}) {
         if (path.endsWith('/LanguageContext')) return { useLanguage: () => ({ t: text => text, language: 'en' }) };
         if (path.endsWith('/SoundContext')) return { useSound: () => ({}) };
         if (path.endsWith('/levelUtils')) return { getLevelFromXp: () => 'Beginner' };
-        if (path.endsWith('/ProgressContext')) return { useProgress: () => ({ progress: progress() }) };
+        if (path.endsWith('/ProgressContext')) return { useProgress: () => ({ progress: progress(), resetProgress: () => h.resetProgress() }) };
         if (path.endsWith('/authApi')) return new Proxy({}, { get: (_, method) => (...args) => api[method](...args) });
         if (path.endsWith('/progressApi')) return {
           fetchProgress: (id, lang) => { calls.push(['fetch', id, lang]); return h.fetchProgress(id, lang); },
@@ -154,7 +154,7 @@ function harness(initial = {}) {
               const id = url.split('/')[2]; calls.push(['complete', id, data.lessonId, data.score]);
               return Promise.resolve(h.saveProgress(id, data.lessonId, data.score, config)).then(result => ({ data: result }));
             }
-            if (url.includes('/progress/') && method === 'delete') return h.resetProgress(url.split('/')[2]);
+            if (url.includes('/progress/') && method === 'delete') return h.resetProgress(url.split('/')[2], url, data);
             return h.transport(method, url, data, config);
           }]));
         throw new Error(`Unexpected import: ${path}`);
@@ -204,6 +204,131 @@ async function pendingCardHarness() {
   assert.equal(h.queue.getOfflineQueue().length, 1);
   return h;
 }
+
+test('reset contract: web queued reset reaches the real Nest route and acknowledges', async () => {
+  const { startResetServer } = require('../../lingua_ai_backend/test/progress-reset-server.cjs');
+  const server = await startResetServer();
+  try {
+    const h = harness(); h.mountAuth(); await h.settle();
+    h.auth().login(user(server.owner), server.token); h.authRunner.render();
+    h.resetProgress = async (_id, url, config) => {
+      const response = await fetch(`${server.url}${url}`, { method: 'DELETE', headers: {
+        Authorization: `Bearer ${config.offlineQueueSession.token}`,
+        'X-Idempotency-Key': config.headers['X-Idempotency-Key'],
+      } });
+      if (!response.ok) throw { response: { status: response.status } };
+      return { data: await response.json() };
+    };
+    const queue = h.load('queue');
+    queue.pushToOfflineQueue('reset-progress', {}, `registered_${server.owner}`);
+    assert.equal(await queue.processOfflineQueue(server.owner), true);
+    assert.equal(queue.getOfflineQueue().length, 0);
+    assert.equal(queue.getFailedOfflineActions().length, 0);
+    assert.deepEqual(server.resets, [server.owner]);
+  } finally { await server.close(); }
+});
+
+for (const online of [true, false]) {
+  test(`local_guest create/edit/review/delete stay local (backend available: ${online})`, async () => {
+    const h = harness({ linguaai_is_guest: 'true', linguaai_user: JSON.stringify({
+      id: 'guest', name: 'Guest User', email: 'guest@lingua.ai', isGuest: true,
+    }) });
+    h.mountAuth(); await h.settle(); h.isOffline = !online;
+    h.transport = async () => { throw new Error('local_guest must not use backend'); };
+    h.mount('cards', 'FlashcardsPage'); await h.settle();
+    h.child.exposed.handleOpenAdd(); h.child.render();
+    h.child.exposed.setFormData({ targetWord: 'local', turkishTranslation: 'translation', exampleSentence: '', note: '' });
+    h.child.render(); await h.child.exposed.handleSaveCard({ preventDefault() {} }); await h.settle();
+    const created = h.child.exposed.allCards[0]; assert.ok(created._id.startsWith('local_'));
+    h.child.exposed.handleOpenEdit(created); h.child.render();
+    h.child.exposed.setFormData({ targetWord: 'edited', turkishTranslation: 'new translation', exampleSentence: 'example', note: 'local note' });
+    h.child.render(); await h.child.exposed.handleSaveCard({ preventDefault() {} }); await h.settle();
+    assert.equal(h.child.exposed.allCards[0].targetWord, 'edited');
+    await h.child.exposed.handleStudyScore(4); await h.settle();
+    assert.equal(h.child.exposed.allCards[0].reviewCount, 1);
+    assert.equal(h.child.exposed.allCards[0].interval, 1);
+    // A reachable backend must not replace the local card/cache on refresh.
+    await h.child.exposed.fetchCards(); await h.settle();
+    assert.equal(h.child.exposed.allCards[0].targetWord, 'edited');
+    assert.equal(h.child.exposed.allCards[0].reviewCount, 1);
+    await h.child.exposed.handleDeleteCard(created._id); await h.settle();
+    assert.equal(h.child.exposed.allCards.length, 0);
+    assert.equal(h.child.exposed.dueCards.length, 0);
+    assert.deepEqual(JSON.parse(h.localStorage.getItem('flashcards_all_guest_English')), []);
+    assert.deepEqual(JSON.parse(h.localStorage.getItem('flashcards_due_guest_English')), []);
+    assert.equal(h.load('queue').getOfflineQueue().length, 0);
+    assert.equal(h.calls.length, 0);
+  });
+}
+
+for (const backendGuest of [true, false]) {
+  test(`online flashcard handlers keep backend identity (backend guest: ${backendGuest})`, async () => {
+    const h = harness(); h.mountAuth(); await h.settle();
+    if (backendGuest) { await h.auth().loginAsGuest(); await h.settle(); }
+    else h.login(A);
+    h.isOffline = false;
+    let savedCard = card(A);
+    const mutations = [];
+    h.transport = async (method, url, data, config) => {
+      if (method === 'get') return { data: savedCard ? [savedCard] : [] };
+      const session = (method === 'delete' ? data : config).sessionSnapshot;
+      assert.equal(session.userId, A); assert.equal(session.token, `test-${A}`);
+      assert.equal(session.ownerNamespace, `${backendGuest ? 'guest' : 'registered'}_${A}`);
+      mutations.push(method);
+      if (method === 'post') { assert.equal(data.userId, A); savedCard = { ...card(A), ...data }; }
+      if (method === 'put' && !url.endsWith('/review')) savedCard = { ...savedCard, ...data };
+      if (method === 'delete') savedCard = null;
+      return { data: savedCard || {} };
+    };
+    h.mount('cards', 'FlashcardsPage'); await h.settle();
+    h.child.exposed.handleOpenAdd(); h.child.render();
+    h.child.exposed.setFormData({ targetWord: 'backend', turkishTranslation: 'translation', exampleSentence: '', note: '' });
+    h.child.render(); await h.child.exposed.handleSaveCard({ preventDefault() {} }); await h.settle();
+    h.child.exposed.handleOpenEdit(h.child.exposed.allCards[0]); h.child.render();
+    h.child.exposed.setFormData({ targetWord: 'edited', turkishTranslation: 'translation', exampleSentence: '', note: '' });
+    h.child.render(); await h.child.exposed.handleSaveCard({ preventDefault() {} }); await h.settle();
+    await h.child.exposed.handleStudyScore(4); await h.settle();
+    await h.child.exposed.handleDeleteCard(savedCard._id); await h.settle();
+    assert.deepEqual(mutations, ['post', 'put', 'put', 'delete']);
+    assert.equal(h.load('queue').getOfflineQueue().length, 0);
+  });
+}
+
+function findResetButton(node) {
+  if (!node || typeof node !== 'object') return;
+  if (node.props?.children === 'yes_reset_all') return node;
+  for (const child of Array.isArray(node) ? node : Object.values(node)) {
+    const result = findResetButton(child); if (result) return result;
+  }
+}
+for (const switchAccount of [true, false]) {
+  test(`profile reset callback respects the active session (switch account: ${switchAccount})`, async () => {
+    const h = harness(); h.mountAuth(); h.login(A); h.mount('profile', 'ProfilePage'); await h.settle();
+    h.child.exposed.setResetConfirm(true); h.child.render();
+    const pending = deferred(); let resets = 0;
+    h.resetProgress = () => { resets++; return pending.promise; };
+    const resetting = findResetButton(h.child.result).props.onClick();
+    if (switchAccount) {
+      await h.switchToB(); h.child.exposed.setResetConfirm(true); h.child.render();
+    }
+    const writes = h.child.writes;
+    pending.resolve(); await resetting; await h.settle();
+    assert.equal(resets, 1);
+    assert.equal(h.child.exposed.resetConfirm, switchAccount);
+    if (switchAccount) assert.equal(h.child.writes, writes);
+  });
+}
+test('profile reset deferred state updater cannot close a newer owner confirmation', async () => {
+  const h = harness(); h.mountAuth(); h.login(A); h.mount('profile', 'ProfilePage'); await h.settle();
+  h.child.exposed.setResetConfirm(true); h.child.render();
+  const pending = deferred(); h.resetProgress = () => pending.promise;
+  const resetting = findResetButton(h.child.result).props.onClick();
+  h.deferChildState = true; pending.resolve(); await resetting;
+  h.deferChildState = false; await h.switchToB();
+  h.child.exposed.setResetConfirm(true); h.child.render();
+  for (const apply of h.deferredState.splice(0)) apply(); await h.settle();
+  assert.equal(h.child.exposed.resetConfirm, true);
+});
 
 test('FlashcardsPage pending create edit compacts latest form fields into durable create', async () => {
   const h = await pendingCardHarness(); const pending = h.child.exposed.allCards[0];
