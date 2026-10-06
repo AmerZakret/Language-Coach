@@ -1,3 +1,4 @@
+import '../core/localization/target_language.dart';
 import 'dart:convert';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
@@ -26,7 +27,7 @@ class PronunciationService {
 
       // Populate form-data text fields
       request.fields['targetText'] = targetText;
-      request.fields['targetLanguage'] = targetLanguage;
+      request.fields['targetLanguage'] = TargetLanguage.code(targetLanguage);
       
       if (nativeTranslation != null && nativeTranslation.isNotEmpty) {
         request.fields['nativeTranslation'] = nativeTranslation;

@@ -24,7 +24,7 @@ export class User extends Document {
   @Prop({ default: 0 })
   streak: number;
 
-  @Prop({ default: 'English' })
+  @Prop({ default: 'en' })
   targetLanguage: string;
 
   @Prop({ type: Map, of: Number, default: {} })

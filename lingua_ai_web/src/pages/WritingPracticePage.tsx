@@ -1,3 +1,4 @@
+import { targetLanguageCode } from '../utils/targetLanguage';
 import { useState, useEffect } from "react";
 import { AlertCircle, CheckCircle2, Sparkles, WifiOff } from "lucide-react";
 import { useLanguage } from "../context/LanguageContext";
@@ -57,16 +58,7 @@ export function WritingPracticePage() {
     );
   }
 
-  const LANGUAGE_CODES: Record<string, string> = {
-    English: 'en',
-    German: 'de',
-    Spanish: 'es',
-    French: 'fr',
-    Arabic: 'ar',
-    Turkish: 'tr',
-  };
-
-  const targetCode = LANGUAGE_CODES[targetLanguage] || 'en';
+  const targetCode = targetLanguageCode(targetLanguage);
   const topicsMap = writingTopics[language] || writingTopics['en'];
   const topics = topicsMap[targetCode] || topicsMap['en'];
 

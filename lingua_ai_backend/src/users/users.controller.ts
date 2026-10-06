@@ -1,3 +1,4 @@
+import { tryTargetLanguage } from '../common/target-language';
 import { Body, Controller, Get, Patch, Req, UseGuards, NotFoundException } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -18,7 +19,7 @@ export class UsersController {
       level: user.level,
       totalXp: user.totalXp,
       streak: user.streak,
-      targetLanguage: user.targetLanguage || 'English',
+      targetLanguage: tryTargetLanguage(user.targetLanguage) ?? user.targetLanguage ?? 'en',
     };
   }
 
@@ -43,7 +44,7 @@ export class UsersController {
       level: updatedUser.level,
       totalXp: updatedUser.totalXp,
       streak: updatedUser.streak,
-      targetLanguage: updatedUser.targetLanguage || 'English',
+      targetLanguage: tryTargetLanguage(updatedUser.targetLanguage) ?? updatedUser.targetLanguage ?? 'en',
     };
   }
 }

@@ -1,5 +1,6 @@
+import { targetLanguageCode } from '../utils/targetLanguage';
 import apiClient from './apiClient';
-import type { TargetLanguage, InterfaceLanguage } from '../types/language';
+import type { TargetLanguage, TargetLanguageCode, InterfaceLanguage } from '../types/language';
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -10,7 +11,7 @@ export interface ChatMessage {
 interface ChatRequest {
   message: string;
   language: InterfaceLanguage;
-  targetLanguage: TargetLanguage;
+  targetLanguage: TargetLanguage | TargetLanguageCode;
 }
 
 interface ChatResponse {
@@ -21,20 +22,20 @@ interface ChatResponse {
 }
 
 export const sendMessage = async (data: ChatRequest): Promise<ChatResponse> => {
-  const response = await apiClient.post<ChatResponse>('/ai-coach/chat', data);
+  const response = await apiClient.post<ChatResponse>('/ai-coach/chat', { ...data, targetLanguage: targetLanguageCode(data.targetLanguage) });
   return response.data;
 };
 
-export const getChatHistory = async (targetLanguage: TargetLanguage): Promise<ChatMessage[]> => {
+export const getChatHistory = async (targetLanguage: TargetLanguage | TargetLanguageCode): Promise<ChatMessage[]> => {
   const response = await apiClient.get<ChatMessage[]>(`/ai-coach/history`, {
-    params: { targetLanguage }
+    params: { targetLanguage: targetLanguageCode(targetLanguage) }
   });
   return response.data;
 };
 
-export const clearChatHistory = async (targetLanguage: TargetLanguage): Promise<void> => {
+export const clearChatHistory = async (targetLanguage: TargetLanguage | TargetLanguageCode): Promise<void> => {
   await apiClient.delete(`/ai-coach/clear`, {
-    params: { targetLanguage }
+    params: { targetLanguage: targetLanguageCode(targetLanguage) }
   });
 };
 
@@ -42,7 +43,7 @@ export interface WritingCorrectionRequest {
   topic: string;
   text: string;
   language: InterfaceLanguage;
-  targetLanguage: TargetLanguage;
+  targetLanguage: TargetLanguage | TargetLanguageCode;
 }
 
 export interface WritingCorrectionResponse {
@@ -56,6 +57,6 @@ export interface WritingCorrectionResponse {
 }
 
 export const checkWriting = async (data: WritingCorrectionRequest): Promise<WritingCorrectionResponse> => {
-  const response = await apiClient.post<WritingCorrectionResponse>('/ai-coach/writing-check', data);
+  const response = await apiClient.post<WritingCorrectionResponse>('/ai-coach/writing-check', { ...data, targetLanguage: targetLanguageCode(data.targetLanguage) });
   return response.data;
 };

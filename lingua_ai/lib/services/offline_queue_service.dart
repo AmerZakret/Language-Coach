@@ -506,6 +506,9 @@ class OfflineQueueService {
           if (found.single.type == 'update-flashcard' && found.single.attemptCount == 0) {
             replayPayload['_mutationContract'] = 2;
           }
+          if ((found.single.type == 'update-flashcard' || found.single.type == 'create-flashcard') && found.single.attemptCount == 0) {
+            replayPayload['_languageContract'] = 1;
+          }
           final current = found.single
               .withPayload(replayPayload)
               .withRetry(
@@ -571,7 +574,8 @@ class OfflineQueueService {
                     nativeTranslation: payload['nativeTranslation']?.toString(),
                     exampleSentence: payload['exampleSentence']?.toString(),
                     note: payload['note']?.toString(),
-                    operationId: action.id);
+                    operationId: action.id,
+                    preserveLegacyLanguage: payload['_languageContract'] != 1);
                 serverId = card.id;
                 if (payload['tempId'] != null &&
                     (serverId!.isEmpty || serverId!.startsWith('local_'))) {
@@ -593,7 +597,8 @@ class OfflineQueueService {
                     nativeTranslation: legacy ? null : payload['nativeTranslation']?.toString(),
                     exampleSentence: optional('exampleSentence'),
                     note: optional('note'),
-                    operationId: action.id);
+                    operationId: action.id,
+                    preserveLegacyLanguage: payload['_languageContract'] != 1);
                 break;
               case 'delete-flashcard':
                 await _flashcardApi.deleteFlashcard(cardId!,

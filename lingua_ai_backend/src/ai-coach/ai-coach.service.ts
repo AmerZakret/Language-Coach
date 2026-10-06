@@ -1,3 +1,4 @@
+import { targetLanguageCode, targetLanguageQuery, TARGET_LANGUAGE_NAMES, languageResponse } from '../common/target-language';
 import { Injectable, Logger, NotFoundException, HttpException, HttpStatus } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
@@ -17,19 +18,6 @@ interface ParsedAIResponse {
   reply: string;
   correction: string;
 }
-
-const LANGUAGE_NAMES: Record<string, string> = {
-  en: 'English',
-  de: 'German',
-  es: 'Spanish',
-  fr: 'French',
-  ar: 'Arabic',
-  english: 'English',
-  german: 'German',
-  spanish: 'Spanish',
-  french: 'French',
-  arabic: 'Arabic',
-};
 
 @Injectable()
 export class AiCoachService {
@@ -72,6 +60,8 @@ export class AiCoachService {
     const user = await this.findUser(userId);
 
     // Retrieve secret variables securely from NestJS config provider (protects key from client bundles)
+    const targetCode = targetLanguageCode(targetLanguage ?? 'en');
+    const targetLangName = TARGET_LANGUAGE_NAMES[targetCode];
     const apiKey = this.configService.get<string>('GEMINI_API_KEY')?.trim();
     const model = (
       this.configService.get<string>('GEMINI_MODEL') || 'gemini-2.5-flash'
@@ -91,10 +81,7 @@ export class AiCoachService {
     }
 
     // Convert interface and target language codes to human-readable names for prompt construction
-    const targetLangName =
-      LANGUAGE_NAMES[targetLanguage?.toLowerCase() || ''] ||
-      targetLanguage ||
-      'English';
+
     const interfaceLangName = language === 'tr' ? 'Turkish' : 'English';
 
     // System instruction defining the AI's persona, tasks, and response schema.
@@ -172,7 +159,7 @@ Do not include markdown code block formatting like \`\`\`json. Return pure JSON.
       // 1. Save user's message document to MongoDB
       const savedUserMsg = await new this.chatMessageModel({
         userId: user._id.toString(),
-        targetLanguage: targetLangName,
+        targetLanguage: targetCode,
         role: 'user',
         message,
       }).save();
@@ -180,7 +167,7 @@ Do not include markdown code block formatting like \`\`\`json. Return pure JSON.
       // 2. Save coach's reply document to MongoDB
       const savedAssistantMsg = await new this.chatMessageModel({
         userId: user._id.toString(),
-        targetLanguage: targetLangName,
+        targetLanguage: targetCode,
         role: 'assistant',
         message: parsedResponse.reply,
       }).save();
@@ -239,6 +226,8 @@ Do not include markdown code block formatting like \`\`\`json. Return pure JSON.
   ) {
     await this.findUser(userId);
 
+    const targetCode = targetLanguageCode(targetLanguage ?? 'en');
+    const targetLangName = TARGET_LANGUAGE_NAMES[targetCode];
     const apiKey = this.configService.get<string>('GEMINI_API_KEY')?.trim();
     const model = (
       this.configService.get<string>('GEMINI_MODEL') || 'gemini-2.5-flash'
@@ -257,10 +246,6 @@ Do not include markdown code block formatting like \`\`\`json. Return pure JSON.
       };
     }
 
-    const targetLangName =
-      LANGUAGE_NAMES[targetLanguage?.toLowerCase() || ''] ||
-      targetLanguage ||
-      'English';
     const interfaceLangName = language === 'tr' ? 'Turkish' : 'English';
 
     // System instruction layout for structured JSON return (includes corrections array schema)
@@ -386,16 +371,12 @@ Return ONLY this JSON. Do not include markdown formatting like \`\`\`json.`;
   async getHistory(userId: string, targetLanguage: string) {
     const user = await this.findUser(userId);
 
-    const targetLangName =
-      LANGUAGE_NAMES[targetLanguage?.toLowerCase() || ''] ||
-      targetLanguage ||
-      'English';
-
+    const targetCode = targetLanguageCode(targetLanguage ?? 'en');
     return this.chatMessageModel
-      .find({ userId: user._id.toString(), targetLanguage: targetLangName })
+      .find({ userId: user._id.toString(), targetLanguage: targetLanguageQuery(targetCode) })
       .sort({ createdAt: 1 })
       .limit(50)
-      .exec();
+      .exec().then(messages => messages.map(languageResponse));
   }
 
   /**
@@ -404,13 +385,9 @@ Return ONLY this JSON. Do not include markdown formatting like \`\`\`json.`;
   async clearHistory(userId: string, targetLanguage: string) {
     const user = await this.findUser(userId);
 
-    const targetLangName =
-      LANGUAGE_NAMES[targetLanguage?.toLowerCase() || ''] ||
-      targetLanguage ||
-      'English';
-
+    const targetCode = targetLanguageCode(targetLanguage ?? 'en');
     return this.chatMessageModel
-      .deleteMany({ userId: user._id.toString(), targetLanguage: targetLangName })
+      .deleteMany({ userId: user._id.toString(), targetLanguage: targetLanguageQuery(targetCode) })
       .exec();
   }
 }

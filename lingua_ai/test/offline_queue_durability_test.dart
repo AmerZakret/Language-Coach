@@ -21,7 +21,7 @@ class DurableCardsApi extends FlashcardApiService {
       String? nativeTranslation,
       String? exampleSentence,
       String? note,
-      String? operationId}) async {
+      String? operationId, bool preserveLegacyLanguage = false}) async {
     calls.add({'type': 'create', 'word': targetWord, 'note': note});
     started?.complete();
     if (release != null) await release!.future;
@@ -36,7 +36,7 @@ class DurableCardsApi extends FlashcardApiService {
       String? nativeTranslation,
       String? exampleSentence,
       String? note,
-      String? operationId}) async {
+      String? operationId, bool preserveLegacyLanguage = false}) async {
     calls.add({'type': 'update', 'id': cardId});
     if (failUpdate) throw StateError('Update unavailable');
     return Flashcard.fromJson({'_id': cardId});

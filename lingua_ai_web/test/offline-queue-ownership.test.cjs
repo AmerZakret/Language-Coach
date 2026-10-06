@@ -113,7 +113,7 @@ function harness(saved = storage(), fakeTimers = false) {
     userKey: 'utils/userKey.ts', queueSession: 'utils/queueSession.ts',
     apiClient: 'api/apiClient.ts', offlineQueue: 'utils/offlineQueue.ts',
     auth: 'context/AuthContext.tsx',
-    authApi: 'api/authApi.ts', progressApi: 'api/progressApi.ts', mutation: 'utils/flashcardMutation.ts',
+    authApi: 'api/authApi.ts', progressApi: 'api/progressApi.ts', language: 'utils/targetLanguage.ts', mutation: 'utils/flashcardMutation.ts',
   };
   function load(name) {
     if (modules.has(name)) return modules.get(name).exports;
@@ -142,6 +142,7 @@ function harness(saved = storage(), fakeTimers = false) {
         if (name.endsWith('/types/progress')) return load('types');
         if (name.endsWith('/userKey')) return load('userKey');
         if (name.endsWith('/queueSession')) return load('queueSession');
+        if (name.endsWith('/targetLanguage')) return load('language');
         if (name.endsWith('/flashcardMutation')) return load('mutation');
         if (name.endsWith('/apiClient')) return load('apiClient');
         throw new Error(`Unexpected import: ${name}`);
@@ -785,3 +786,18 @@ test('Phase 5C: previously attempted legacy web updates retain their receipt pay
     targetWord: 'word', turkishTranslation: 'translation', note: '', exampleSentence: '',
   });
 });
+
+for (const type of ['create-flashcard', 'update-flashcard']) {
+  test(`Phase 5D: ${type} normalizes new aliases and preserves previously attempted receipt language`, async () => {
+    for (const attempted of [false, true]) {
+      const h = harness(); await h.mount(); h.auth().login(user(A), `test-${A}`);
+      h.enqueue(type, { cardId: 'card', targetWord: 'word', turkishTranslation: 'translation', targetLanguage: 'German' });
+      const state = JSON.parse(h.saved.getItem(key(`registered_${A}`)));
+      state.actions[0].attemptCount = attempted ? 1 : 0;
+      h.saved.setItem(key(`registered_${A}`), JSON.stringify(state));
+      assert.equal(await h.queue.processOfflineQueue(A), true);
+      assert.equal(h.requests[0].data.targetLanguage, attempted ? 'German' : 'de');
+      assert.equal(h.requests[0].headers['X-Idempotency-Key'], state.actions[0].id);
+    }
+  });
+}

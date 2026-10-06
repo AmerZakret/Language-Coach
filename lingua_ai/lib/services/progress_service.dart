@@ -181,7 +181,7 @@ class ProgressService extends ChangeNotifier {
       final revision = await queue.progressRevision(owner);
       if (!isCurrent()) return;
       final response = await _apiService.getProgress(
-          userId, TargetLanguageService.toFullName(language));
+          userId, language);
       if (!isCurrent()) return;
       await queue.saveServerProgress(
           owner, language, revision, ProgressSnapshot.fromServer(response));

@@ -1,3 +1,4 @@
+import '../core/localization/target_language.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -24,7 +25,7 @@ class CommunityService {
 
       String url = '${ApiConfig.baseUrl}${ApiConfig.communityPosts}?page=1&limit=50';
       if (language != null && language.isNotEmpty && language != 'All') {
-        url += '&language=$language';
+        url += '&language=${TargetLanguage.code(language)}';
       }
 
       final response = await http.get(Uri.parse(url), headers: headers);
@@ -71,7 +72,7 @@ class CommunityService {
         request.headers['Authorization'] = 'Bearer $token';
       }
 
-      request.fields['learningLanguage'] = learningLanguage;
+      request.fields['learningLanguage'] = TargetLanguage.code(learningLanguage);
       if (text != null && text.trim().isNotEmpty) {
         request.fields['text'] = text.trim();
       }

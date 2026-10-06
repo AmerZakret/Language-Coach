@@ -17,6 +17,13 @@ test('AI and pronunciation helpers omit body/query identity and keep active rout
     }).outputText, { module, exports: module.exports, FormData, Blob,
       require: name => {
         if (name === './apiClient') return { __esModule: true, default: client };
+        if (name.endsWith('/targetLanguage')) {
+          const languageModule = { exports: {} };
+          vm.runInNewContext(ts.transpileModule(readFileSync(join(__dirname, '../src/utils/targetLanguage.ts'), 'utf8'), {
+            compilerOptions: { module: ts.ModuleKind.CommonJS },
+          }).outputText, { module: languageModule, exports: languageModule.exports });
+          return languageModule.exports;
+        }
         throw new Error(`Unexpected import ${name}`);
       } });
     return module.exports;

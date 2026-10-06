@@ -1,3 +1,4 @@
+import { tryTargetLanguage } from '../common/target-language';
 import { Injectable, UnauthorizedException, ConflictException, BadRequestException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { randomUUID } from 'node:crypto';
@@ -48,7 +49,7 @@ export class AuthService {
         level: user.level,
         totalXp: user.totalXp,
         streak: user.streak,
-        targetLanguage: user.targetLanguage || 'English',
+        targetLanguage: tryTargetLanguage(user.targetLanguage) ?? user.targetLanguage ?? 'en',
       },
     };
   }
@@ -85,7 +86,7 @@ export class AuthService {
         level: user.level,
         totalXp: user.totalXp,
         streak: user.streak,
-        targetLanguage: user.targetLanguage || 'English',
+        targetLanguage: tryTargetLanguage(user.targetLanguage) ?? user.targetLanguage ?? 'en',
       },
     };
   }
@@ -113,7 +114,7 @@ export class AuthService {
         level: user.level,
         totalXp: user.totalXp,
         streak: user.streak,
-        targetLanguage: user.targetLanguage || 'English',
+        targetLanguage: tryTargetLanguage(user.targetLanguage) ?? user.targetLanguage ?? 'en',
         isGuest: true,
       },
     };

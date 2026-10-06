@@ -80,7 +80,7 @@ describe('Completion and XP consistency (real disposable transactions)', () => {
     }) as any);
     await Promise.all([complete('one'), complete('two')]);
     const saved = (await users.findById(user._id))!;
-    expect(saved.totalXp).toBe(130); expect(saved.xpPerLanguage.get('English')).toBe(130);
+    expect(saved.totalXp).toBe(130); expect(saved.xpPerLanguage.get('en')).toBe(130);
     expect(await progress.countDocuments()).toBe(2);
   });
   it('concurrent same-lesson attempts award exactly once', async () => {
@@ -94,10 +94,10 @@ describe('Completion and XP consistency (real disposable transactions)', () => {
     await service.completeLesson(b._id.toString(), 'one', 20);
     const saved = (await users.findById(user._id))!;
     expect(saved.totalXp).toBe(100);
-    expect(saved.xpPerLanguage.get('English')).toBe(50); expect(saved.xpPerLanguage.get('German')).toBe(50);
+    expect(saved.xpPerLanguage.get('en')).toBe(50); expect(saved.xpPerLanguage.get('de')).toBe(50);
     expect((await service.getUserProgress(b._id.toString(), 'English')).stats.totalXp).toBe(50);
     await lessons.updateOne({ id: 'two' }, { $set: { xpReward: 150 } });
-    await complete('two'); expect((await users.findById(user._id))?.levelPerLanguage.get('English')).toBe('Elementary');
+    await complete('two'); expect((await users.findById(user._id))?.levelPerLanguage.get('en')).toBe('Elementary');
   });
   it('reset rolls back on failure and atomically clears completions and all XP on success', async () => {
     await complete();

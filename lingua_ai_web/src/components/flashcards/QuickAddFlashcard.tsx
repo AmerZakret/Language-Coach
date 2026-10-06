@@ -1,3 +1,4 @@
+import { targetLanguageCode } from '../../utils/targetLanguage';
 import React, { useRef, useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
@@ -30,7 +31,7 @@ export const QuickAddFlashcard: React.FC = () => {
       await apiClient.post('/flashcards', {
         targetWord: word,
         turkishTranslation: translation,
-        targetLanguage
+        targetLanguage: targetLanguageCode(targetLanguage)
       }, { ...getSessionRequestConfig(), headers: { 'X-Idempotency-Key': pending.current.id } });
       pending.current = null;
       setSuccess(true);

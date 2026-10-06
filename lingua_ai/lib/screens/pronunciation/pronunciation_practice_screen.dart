@@ -1,3 +1,4 @@
+import '../../core/localization/target_language.dart';
 import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -42,25 +43,6 @@ class _PronunciationPracticeScreenState extends State<PronunciationPracticeScree
   bool _isAssessing = false;
   PronunciationAssessmentResult? _result;
   String? _errorMessage;
-
-  // Language Maps
-  final Map<String, String> _languageCodes = {
-    'English': 'en',
-    'German': 'de',
-    'Spanish': 'es',
-    'French': 'fr',
-    'Arabic': 'ar',
-    'Turkish': 'tr',
-  };
-
-  final Map<String, String> _languageTtsCodes = {
-    'en': 'en-US',
-    'de': 'de-DE',
-    'es': 'es-ES',
-    'fr': 'fr-FR',
-    'ar': 'ar-SA',
-    'tr': 'tr-TR',
-  };
 
   @override
   void initState() {
@@ -107,8 +89,7 @@ class _PronunciationPracticeScreenState extends State<PronunciationPracticeScree
   Future<void> _speak() async {
     if (_targetText.trim().isEmpty) return;
     final targetLang = TargetLanguageService().currentLanguage;
-    final langCode = _languageCodes[targetLang] ?? 'en';
-    final ttsCode = _languageTtsCodes[langCode] ?? 'en-US';
+    final ttsCode = TargetLanguage.ttsLocale(targetLang);
 
     await _flutterTts.setLanguage(ttsCode);
     await _flutterTts.setSpeechRate(0.45); // Slower speech rate for clarity
@@ -191,7 +172,7 @@ class _PronunciationPracticeScreenState extends State<PronunciationPracticeScree
     });
 
     final targetLang = TargetLanguageService().currentLanguage;
-    final langCode = _languageCodes[targetLang] ?? 'en';
+    final langCode = TargetLanguage.code(targetLang);
 
     try {
       final assessment = await _pronunciationService.assessPronunciation(

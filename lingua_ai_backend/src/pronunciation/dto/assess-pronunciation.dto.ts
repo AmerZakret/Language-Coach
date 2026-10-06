@@ -1,3 +1,4 @@
+import { IsTargetLanguage } from '../../common/target-language';
 import { IsNotEmpty, IsOptional, IsString, IsIn } from 'class-validator';
 
 export class AssessPronunciationDto {
@@ -7,6 +8,7 @@ export class AssessPronunciationDto {
 
   @IsString()
   @IsNotEmpty()
+  @IsTargetLanguage()
   targetLanguage: string;
 
   @IsString()

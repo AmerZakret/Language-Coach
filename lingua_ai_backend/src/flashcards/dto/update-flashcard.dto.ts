@@ -1,3 +1,4 @@
+import { IsTargetLanguage } from '../../common/target-language';
 import { IsNotEmpty, IsString, MaxLength, ValidateIf } from 'class-validator';
 
 export class UpdateFlashcardDto {
@@ -16,6 +17,7 @@ export class UpdateFlashcardDto {
   @ValidateIf((_object, value) => value !== undefined)
   @IsNotEmpty()
   @IsString()
+  @IsTargetLanguage()
   targetLanguage?: string;
 
   @ValidateIf((_object, value) => value !== undefined)

@@ -15,8 +15,8 @@ describe('Lesson HTTP contract', () => {
     findOne: ({ id }: { id: string }) => ({
       lean: async () => allLessons.find(lesson => lesson.id === id) ?? null,
     }),
-    find: (filter: { targetLanguage?: string }) => ({
-      lean: async () => allLessons.filter(lesson => !filter.targetLanguage || lesson.targetLanguage === filter.targetLanguage),
+    find: (filter: { targetLanguage?: RegExp }) => ({
+      lean: async () => allLessons.filter(lesson => !filter.targetLanguage || filter.targetLanguage.test(lesson.targetLanguage)),
     }),
   };
 

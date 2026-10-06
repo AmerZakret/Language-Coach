@@ -1,3 +1,4 @@
+import { targetLanguageCode } from '../utils/targetLanguage';
 import apiClient from './apiClient';
 import type { ProgressState } from '../types/progress';
 import { getSessionRequestConfig } from '../utils/queueSession';
@@ -21,7 +22,7 @@ export const fetchProgress = async (userId: string, targetLanguage: string): Pro
   try {
     const response = await apiClient.get<BackendProgressResponse>(`/progress/${userId}`, {
       ...getSessionRequestConfig(),
-      params: { targetLanguage }
+      params: { targetLanguage: targetLanguageCode(targetLanguage) }
     });
     const data = response.data;
     if (!data) return null;

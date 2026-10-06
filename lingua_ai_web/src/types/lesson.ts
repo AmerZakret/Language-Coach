@@ -1,4 +1,5 @@
-export type LessonLanguageCode = 'en' | 'de' | 'es' | 'fr' | 'ar';
+import type { TargetLanguageCode } from './language';
+export type LessonLanguageCode = TargetLanguageCode;
 
 export interface Question {
   id: string;

@@ -1,3 +1,4 @@
+import '../core/localization/target_language.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../core/config/api_config.dart';
@@ -38,7 +39,7 @@ class UserApiService {
         },
         body: json.encode({
           if (name != null) 'name': name,
-          if (targetLanguage != null) 'targetLanguage': targetLanguage,
+          if (targetLanguage != null) 'targetLanguage': TargetLanguage.code(targetLanguage),
         }),
       );
 

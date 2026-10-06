@@ -17,6 +17,13 @@ import { CommunityModule } from '../community/community.module';
 import { CommunityPost } from '../community/schemas/community-post.schema';
 import { PronunciationModule } from '../pronunciation/pronunciation.module';
 import { PronunciationService } from '../pronunciation/pronunciation.service';
+import { AiCoachModule } from '../ai-coach/ai-coach.module';
+import { ChatMessage } from '../ai-coach/schemas/chat-message.schema';
+import { ProgressModule } from '../progress/progress.module';
+import { ProgressService } from '../progress/progress.service';
+import { Progress } from '../progress/schemas/progress.schema';
+import { LessonsModule } from '../lessons/lessons.module';
+import { TARGET_LANGUAGE_NAMES } from '../common/target-language';
 
 // Actual DTO pipe, JWT guard, services, transactions and stored mutations.
 // Only external providers are mocked; MongoDB is disposable local test data.
@@ -43,7 +50,8 @@ describe('Phase 5C validation and mutation contracts', () => {
     replica = await MongoMemoryReplSet.create({ replSet: { count: 1 } });
     const module = await Test.createTestingModule({
       imports: [ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }),
-        MongooseModule.forRoot(replica.getUri()), AuthModule, FlashcardsModule, CommunityModule, PronunciationModule],
+        MongooseModule.forRoot(replica.getUri()), AuthModule, FlashcardsModule, CommunityModule, PronunciationModule,
+        AiCoachModule, ProgressModule, LessonsModule],
     }).overrideProvider(ConfigService).useValue(new ConfigService({ JWT_SECRET: randomBytes(32).toString('hex') }))
       .overrideProvider(AiContextService).useValue(ai)
       .overrideProvider(PronunciationService).useValue(pronunciation).compile();
@@ -60,6 +68,8 @@ describe('Phase 5C validation and mutation contracts', () => {
   beforeEach(async () => {
     ai.generateContext.mockClear(); pronunciation.assess.mockClear();
     await Promise.all([users.deleteMany({}), cards.deleteMany({}), operations.deleteMany({}), posts.deleteMany({})]);
+    await app.get<Model<Progress>>(getModelToken(Progress.name)).deleteMany({});
+    await app.get<Model<ChatMessage>>(getModelToken(ChatMessage.name)).deleteMany({});
     owner = await users.create({ name: 'Original', email: 'owner@example.com', passwordHash: 'fixture' });
     token = app.get(JwtService).sign({ sub: owner._id.toString(), email: 'untrusted@example.com' });
     card = await cards.create({ userId: owner._id, ...original });
@@ -69,7 +79,7 @@ describe('Phase 5C validation and mutation contracts', () => {
   it.each(['name', 'targetLanguage'])('profile %s rejects invalid types including null', async field => {
     for (const value of [null, 12, false, [], {}, '']) await profile({ [field]: value }).expect(400);
     expect((await users.findById(owner._id))?.name).toBe('Original');
-    expect((await users.findById(owner._id))?.targetLanguage).toBe('English');
+    expect((await users.findById(owner._id))?.targetLanguage).toBe('en');
   });
   it.each(['email', 'userId', 'isGuest', 'totalXp', 'unexpected'])('profile rejects unknown field %s', async field => {
     const response = await profile({ name: 'Changed', [field]: 'invalid' }).expect(400);
@@ -146,7 +156,8 @@ describe('Phase 5C validation and mutation contracts', () => {
     const path = `/community/posts/${image._id}`;
     await request(app.getHttpServer()).put(path).send({}).auth(token, { type: 'bearer' }).expect(200);
     expect((await posts.findById(image._id))?.text).toBe('caption');
-    await request(app.getHttpServer()).put(path).field('text', '').auth(token, { type: 'bearer' }).expect(200);
+    const cleared = await request(app.getHttpServer()).put(path).field('text', '').auth(token, { type: 'bearer' }).expect(200);
+    expect(cleared.body.learningLanguage).toBe('en');
     expect((await posts.findById(image._id))?.text).toBe('');
     expect((await posts.findById(image._id))?.imageUrl).toBe(image.imageUrl);
     const textOnly = await posts.create({ userId: owner._id.toString(), userName: owner.name,
@@ -163,5 +174,113 @@ describe('Phase 5C validation and mutation contracts', () => {
       .field('targetLanguage', 'en').field('sourceType', 'manual').field('nativeLanguage', 'tr')
       .field('nativeTranslation', 'Merhaba').attach('audio', Buffer.from('fixture'), 'audio.wav')
       .auth(token, { type: 'bearer' }).expect(201);
+  });
+
+  it.each(Object.entries(TARGET_LANGUAGE_NAMES))('Phase 5D: %s and legacy %s work at language API boundaries', async (code, name) => {
+    for (const value of [code, name]) {
+      const result = await profile({ targetLanguage: value }).expect(200);
+      expect(result.body.targetLanguage).toBe(code);
+      expect((await users.findById(owner._id))?.targetLanguage).toBe(code);
+      const response = await request(app.getHttpServer()).post('/flashcards')
+        .send({ targetWord: `${code}-${value}`, turkishTranslation: 'translation', targetLanguage: value })
+        .auth(token, { type: 'bearer' }).set('X-Idempotency-Key', `language-${value}`).expect(201);
+      expect(response.body.targetLanguage).toBe(code);
+      expect((await cards.findById(response.body._id))?.targetLanguage).toBe(code);
+      expect(ai.generateContext).toHaveBeenLastCalledWith(`${code}-${value}`, 'translation', code);
+      const lessons = await request(app.getHttpServer()).get('/lessons').query({ targetLanguage: value }).expect(200);
+      expect(lessons.body.length).toBeGreaterThan(0);
+      expect(lessons.body.every(lesson => lesson.targetLanguage === code)).toBe(true);
+      await request(app.getHttpServer()).post('/ai-coach/chat').send({ message: 'Hello', language: 'en', targetLanguage: value })
+        .auth(token, { type: 'bearer' }).expect(201);
+      await request(app.getHttpServer()).post('/ai-coach/writing-check')
+        .send({ topic: 'Greeting', text: 'Hello', language: 'en', targetLanguage: value }).auth(token, { type: 'bearer' }).expect(201);
+      await request(app.getHttpServer()).post('/pronunciation/assess').field('targetText', 'Hello')
+        .field('targetLanguage', value).attach('audio', Buffer.from('fixture'), 'audio.wav').auth(token, { type: 'bearer' }).expect(201);
+    }
+  });
+
+  it('Phase 5D: unsupported languages reject across validated bodies and query boundaries', async () => {
+    await profile({ targetLanguage: 'Italian' }).expect(400);
+    await update({ targetLanguage: 'Italian' }).expect(400);
+    await request(app.getHttpServer()).post('/flashcards').send({ targetWord: 'word', turkishTranslation: 'translation', targetLanguage: 'Italian' })
+      .auth(token, { type: 'bearer' }).expect(400);
+    await request(app.getHttpServer()).post('/ai-coach/chat').send({ message: 'Hello', language: 'en', targetLanguage: 'Italian' })
+      .auth(token, { type: 'bearer' }).expect(400);
+    await request(app.getHttpServer()).post('/ai-coach/writing-check').send({ topic: 'Greeting', text: 'Hello', language: 'en', targetLanguage: 'Italian' })
+      .auth(token, { type: 'bearer' }).expect(400);
+    await request(app.getHttpServer()).post('/pronunciation/assess').field('targetText', 'Hello').field('targetLanguage', 'Italian')
+      .auth(token, { type: 'bearer' }).expect(400);
+    for (const value of ['Italian', '']) {
+      for (const path of ['/lessons', '/flashcards/all', '/flashcards/due', '/ai-coach/history', `/progress/${owner._id}`]) {
+        await request(app.getHttpServer()).get(path).query({ targetLanguage: value }).auth(token, { type: 'bearer' }).expect(400);
+      }
+    }
+  });
+
+  it('Phase 5D: legacy flashcards stay readable and create lookup reuses them without rewriting historical language', async () => {
+    const response = await request(app.getHttpServer()).post('/flashcards')
+      .send({ targetWord: original.targetWord, turkishTranslation: original.turkishTranslation, targetLanguage: 'en' })
+      .auth(token, { type: 'bearer' }).expect(201);
+    expect(response.body._id).toBe(card._id.toString());
+    expect(response.body.targetLanguage).toBe('en');
+    expect((await cards.findById(card._id))?.targetLanguage).toBe('English');
+    expect(await cards.countDocuments()).toBe(1);
+    const missing = await cards.collection.insertOne({ userId: owner._id, targetWord: 'old', turkishTranslation: 'translation', nextReviewDate: new Date(0) });
+    for (const path of ['/flashcards/all', '/flashcards/due']) {
+      const result = await request(app.getHttpServer()).get(path).query({ targetLanguage: 'English' }).auth(token, { type: 'bearer' }).expect(200);
+      expect(result.body.map(card => card._id)).toContain(missing.insertedId.toString());
+      expect(result.body.every(card => card.targetLanguage === 'en')).toBe(true);
+    }
+    expect((await cards.collection.findOne({ _id: missing.insertedId }))!.targetLanguage).toBeUndefined();
+  });
+
+  it('Phase 5D: same-language edits preserve legacy unique keys when a canonical duplicate already exists', async () => {
+    const canonical = await cards.create({ ...original, targetLanguage: 'en', userId: owner._id });
+    const result = await update({ targetLanguage: 'en', note: 'edited' }).expect(200);
+    expect(result.body.targetLanguage).toBe('en');
+    expect((await cards.findById(card._id))?.targetLanguage).toBe('English');
+    expect((await cards.findById(canonical._id))?.note).toBe(original.note);
+    expect(await cards.countDocuments()).toBe(2);
+  });
+
+  it('Phase 5D: legacy chat and community language queries preserve historical rows', async () => {
+    const messages = app.get<Model<ChatMessage>>(getModelToken(ChatMessage.name));
+    await messages.create([
+      { userId: owner._id, role: 'user', message: 'old', targetLanguage: 'German' },
+      { userId: owner._id, role: 'assistant', message: 'new', targetLanguage: 'de' },
+      { userId: owner._id, role: 'user', message: 'other language', targetLanguage: 'fr' },
+    ]);
+    const history = await request(app.getHttpServer()).get('/ai-coach/history').query({ targetLanguage: 'de' }).auth(token, { type: 'bearer' }).expect(200);
+    expect(history.body).toHaveLength(2);
+    expect(history.body.every(message => message.targetLanguage === 'de')).toBe(true);
+    await request(app.getHttpServer()).delete('/ai-coach/clear').query({ targetLanguage: 'German' }).auth(token, { type: 'bearer' }).expect(200);
+    expect(await messages.countDocuments()).toBe(1);
+    await posts.create({ userId: owner._id.toString(), userName: owner.name, learningLanguage: 'German', text: 'old' });
+    const created = await request(app.getHttpServer()).post('/community/posts').field('learningLanguage', 'German').field('text', 'new')
+      .auth(token, { type: 'bearer' }).expect(201);
+    expect(created.body.learningLanguage).toBe('de');
+    const feed = await request(app.getHttpServer()).get('/community/posts').query({ language: 'de' }).auth(token, { type: 'bearer' }).expect(200);
+    expect(feed.body.items).toHaveLength(2);
+    expect(feed.body.items.every(post => post.learningLanguage === 'de')).toBe(true);
+  });
+
+  it('Phase 5D: progress codes and full-name XP keys coexist without losing XP, levels or completion idempotency', async () => {
+    const service = app.get(ProgressService);
+    const progress = app.get<Model<Progress>>(getModelToken(Progress.name));
+    await users.updateOne({ _id: owner._id }, { $set: { totalXp: 180, xpPerLanguage: { German: 170, de: 10 }, levelPerLanguage: { German: 'Beginner' } } });
+    await progress.create({ userId: owner._id, lessonId: 'de_2', score: 73, targetLanguage: 'German' });
+    await progress.collection.insertOne({ userId: owner._id, lessonId: 'de_3', score: 77, status: 'completed' });
+    const old = await service.getUserProgress(owner._id.toString(), 'de');
+    expect(old.stats.totalXp).toBe(180);
+    expect(old.completedLessons.map(lesson => lesson.lessonId)).toEqual(expect.arrayContaining(['de_2', 'de_3']));
+    const completed = await service.completeLesson(owner._id.toString(), 'de_1', 73);
+    expect(completed?.data.newTotalXp).toBe(180 + completed!.data.xpEarned);
+    expect((await progress.findOne({ lessonId: 'de_1' }))?.targetLanguage).toBe('de');
+    const saved = (await users.findById(owner._id))!;
+    expect(saved.xpPerLanguage.get('German')).toBe(170);
+    expect(saved.xpPerLanguage.get('de')).toBe(10 + completed!.data.xpEarned);
+    expect((await service.completeLesson(owner._id.toString(), 'de_1', 90))?.data.xpEarned).toBe(0);
+    expect((await service.getUserProgress(owner._id.toString(), 'German')).stats.totalXp).toBe(saved.totalXp);
+    expect((await progress.collection.findOne({ lessonId: 'de_3' }))!.targetLanguage).toBeUndefined();
   });
 });

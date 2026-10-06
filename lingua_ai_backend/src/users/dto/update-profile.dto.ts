@@ -1,3 +1,4 @@
+import { IsTargetLanguage } from '../../common/target-language';
 import { IsNotEmpty, IsString, ValidateIf } from 'class-validator';
 
 export class UpdateProfileDto {
@@ -9,5 +10,6 @@ export class UpdateProfileDto {
   @ValidateIf((_object, value) => value !== undefined)
   @IsString()
   @IsNotEmpty()
+  @IsTargetLanguage()
   targetLanguage?: string;
 }

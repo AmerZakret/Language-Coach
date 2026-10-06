@@ -1,9 +1,11 @@
+import type { TargetLanguageCode, TargetLanguage } from '../types/language';
+import { targetLanguageCode } from '../utils/targetLanguage';
 import apiClient from './apiClient';
 
 export interface PronunciationAssessmentResult {
   targetText: string;
   recognizedText: string;
-  targetLanguage: string;
+  targetLanguage: TargetLanguageCode;
   pronunciationScore: number;
   result: 'correct' | 'almost' | 'try_again';
   aiFeedback: string;
@@ -13,7 +15,7 @@ export interface PronunciationAssessmentResult {
 export interface AssessPronunciationRequest {
   audio: Blob | File;
   targetText: string;
-  targetLanguage: string;
+  targetLanguage: TargetLanguageCode | TargetLanguage;
   nativeTranslation?: string;
   nativeLanguage?: string;
   sourceType?: 'flashcard' | 'lesson' | 'manual';
@@ -25,7 +27,7 @@ export const assessPronunciation = async (
   const formData = new FormData();
   formData.append('audio', request.audio, 'audio.webm');
   formData.append('targetText', request.targetText);
-  formData.append('targetLanguage', request.targetLanguage);
+  formData.append('targetLanguage', targetLanguageCode(request.targetLanguage));
   
   if (request.nativeTranslation) {
     formData.append('nativeTranslation', request.nativeTranslation);

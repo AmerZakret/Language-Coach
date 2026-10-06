@@ -1,3 +1,4 @@
+import '../core/localization/target_language.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
@@ -16,13 +17,14 @@ class LessonNotFoundException implements Exception {
 
 class LessonApiService {
   Future<List<Lesson>> fetchLessons(String targetLanguage) async {
+    final code = TargetLanguage.code(targetLanguage);
     try {
       if (ConnectivityService().isOffline) {
         throw Exception('Device is offline');
       }
 
       final response = await http.get(Uri.parse(
-          '${ApiConfig.baseUrl}${ApiConfig.lessons}?targetLanguage=$targetLanguage'));
+          '${ApiConfig.baseUrl}${ApiConfig.lessons}?targetLanguage=$code'));
 
       if (response.statusCode == 200) {
         final List<dynamic> data = json.decode(response.body);
@@ -47,7 +49,7 @@ class LessonApiService {
       }
       
       // Fallback to dummy data if cache is empty
-      return DummyData.getLessons(targetLanguage);
+      return DummyData.getLessons(code);
     }
   }
 

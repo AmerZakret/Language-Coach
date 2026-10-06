@@ -89,7 +89,7 @@ function harness(initial = {}) {
     storage: 'utils/progressStorage.ts', types: 'types/progress.ts',
     progress: 'context/ProgressContext.tsx', target: 'context/TargetLanguageContext.tsx',
     cards: 'pages/FlashcardsPage.tsx', queue: 'utils/offlineQueue.ts', authPage: 'components/auth/AuthPage.tsx',
-    profile: 'pages/ProfilePage.tsx', mutation: 'utils/flashcardMutation.ts', community: 'pages/CommunityPage.tsx' };
+    profile: 'pages/ProfilePage.tsx', language: 'utils/targetLanguage.ts', mutation: 'utils/flashcardMutation.ts', community: 'pages/CommunityPage.tsx' };
   const exposed = {
     cards: 'fetchCards, handleSaveCard, handleDeleteCard, handleStudyScore, handleOpenAdd, handleOpenEdit, setFormData, allCards, dueCards, loading, error, successMsg, modal, studyResults',
     authPage: 'handleSubmit, setEmail, setPassword, loading, error',
@@ -123,6 +123,7 @@ function harness(initial = {}) {
         if (path.endsWith('.png')) return 'image';
         if (path.endsWith('/userKey')) return load('userKey');
         if (path.endsWith('/queueSession')) return load('queueSession');
+        if (path.endsWith('/targetLanguage')) return load('language');
         if (path.endsWith('/flashcardMutation')) return load('mutation');
         if (path.endsWith('/communityApi')) return {
           getCommunityPosts: async () => ({ items: h.communityPosts || [] }),
@@ -463,7 +464,7 @@ for (const kind of ['fetch', 'create', 'update', 'delete', 'review', 'failed-cre
     }
     if (kind === 'language') {
       h.language = 'German'; h.localStorage.setItem('linguaai_target_language', 'German');
-      h.transport = (method, url, data) => url.includes('German') ? originalTransport(method, url, data) : pending.promise;
+      h.transport = (method, url, data) => url.includes('targetLanguage=de') ? originalTransport(method, url, data) : pending.promise;
       h.child.render(); await h.settle();
     } else if (kind === 'unmount') h.child.unmount();
     else await h.switchToB();

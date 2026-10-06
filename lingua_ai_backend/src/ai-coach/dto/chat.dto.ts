@@ -1,7 +1,8 @@
+import { IsTargetLanguage } from '../../common/target-language';
 import {
   IsIn,
   IsNotEmpty,
-  IsOptional,
+  ValidateIf,
   IsString,
   MaxLength,
 } from 'class-validator';
@@ -17,19 +18,8 @@ export class ChatDto {
   @IsIn(['en', 'tr'])
   language: string;
 
-  @IsOptional()
+  @ValidateIf((_object, value) => value !== undefined)
   @IsString()
-  @IsIn([
-    'en',
-    'de',
-    'es',
-    'fr',
-    'ar',
-    'English',
-    'German',
-    'Spanish',
-    'French',
-    'Arabic',
-  ])
+  @IsTargetLanguage()
   targetLanguage?: string;
 }

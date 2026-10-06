@@ -1,3 +1,4 @@
+import '../core/localization/target_language.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../core/config/api_config.dart';
@@ -15,7 +16,7 @@ class AiCoachApiService {
         'language': language,
       };
       if (targetLanguage != null) {
-        body['targetLanguage'] = targetLanguage;
+        body['targetLanguage'] = TargetLanguage.code(targetLanguage);
       }
 
       final headers = <String, String>{
@@ -61,7 +62,7 @@ class AiCoachApiService {
 
       final response = await http.get(
         Uri.parse(
-          '${ApiConfig.baseUrl}${ApiConfig.aiCoach}/history?targetLanguage=$targetLanguage',
+          '${ApiConfig.baseUrl}${ApiConfig.aiCoach}/history?targetLanguage=${TargetLanguage.code(targetLanguage)}',
         ),
         headers: headers,
       );
@@ -88,7 +89,7 @@ class AiCoachApiService {
 
       final response = await http.delete(
         Uri.parse(
-          '${ApiConfig.baseUrl}${ApiConfig.aiCoach}/clear?targetLanguage=$targetLanguage',
+          '${ApiConfig.baseUrl}${ApiConfig.aiCoach}/clear?targetLanguage=${TargetLanguage.code(targetLanguage)}',
         ),
         headers: headers,
       );
@@ -112,7 +113,7 @@ class AiCoachApiService {
         'topic': topic,
         'text': text,
         'language': language,
-        'targetLanguage': targetLanguage,
+        'targetLanguage': TargetLanguage.code(targetLanguage),
       };
 
       final headers = <String, String>{

@@ -1,3 +1,4 @@
+import '../core/localization/target_language.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../core/config/api_config.dart';
@@ -15,6 +16,7 @@ class FlashcardApiService {
     String? exampleSentence,
     String? note,
     String? operationId,
+    bool preserveLegacyLanguage = false,
   }) async {
     try {
       final headers = <String, String>{
@@ -33,7 +35,7 @@ class FlashcardApiService {
             body: json.encode({
               'targetWord': targetWord,
               'turkishTranslation': turkishTranslation,
-              'targetLanguage': targetLanguage,
+              'targetLanguage': preserveLegacyLanguage ? targetLanguage : TargetLanguage.code(targetLanguage),
               if (nativeLanguage != null) 'nativeLanguage': nativeLanguage,
               if (nativeTranslation != null)
                 'nativeTranslation': nativeTranslation,
@@ -64,6 +66,7 @@ class FlashcardApiService {
     String? exampleSentence,
     String? note,
     String? operationId,
+    bool preserveLegacyLanguage = false,
   }) async {
     try {
       final headers = <String, String>{
@@ -82,7 +85,7 @@ class FlashcardApiService {
             body: json.encode({
               if (targetWord != null) 'targetWord': targetWord,
               if (turkishTranslation != null) 'turkishTranslation': turkishTranslation,
-              if (targetLanguage != null) 'targetLanguage': targetLanguage,
+              if (targetLanguage != null) 'targetLanguage': preserveLegacyLanguage ? targetLanguage : TargetLanguage.code(targetLanguage),
               if (nativeLanguage != null) 'nativeLanguage': nativeLanguage,
               if (nativeTranslation != null)
                 'nativeTranslation': nativeTranslation,
@@ -138,7 +141,7 @@ class FlashcardApiService {
       var url =
           '${ApiConfig.baseUrl}${ApiConfig.flashcards}/due';
       if (targetLanguage != null && targetLanguage.isNotEmpty) {
-        url += '?targetLanguage=$targetLanguage';
+        url += '?targetLanguage=${TargetLanguage.code(targetLanguage)}';
       }
 
       final response = await http
@@ -170,7 +173,7 @@ class FlashcardApiService {
       var url =
           '${ApiConfig.baseUrl}${ApiConfig.flashcards}/all';
       if (targetLanguage != null && targetLanguage.isNotEmpty) {
-        url += '?targetLanguage=$targetLanguage';
+        url += '?targetLanguage=${TargetLanguage.code(targetLanguage)}';
       }
 
       final response = await http

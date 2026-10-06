@@ -1,3 +1,5 @@
+import { targetLanguageCode, targetLanguageTtsLocale } from '../utils/targetLanguage';
+import type { TargetLanguageCode } from '../types/language';
 import { useState, useEffect, useRef } from "react";
 import { ArrowLeft, ArrowRight, Plus, Edit2, Trash2, BookOpen, GraduationCap, X, Calendar, MessageSquare, AlertCircle, Volume2, Star, Play, Pause, Shuffle, Maximize2, Lightbulb } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
@@ -18,6 +20,7 @@ interface CardData {
   userId: string;
   targetWord: string;
   turkishTranslation: string;
+  targetLanguage?: TargetLanguageCode;
   exampleSentence?: string;
   note?: string;
   interval: number;
@@ -31,24 +34,6 @@ interface CardData {
 }
 
 const SCORE_KEYS = ["forgot", "hard", "okay", "easy", "very_easy", "perfect"];
-
-const LANGUAGE_CODES: Record<string, string> = {
-  English: 'en',
-  German: 'de',
-  Spanish: 'es',
-  French: 'fr',
-  Arabic: 'ar',
-  Turkish: 'tr',
-};
-
-const LANGUAGE_VOICES: Record<string, string> = {
-  en: 'en-US',
-  de: 'de-DE',
-  es: 'es-ES',
-  fr: 'fr-FR',
-  ar: 'ar-SA',
-  tr: 'tr-TR',
-};
 
 export function FlashcardsPage() {
   const { user, isGuest, token } = useAuth();
@@ -174,11 +159,11 @@ export function FlashcardsPage() {
         }
         return;
       }
-      const allRes = await apiClient.get(`/flashcards/all?targetLanguage=${targetLanguage}`, requestConfig);
+      const allRes = await apiClient.get(`/flashcards/all?targetLanguage=${targetLanguageCode(targetLanguage)}`, requestConfig);
       if (!isCurrent()) return;
       setAllCards(allRes.data);
 
-      const dueRes = await apiClient.get(`/flashcards/due?targetLanguage=${targetLanguage}`, requestConfig);
+      const dueRes = await apiClient.get(`/flashcards/due?targetLanguage=${targetLanguageCode(targetLanguage)}`, requestConfig);
       if (!isCurrent()) return;
       setDueCards(dueRes.data);
       setOriginalDueCards(dueRes.data);
@@ -426,8 +411,7 @@ export function FlashcardsPage() {
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
-      const shortCode = LANGUAGE_CODES[targetLanguage] || 'en';
-      const voiceLocale = langKey === 'tr' ? 'tr-TR' : (LANGUAGE_VOICES[shortCode] || 'en-US');
+      const voiceLocale = langKey === 'tr' ? 'tr-TR' : targetLanguageTtsLocale(targetLanguage);
       utterance.lang = voiceLocale;
       window.speechSynthesis.speak(utterance);
     } else {

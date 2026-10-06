@@ -1,3 +1,4 @@
+import { tryTargetLanguage } from '../common/target-language';
 import {
   Controller,
   Get,
@@ -111,13 +112,14 @@ export class CommunityController {
       imageUrl = `/uploads/community/${file.filename}`;
     }
 
-    return this.communityService.update(
+    const post = await this.communityService.update(
       id,
       userId,
       dto.text,
       removeImageVal,
       imageUrl,
     );
+    return { ...post.toObject(), learningLanguage: tryTargetLanguage(post.learningLanguage) ?? post.learningLanguage };
   }
 
   @Delete(':id')

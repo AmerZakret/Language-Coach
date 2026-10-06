@@ -1,3 +1,4 @@
+import { targetLanguageCode } from './targetLanguage';
 import { classifySyncFailure, retryDelay, withReplayTimeout, REPLAY_TIMEOUT_MS, InvalidQueuedPayload } from './syncRetryPolicy';
 import type { RetryState } from './syncRetryPolicy';
 import { acknowledgeCompletion, resetOwnerProgress, saveProgress, loadProgress } from './progressStorage';
@@ -211,6 +212,9 @@ export const processOfflineQueue = async (userId: string, waitForActive = false)
       if (action.type === 'update-flashcard' && !stored.attemptCount) {
         action.payload = { ...action.payload, _mutationContract: 2 };
       }
+      if (['create-flashcard', 'update-flashcard'].includes(action.type) && !stored.attemptCount) {
+        action.payload = { ...action.payload, _languageContract: 1 };
+      }
       if (action.type === 'create-flashcard' && action.payload.tempId && !state.startedCreates.includes(action.id)) state.startedCreates.push(action.id);
       state.actions = state.actions.map(a => a.id === action.id ? action : a);
       writeState(state);
@@ -238,7 +242,7 @@ export const processOfflineQueue = async (userId: string, waitForActive = false)
           case 'create-flashcard': {
             const response = await apiClient.post('/flashcards', {
               targetWord: payload.targetWord, turkishTranslation: payload.turkishTranslation,
-              targetLanguage: payload.targetLanguage, nativeLanguage: payload.nativeLanguage,
+              targetLanguage: payload._languageContract === 1 ? targetLanguageCode(payload.targetLanguage) : payload.targetLanguage, nativeLanguage: payload.nativeLanguage,
               nativeTranslation: payload.nativeTranslation, exampleSentence: payload.exampleSentence, note: payload.note,
             }, config);
             serverId = response.data?._id || response.data?.id;
@@ -248,7 +252,7 @@ export const processOfflineQueue = async (userId: string, waitForActive = false)
           case 'update-flashcard':
             await apiClient.put(`/flashcards/${id}`, serializeFlashcardMutation({ ...payload,
               ...(payload._mutationContract !== 2 ? { nativeLanguage: undefined, nativeTranslation: undefined } : {}),
-            }), config); break;
+            }, payload._languageContract === 1), config); break;
           case 'delete-flashcard': await apiClient.delete(`/flashcards/${id}`, config); break;
           case 'review-flashcard': await apiClient.put(`/flashcards/${id}/review`, { score: payload.score }, config); break;
           default: throw new InvalidQueuedPayload('Unsupported queued action');

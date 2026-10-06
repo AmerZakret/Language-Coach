@@ -1,3 +1,4 @@
+import '../core/localization/target_language.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../core/config/api_config.dart';
@@ -17,7 +18,7 @@ class ProgressApiService {
       final response = await http
           .get(
             Uri.parse(
-                '${ApiConfig.baseUrl}${ApiConfig.progress}/$userId?targetLanguage=$targetLanguage'),
+                '${ApiConfig.baseUrl}${ApiConfig.progress}/$userId?targetLanguage=${TargetLanguage.code(targetLanguage)}'),
             headers: headers,
           )
           .timeout(replayTimeout);

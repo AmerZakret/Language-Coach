@@ -1,3 +1,4 @@
+import { targetLanguageQuery } from '../common/target-language';
 import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
@@ -36,7 +37,7 @@ export class LessonsService implements OnModuleInit {
 
   async findAll(targetLanguage?: string, level?: string): Promise<Lesson[]> {
     const filter: Record<string, any> = {};
-    if (targetLanguage) filter.targetLanguage = targetLanguage;
+    if (targetLanguage !== undefined) filter.targetLanguage = targetLanguageQuery(targetLanguage);
     if (level) filter.level = level;
 
     // Define level weights for proper sorting

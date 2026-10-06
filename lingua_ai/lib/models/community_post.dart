@@ -1,3 +1,4 @@
+import '../core/localization/target_language.dart';
 class CommunityPost {
   final String id;
   final String userId;
@@ -30,7 +31,7 @@ class CommunityPost {
       id: json['_id'] ?? '',
       userId: json['userId'] ?? '',
       userName: json['userName'] ?? '',
-      learningLanguage: json['learningLanguage'] ?? '',
+      learningLanguage: TargetLanguage.tryCode(json['learningLanguage'] as String?) != null ? TargetLanguage.name(json['learningLanguage']) : (json['learningLanguage'] ?? ''),
       text: json['text'],
       imageUrl: json['imageUrl'],
       likes: List<String>.from(json['likes'] ?? []),

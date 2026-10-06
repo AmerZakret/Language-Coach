@@ -45,7 +45,7 @@ class FakeFlashcardApi extends FlashcardApiService {
           String? nativeTranslation,
           String? exampleSentence,
           String? note,
-          String? operationId}) async =>
+          String? operationId, bool preserveLegacyLanguage = false}) async =>
       record('create-flashcard');
   @override
   Future<Flashcard> updateFlashcard(
@@ -55,7 +55,7 @@ class FakeFlashcardApi extends FlashcardApiService {
           String? nativeTranslation,
           String? exampleSentence,
           String? note,
-          String? operationId}) async =>
+          String? operationId, bool preserveLegacyLanguage = false}) async =>
       record('update-flashcard');
   @override
   Future<void> deleteFlashcard(String cardId, {String? operationId}) async {
