@@ -17,7 +17,6 @@ export interface AssessPronunciationRequest {
   nativeTranslation?: string;
   nativeLanguage?: string;
   sourceType?: 'flashcard' | 'lesson' | 'manual';
-  sourceId?: string;
 }
 
 export const assessPronunciation = async (
@@ -36,9 +35,6 @@ export const assessPronunciation = async (
   }
   if (request.sourceType) {
     formData.append('sourceType', request.sourceType);
-  }
-  if (request.sourceId) {
-    formData.append('sourceId', request.sourceId);
   }
 
   const response = await apiClient.post<PronunciationAssessmentResult>(

@@ -1,10 +1,12 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { useTargetLanguage } from '../../context/TargetLanguageContext';
 import { Button } from '../common/Button';
 import { Plus, Brain } from 'lucide-react';
 import apiClient from '../../api/apiClient';
+import { createFlashcardOperationId } from '../../utils/flashcardMutation';
+import { getSessionRequestConfig } from '../../utils/queueSession';
 import './QuickAddFlashcard.css';
 
 export const QuickAddFlashcard: React.FC = () => {
@@ -15,10 +17,13 @@ export const QuickAddFlashcard: React.FC = () => {
   const [translation, setTranslation] = useState('');
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
+  const pending = useRef<{ key: string; id: string } | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!word || !translation || !user) return;
+    const key = JSON.stringify([user.id, targetLanguage, word, translation]);
+    if (pending.current?.key !== key) pending.current = { key, id: createFlashcardOperationId() };
 
     setLoading(true);
     try {
@@ -26,7 +31,8 @@ export const QuickAddFlashcard: React.FC = () => {
         targetWord: word,
         turkishTranslation: translation,
         targetLanguage
-      });
+      }, { ...getSessionRequestConfig(), headers: { 'X-Idempotency-Key': pending.current.id } });
+      pending.current = null;
       setSuccess(true);
       setWord('');
       setTranslation('');

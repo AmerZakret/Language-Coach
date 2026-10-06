@@ -500,9 +500,14 @@ class OfflineQueueService {
               state.actions.where((a) => a.id == scheduled.id).toList();
           if (found.isEmpty) return null; // Cancelled before dispatch.
           if (found.single.nextAttemptAt?.isAfter(_now()) == true) return null;
+          final replayPayload = _resolve(state, found.single.type, found.single.payload);
+          // Freeze the new wire contract before first dispatch. Previously
+          // attempted updates retain their old shape for existing receipts.
+          if (found.single.type == 'update-flashcard' && found.single.attemptCount == 0) {
+            replayPayload['_mutationContract'] = 2;
+          }
           final current = found.single
-              .withPayload(
-                  _resolve(state, found.single.type, found.single.payload))
+              .withPayload(replayPayload)
               .withRetry(
                   attempts: found.single.attemptCount + 1,
                   attemptedAt: _now().toUtc());
@@ -574,13 +579,20 @@ class OfflineQueueService {
                 }
                 break;
               case 'update-flashcard':
+                final legacy = payload['_mutationContract'] != 2;
+                String? optional(String field) {
+                  final value = payload[field]?.toString();
+                  return legacy && value == '' ? null : value;
+                }
                 await _flashcardApi.updateFlashcard(
                     cardId!,
-                    payload['targetWord'].toString(),
-                    payload['turkishTranslation'].toString(),
+                    payload['targetWord']?.toString(),
+                    payload['turkishTranslation']?.toString(),
                     targetLanguage: payload['targetLanguage']?.toString(),
-                    exampleSentence: payload['exampleSentence']?.toString(),
-                    note: payload['note']?.toString(),
+                    nativeLanguage: legacy ? null : payload['nativeLanguage']?.toString(),
+                    nativeTranslation: legacy ? null : payload['nativeTranslation']?.toString(),
+                    exampleSentence: optional('exampleSentence'),
+                    note: optional('note'),
                     operationId: action.id);
                 break;
               case 'delete-flashcard':

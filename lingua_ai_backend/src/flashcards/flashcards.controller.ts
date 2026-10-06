@@ -1,7 +1,8 @@
-import { Controller, Get, Post, Body, Param, Put, Delete, Query, UseGuards, Req, Headers, ForbiddenException, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Put, Delete, Query, UseGuards, Req, Headers } from '@nestjs/common';
 import { FlashcardsService } from './flashcards.service';
 import { CreateFlashcardDto } from './dto/create-flashcard.dto';
 import { UpdateFlashcardDto } from './dto/update-flashcard.dto';
+import { ReviewFlashcardDto } from './dto/review-flashcard.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { FlashcardIdempotencyService } from './flashcard-idempotency.service';
 
@@ -83,13 +84,11 @@ export class FlashcardsController {
   @Put(':id/review')
   async review(
     @Param('id') id: string,
-    @Body('score') score: number,
+    @Body() reviewDto: ReviewFlashcardDto,
     @Req() req: any,
     @Headers('x-idempotency-key') operationId?: string,
   ) {
-    if (score === undefined || score < 0 || score > 5) {
-      throw new BadRequestException('Review score must be between 0 and 5');
-    }
+    const { score } = reviewDto;
     const userId = req.user._id.toString();
     return this.idempotency.execute(userId, operationId, 'review-flashcard', { id, score },
       session => this.flashcardsService.review(id, score, userId, session));

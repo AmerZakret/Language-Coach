@@ -113,7 +113,7 @@ function harness(saved = storage(), fakeTimers = false) {
     userKey: 'utils/userKey.ts', queueSession: 'utils/queueSession.ts',
     apiClient: 'api/apiClient.ts', offlineQueue: 'utils/offlineQueue.ts',
     auth: 'context/AuthContext.tsx',
-    authApi: 'api/authApi.ts', progressApi: 'api/progressApi.ts',
+    authApi: 'api/authApi.ts', progressApi: 'api/progressApi.ts', mutation: 'utils/flashcardMutation.ts',
   };
   function load(name) {
     if (modules.has(name)) return modules.get(name).exports;
@@ -142,6 +142,7 @@ function harness(saved = storage(), fakeTimers = false) {
         if (name.endsWith('/types/progress')) return load('types');
         if (name.endsWith('/userKey')) return load('userKey');
         if (name.endsWith('/queueSession')) return load('queueSession');
+        if (name.endsWith('/flashcardMutation')) return load('mutation');
         if (name.endsWith('/apiClient')) return load('apiClient');
         throw new Error(`Unexpected import: ${name}`);
       },
@@ -756,4 +757,31 @@ test('Phase 4F: account switch during a drain automatically resumes only the new
     assert.equal(h.queue.getOfflineQueue().length, 0);
     assert.equal(h.saved.getItem(key(`registered_${A}`)), oldQueue);
   } finally { h.stop(); }
+});
+
+test('Phase 5C: partial update omits untouched fields, keeps clears and native fields across retry', async () => {
+  const h = harness(); await h.mount(); h.auth().login(user(A), `test-${A}`);
+  h.enqueue('update-flashcard', { cardId: 'card', nativeLanguage: 'tr', nativeTranslation: 'native', note: '', exampleSentence: '' });
+  h.control.dispatch = async () => { if (h.requests.length === 1) throw new Error('lost response'); return { data: {} }; };
+  assert.equal(await h.queue.processOfflineQueue(A), false);
+  h.advance(6 * 60 * 1000);
+  assert.equal(await h.queue.processOfflineQueue(A), true);
+  assert.deepEqual(JSON.parse(JSON.stringify(h.requests[0].data)), {
+    nativeLanguage: 'tr', nativeTranslation: 'native', note: '', exampleSentence: '',
+  });
+  assert.deepEqual(h.requests[0].data, h.requests[1].data);
+  assert.equal(h.requests[0].headers['X-Idempotency-Key'], h.requests[1].headers['X-Idempotency-Key']);
+});
+
+test('Phase 5C: previously attempted legacy web updates retain their receipt payload', async () => {
+  const h = harness(); await h.mount(); h.auth().login(user(A), `test-${A}`);
+  h.enqueue('update-flashcard', { cardId: 'card', targetWord: 'word', turkishTranslation: 'translation',
+    nativeLanguage: 'tr', nativeTranslation: 'native', note: '', exampleSentence: '' });
+  const state = JSON.parse(h.saved.getItem(key(`registered_${A}`)));
+  state.actions[0].attemptCount = 1;
+  h.saved.setItem(key(`registered_${A}`), JSON.stringify(state));
+  assert.equal(await h.queue.processOfflineQueue(A), true);
+  assert.deepEqual(JSON.parse(JSON.stringify(h.requests[0].data)), {
+    targetWord: 'word', turkishTranslation: 'translation', note: '', exampleSentence: '',
+  });
 });

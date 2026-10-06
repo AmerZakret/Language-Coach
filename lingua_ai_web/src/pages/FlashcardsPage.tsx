@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { ArrowLeft, ArrowRight, Plus, Edit2, Trash2, BookOpen, GraduationCap, X, Calendar, MessageSquare, AlertCircle, Volume2, Star, Play, Pause, Shuffle, Maximize2, Lightbulb } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
@@ -11,6 +11,7 @@ import { pushToOfflineQueue, isPendingBackendCard } from "../utils/offlineQueue"
 import { getUserProgressKey } from "../utils/userKey";
 import { useSessionGuard } from "../utils/useSessionGuard";
 import { getSessionRequestConfig } from "../utils/queueSession";
+import { createFlashcardOperationId, serializeFlashcardMutation } from "../utils/flashcardMutation";
 
 interface CardData {
   _id: string;
@@ -59,6 +60,16 @@ export function FlashcardsPage() {
   const captureContext = useSessionGuard(queueOwner, targetLanguage);
   const userId = user?.id || user?.email || (isGuest ? 'guest@lingua.ai' : 'unknown');
   const { isOffline } = useNetwork();
+  const pendingMutationIds = useRef(new Map<string, string>());
+  const mutationRequest = (operation: string, payload: object) => {
+    const key = `${queueOwner}|${targetLanguage}|${operation}|${JSON.stringify(payload)}`;
+    let id = pendingMutationIds.current.get(key);
+    if (!id) {
+      id = createFlashcardOperationId();
+      pendingMutationIds.current.set(key, id);
+    }
+    return { key, config: { ...getSessionRequestConfig(), headers: { 'X-Idempotency-Key': id } } };
+  };
 
   const { syncRevision, lastDrainSucceeded } = useSync();
   useEffect(() => {
@@ -107,6 +118,7 @@ export function FlashcardsPage() {
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   useEffect(() => {
+    pendingMutationIds.current.clear();
     setAllCards([]);
     setDueCards([]);
     setOriginalDueCards([]);
@@ -211,7 +223,6 @@ export function FlashcardsPage() {
     e.preventDefault();
     const isCurrent = captureContext();
     if (!isCurrent()) return;
-    const requestConfig = getSessionRequestConfig();
     if (!formData.targetWord || !formData.turkishTranslation) {
       setError(t("field_required_error"));
       return;
@@ -225,8 +236,8 @@ export function FlashcardsPage() {
           userId,
           targetWord: formData.targetWord,
           turkishTranslation: formData.turkishTranslation,
-          exampleSentence: formData.exampleSentence || undefined,
-          note: formData.note || undefined,
+          exampleSentence: formData.exampleSentence,
+          note: formData.note,
           interval: 0,
           easinessFactor: 2.5,
           nextReviewDate: new Date().toISOString(),
@@ -266,20 +277,18 @@ export function FlashcardsPage() {
       return;
     }
 
+    const payload = serializeFlashcardMutation({ targetLanguage, ...formData });
+    const mutation = mutationRequest(modal === 'add' ? 'create' : `update:${selectedCard?._id}`, payload);
     try {
       if (modal === "add") {
-        await apiClient.post("/flashcards", {
-          targetLanguage,
-          ...formData,
-        }, requestConfig);
+        await apiClient.post("/flashcards", payload, mutation.config);
         if (!isCurrent()) return;
+        pendingMutationIds.current.delete(mutation.key);
         showSuccess(t("flashcard_created"));
       } else if (modal === "edit" && selectedCard) {
-        await apiClient.put(`/flashcards/${selectedCard._id}`, {
-          ...formData,
-          targetLanguage,
-        }, requestConfig);
+        await apiClient.put(`/flashcards/${selectedCard._id}`, payload, mutation.config);
         if (!isCurrent()) return;
+        pendingMutationIds.current.delete(mutation.key);
         showSuccess(t("flashcard_updated"));
       }
       setModal(null);
@@ -310,9 +319,11 @@ export function FlashcardsPage() {
       return;
     }
 
+    const mutation = mutationRequest(`delete:${cardId}`, {});
     try {
-      await apiClient.delete(`/flashcards/${cardId}`, getSessionRequestConfig());
+      await apiClient.delete(`/flashcards/${cardId}`, mutation.config);
       if (!isCurrent()) return;
+      pendingMutationIds.current.delete(mutation.key);
       showSuccess(t("flashcard_deleted"));
       setDeleteConfirmId(null);
       fetchCards();
@@ -388,7 +399,9 @@ export function FlashcardsPage() {
 
       } else {
         try {
-          await apiClient.put(`/flashcards/${card._id}/review`, { score }, getSessionRequestConfig());
+          await apiClient.put(`/flashcards/${card._id}/review`, { score }, {
+            ...getSessionRequestConfig(), headers: { 'X-Idempotency-Key': createFlashcardOperationId() },
+          });
         } catch (e) {
           console.error("Failed to save review to backend", e);
         }

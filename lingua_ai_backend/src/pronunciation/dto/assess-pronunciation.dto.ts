@@ -22,7 +22,4 @@ export class AssessPronunciationDto {
   @IsIn(['flashcard', 'lesson', 'manual'])
   sourceType?: 'flashcard' | 'lesson' | 'manual';
 
-  @IsString()
-  @IsOptional()
-  sourceId?: string;
 }

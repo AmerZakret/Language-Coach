@@ -30,7 +30,7 @@ class DurableCardsApi extends FlashcardApiService {
 
   @override
   Future<Flashcard> updateFlashcard(
-      String cardId, String targetWord, String turkishTranslation,
+      String cardId, String? targetWord, String? turkishTranslation,
       {String? targetLanguage,
       String? nativeLanguage,
       String? nativeTranslation,

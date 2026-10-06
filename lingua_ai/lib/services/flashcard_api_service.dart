@@ -56,8 +56,8 @@ class FlashcardApiService {
 
   Future<Flashcard> updateFlashcard(
     String cardId,
-    String targetWord,
-    String turkishTranslation, {
+    String? targetWord,
+    String? turkishTranslation, {
     String? targetLanguage,
     String? nativeLanguage,
     String? nativeTranslation,
@@ -80,15 +80,15 @@ class FlashcardApiService {
             Uri.parse('${ApiConfig.baseUrl}${ApiConfig.flashcards}/$cardId'),
             headers: headers,
             body: json.encode({
-              'targetWord': targetWord,
-              'turkishTranslation': turkishTranslation,
+              if (targetWord != null) 'targetWord': targetWord,
+              if (turkishTranslation != null) 'turkishTranslation': turkishTranslation,
               if (targetLanguage != null) 'targetLanguage': targetLanguage,
               if (nativeLanguage != null) 'nativeLanguage': nativeLanguage,
               if (nativeTranslation != null)
                 'nativeTranslation': nativeTranslation,
-              if (exampleSentence != null && exampleSentence.isNotEmpty)
+              if (exampleSentence != null)
                 'exampleSentence': exampleSentence,
-              if (note != null && note.isNotEmpty) 'note': note,
+              if (note != null) 'note': note,
             }),
           )
           .timeout(replayTimeout);

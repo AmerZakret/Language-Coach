@@ -89,11 +89,12 @@ function harness(initial = {}) {
     storage: 'utils/progressStorage.ts', types: 'types/progress.ts',
     progress: 'context/ProgressContext.tsx', target: 'context/TargetLanguageContext.tsx',
     cards: 'pages/FlashcardsPage.tsx', queue: 'utils/offlineQueue.ts', authPage: 'components/auth/AuthPage.tsx',
-    profile: 'pages/ProfilePage.tsx' };
+    profile: 'pages/ProfilePage.tsx', mutation: 'utils/flashcardMutation.ts', community: 'pages/CommunityPage.tsx' };
   const exposed = {
     cards: 'fetchCards, handleSaveCard, handleDeleteCard, handleStudyScore, handleOpenAdd, handleOpenEdit, setFormData, allCards, dueCards, loading, error, successMsg, modal, studyResults',
     authPage: 'handleSubmit, setEmail, setPassword, loading, error',
     profile: 'handleSave, setName, saved, resetConfirm, setResetConfirm',
+    community: 'startEditing, setEditingText, handleUpdatePost',
   };
   function load(name) {
     if (modules.has(name)) return modules.get(name).exports;
@@ -109,7 +110,7 @@ function harness(initial = {}) {
       esModuleInterop: true, target: ts.ScriptTarget.ES2020,
     } }).outputText;
     vm.runInNewContext(compiled, {
-      module, exports: module.exports, localStorage, AbortController, __capture: value => { activeRunner.exposed = value; },
+      module, exports: module.exports, localStorage, AbortController, FormData, __capture: value => { activeRunner.exposed = value; },
       fetch: (...args) => h.fetchGuest(...args), console: { log() {}, error() {} },
       setTimeout: fn => { timers.push(fn); return timers.length; }, clearTimeout() {},
       setInterval: () => 1, clearInterval() {},
@@ -122,6 +123,11 @@ function harness(initial = {}) {
         if (path.endsWith('.png')) return 'image';
         if (path.endsWith('/userKey')) return load('userKey');
         if (path.endsWith('/queueSession')) return load('queueSession');
+        if (path.endsWith('/flashcardMutation')) return load('mutation');
+        if (path.endsWith('/communityApi')) return {
+          getCommunityPosts: async () => ({ items: h.communityPosts || [] }),
+          updateCommunityPost: async (id, body) => { h.calls.push(['community-update', id, body]); },
+        };
         if (path.endsWith('/syncRetryPolicy')) return load('policy');
         if (path.endsWith('/SyncContext')) return { useSync: () => ({ syncRevision: h.syncRevision || 0, lastDrainSucceeded: true }) };
         if (path.endsWith('/useSessionGuard')) return load('guard');
@@ -693,4 +699,102 @@ test('Phase 4E: deferred React updater checks session again before applying pend
   assert.equal(h.load('queue').getOfflineQueue().length, 0);
   h.auth().logout(); h.login(A); h.child.render(); await h.settle();
   assert.equal(h.value().progress.totalXp, 50);
+});
+
+async function onlineMutationHarness() {
+  const h = harness(); h.mountAuth(); h.login(A); h.isOffline = false;
+  h.mutations = [];
+  h.transport = async (method, url, data, config) => {
+    if (method === 'get') return { data: [card(A)] };
+    h.mutations.push({ method, url, data: method === 'delete' ? undefined : copy(data),
+      config: method === 'delete' ? data : config });
+    if (h.failMutation) throw new Error('response lost');
+    return { data: card(A) };
+  };
+  h.mount('cards', 'FlashcardsPage'); await h.settle();
+  return h;
+}
+
+test('Phase 5C: online and queued web update serialize all fields and explicit clears equally', async () => {
+  const h = await onlineMutationHarness();
+  const payload = { targetWord: 'changed', turkishTranslation: 'translation',
+    nativeLanguage: 'tr', nativeTranslation: 'native', exampleSentence: '', note: '' };
+  h.child.exposed.handleOpenEdit(h.child.exposed.allCards[0]); h.child.render();
+  h.child.exposed.setFormData(payload); h.child.render();
+  await h.child.exposed.handleSaveCard({ preventDefault() {} }); await h.settle();
+  const online = h.mutations[0];
+  h.isOffline = true;
+  h.child.exposed.handleOpenEdit(h.child.exposed.allCards[0]); h.child.render();
+  h.child.exposed.setFormData(payload); h.child.render();
+  await h.child.exposed.handleSaveCard({ preventDefault() {} }); await h.settle();
+  const queue = h.load('queue');
+  assert.equal(await queue.processOfflineQueue(A), true);
+  assert.deepEqual(h.mutations[1].data, online.data);
+  assert.equal(online.data.note, ''); assert.equal(online.data.exampleSentence, '');
+  assert.equal(online.data.nativeTranslation, 'native');
+});
+
+test('Phase 5C: online create, update, delete and review carry distinct idempotency keys', async () => {
+  const h = await onlineMutationHarness();
+  h.child.exposed.handleOpenAdd(); h.child.render();
+  h.child.exposed.setFormData({ targetWord: 'word', turkishTranslation: 'translation', note: '', exampleSentence: '' }); h.child.render();
+  await h.child.exposed.handleSaveCard({ preventDefault() {} }); await h.settle();
+  h.child.exposed.handleOpenEdit(h.child.exposed.allCards[0]); h.child.render();
+  await h.child.exposed.handleSaveCard({ preventDefault() {} }); await h.settle();
+  await h.child.exposed.handleDeleteCard(`card-${A}`); await h.settle();
+  await h.child.exposed.handleStudyScore(4); await h.settle();
+  assert.equal(h.mutations.length, 4);
+  const keys = h.mutations.map(call => call.config.headers['X-Idempotency-Key']);
+  assert.ok(keys.every(key => typeof key === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(key)));
+  assert.equal(new Set(keys).size, 4);
+  assert.ok(h.mutations.every(call => call.config.sessionSnapshot.userId === A));
+});
+
+for (const operation of ['create', 'update', 'delete']) {
+  test(`Phase 5C: ${operation} manual retry reuses the operation key`, async () => {
+    const h = await onlineMutationHarness();
+    h.failMutation = true;
+    if (operation === 'create') h.child.exposed.handleOpenAdd();
+    if (operation === 'update') h.child.exposed.handleOpenEdit(h.child.exposed.allCards[0]);
+    h.child.render();
+    if (operation === 'create') {
+      h.child.exposed.setFormData({ targetWord: 'word', turkishTranslation: 'translation', note: '', exampleSentence: '' }); h.child.render();
+    }
+    const execute = () => operation === 'delete' ? h.child.exposed.handleDeleteCard(`card-${A}`)
+      : h.child.exposed.handleSaveCard({ preventDefault() {} });
+    await execute(); await h.settle();
+    h.failMutation = false;
+    await execute(); await h.settle();
+    assert.equal(h.mutations.length, 2);
+    assert.equal(h.mutations[0].config.headers['X-Idempotency-Key'], h.mutations[1].config.headers['X-Idempotency-Key']);
+    assert.deepEqual(h.mutations[0].data, h.mutations[1].data);
+  });
+}
+
+test('Phase 5C: changing a failed mutation payload creates a new operation key', async () => {
+  const h = await onlineMutationHarness(); h.failMutation = true;
+  h.child.exposed.handleOpenAdd(); h.child.render();
+  h.child.exposed.setFormData({ targetWord: 'word', turkishTranslation: 'translation', note: '', exampleSentence: '' }); h.child.render();
+  await h.child.exposed.handleSaveCard({ preventDefault() {} }); await h.settle();
+  h.child.exposed.setFormData({ targetWord: 'changed', turkishTranslation: 'translation', note: '', exampleSentence: '' }); h.child.render();
+  await h.child.exposed.handleSaveCard({ preventDefault() {} }); await h.settle();
+  assert.notEqual(h.mutations[0].config.headers['X-Idempotency-Key'], h.mutations[1].config.headers['X-Idempotency-Key']);
+});
+
+test('Phase 5C: web image posts allow clearing their caption, text-only posts do not', async () => {
+  const h = harness(); h.mountAuth(); h.login(A);
+  h.communityPosts = [{ _id: 'image', userId: A, userName: 'Test', text: 'caption', imageUrl: '/image.png',
+    learningLanguage: 'English', likes: [], likesCount: 0, createdAt: new Date().toISOString() },
+    { _id: 'text', userId: A, userName: 'Test', text: 'caption', learningLanguage: 'English',
+      likes: [], likesCount: 0, createdAt: new Date().toISOString() }];
+  h.mount('community', 'CommunityPage'); await h.settle();
+  h.child.exposed.startEditing(h.communityPosts[0]); h.child.render();
+  h.child.exposed.setEditingText('  '); h.child.render();
+  await h.child.exposed.handleUpdatePost('image'); await h.settle();
+  const update = h.calls.find(call => call[0] === 'community-update');
+  assert.equal(update[2].has('text'), true); assert.equal(update[2].get('text'), '');
+  h.child.exposed.startEditing(h.communityPosts[1]); h.child.render();
+  h.child.exposed.setEditingText(''); h.child.render();
+  await h.child.exposed.handleUpdatePost('text');
+  assert.equal(h.calls.filter(call => call[0] === 'community-update').length, 1);
 });

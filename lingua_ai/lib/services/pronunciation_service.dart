@@ -13,7 +13,6 @@ class PronunciationService {
     String? nativeTranslation,
     String? nativeLanguage,
     String? sourceType,
-    String? sourceId,
   }) async {
     try {
       final uri = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.pronunciationAssess}');
@@ -37,9 +36,6 @@ class PronunciationService {
       }
       if (sourceType != null && sourceType.isNotEmpty) {
         request.fields['sourceType'] = sourceType;
-      }
-      if (sourceId != null && sourceId.isNotEmpty) {
-        request.fields['sourceId'] = sourceId;
       }
 
       // Attach recorded audio file

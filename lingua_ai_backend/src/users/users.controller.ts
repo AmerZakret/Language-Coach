@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Patch, Req, UseGuards, NotFoundException } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 
 @Controller('users')
 @UseGuards(JwtAuthGuard)
@@ -24,7 +25,7 @@ export class UsersController {
   @Patch('profile')
   async updateProfile(
     @Req() req: any,
-    @Body() body: { name?: string; targetLanguage?: string },
+    @Body() body: UpdateProfileDto,
   ) {
     const userId = req.user._id.toString();
     const updatedUser = await this.usersService.updateProfile(

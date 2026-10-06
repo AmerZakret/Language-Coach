@@ -201,7 +201,6 @@ class _PronunciationPracticeScreenState extends State<PronunciationPracticeScree
         nativeTranslation: _nativeTranslation.isNotEmpty ? _nativeTranslation : null,
         nativeLanguage: 'tr',
         sourceType: _sourceType,
-        sourceId: null,
       );
 
       setState(() {

@@ -154,8 +154,8 @@ export class FlashcardsService implements OnModuleInit {
    */
   async update(
     cardId: string,
-    targetWord: string,
-    turkishTranslation: string,
+    targetWord?: string,
+    turkishTranslation?: string,
     targetLanguage?: string,
     nativeLanguage?: string,
     nativeTranslation?: string,
@@ -173,22 +173,19 @@ export class FlashcardsService implements OnModuleInit {
       throw new ForbiddenException('Access denied: Cannot edit another user\'s flashcards');
     }
 
-    const finalNativeTranslation = nativeTranslation || turkishTranslation || '';
-    const finalTurkishTranslation = turkishTranslation || nativeTranslation || '';
-
-    card.targetWord = targetWord;
-    card.turkishTranslation = finalTurkishTranslation;
-    card.nativeTranslation = finalNativeTranslation;
-    if (targetLanguage) {
+    if (targetWord !== undefined) card.targetWord = targetWord;
+    if (turkishTranslation !== undefined) card.turkishTranslation = turkishTranslation;
+    if (nativeTranslation !== undefined) card.nativeTranslation = nativeTranslation;
+    if (targetLanguage !== undefined) {
       card.targetLanguage = shortToFull[targetLanguage] || targetLanguage;
     }
-    if (nativeLanguage) {
+    if (nativeLanguage !== undefined) {
       card.nativeLanguage = nativeLanguage;
     }
-    card.exampleSentence = exampleSentence;
-    card.note = note;
+    if (exampleSentence !== undefined) card.exampleSentence = exampleSentence;
+    if (note !== undefined) card.note = note;
 
-    card.aiContext = await this.aiContext.generateContext(targetWord, finalTurkishTranslation);
+    card.aiContext = await this.aiContext.generateContext(card.targetWord, card.turkishTranslation);
 
     return card.save({ session });
   }

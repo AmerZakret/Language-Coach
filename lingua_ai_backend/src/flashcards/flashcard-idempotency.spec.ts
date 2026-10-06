@@ -97,7 +97,7 @@ describe('Queued flashcard idempotency', () => {
     const before = (await cards.findById(cardA._id))!.toObject();
     const restarted = new FlashcardIdempotencyService(app.get<Connection>(getConnectionToken()), operations, cards);
     const controller = new FlashcardsController(app.get(FlashcardsService), restarted);
-    await controller.review(cardA._id.toString(), 4, { user: a }, 'review-1');
+    await controller.review(cardA._id.toString(), { score: 4 }, { user: a }, 'review-1');
     expect((await cards.findById(cardA._id))!.toObject()).toEqual(before);
   });
 

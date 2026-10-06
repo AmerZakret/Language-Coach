@@ -128,7 +128,7 @@ class CommunityService {
         request.headers['Authorization'] = 'Bearer $token';
       }
 
-      if (text != null && text.trim().isNotEmpty) {
+      if (text != null) {
         request.fields['text'] = text.trim();
       }
       if (removeImage != null) {

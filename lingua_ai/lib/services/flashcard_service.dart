@@ -280,12 +280,16 @@ class FlashcardService extends ChangeNotifier {
     final isLocal = cardId.startsWith('local_') || auth.localStorageNamespace == 'local_guest' || auth.token.isEmpty;
     final ownerNamespace = auth.localStorageNamespace;
     final targetLang = TargetLanguageService().currentLanguage;
+    final payload = <String, dynamic>{
+      'id': cardId, 'targetWord': targetWord,
+      'turkishTranslation': turkishTranslation, 'targetLanguage': targetLang,
+      if (exampleSentence != null) 'exampleSentence': exampleSentence,
+      if (note != null) 'note': note,
+    };
 
     if (cardId.startsWith('local_')) {
-      final pending = await OfflineQueueService().mutatePendingCard('update-flashcard', {
-        'id': cardId, 'targetWord': targetWord, 'turkishTranslation': turkishTranslation,
-        'targetLanguage': targetLang, 'exampleSentence': exampleSentence, 'note': note,
-      }, ownerNamespace: ownerNamespace);
+      final pending = await OfflineQueueService().mutatePendingCard('update-flashcard', payload,
+          ownerNamespace: ownerNamespace);
       if (!isCurrent()) return;
       if (pending) {
         _updateLocalCard(cardId, targetWord, turkishTranslation, targetLang, exampleSentence, note);
@@ -296,14 +300,8 @@ class FlashcardService extends ChangeNotifier {
     if (!isLocal) {
       if (ConnectivityService().isOffline) {
         debugPrint('Device is offline. Queueing updateFlashcard.');
-        await OfflineQueueService().pushAction('update-flashcard', {
-          'id': cardId,
-          'targetWord': targetWord,
-          'turkishTranslation': turkishTranslation,
-          'targetLanguage': targetLang,
-          'exampleSentence': exampleSentence,
-          'note': note,
-        }, ownerNamespace: ownerNamespace, operationId: operationId);
+        await OfflineQueueService().pushAction('update-flashcard', payload,
+            ownerNamespace: ownerNamespace, operationId: operationId);
         if (!isCurrent()) return;
         _updateLocalCard(cardId, targetWord, turkishTranslation, targetLang, exampleSentence, note);
         return;
@@ -329,14 +327,8 @@ class FlashcardService extends ChangeNotifier {
       } catch (e) {
         if (!isCurrent()) return;
         debugPrint('Failed to update flashcard on backend: $e. Queueing update.');
-        await OfflineQueueService().pushAction('update-flashcard', {
-          'id': cardId,
-          'targetWord': targetWord,
-          'turkishTranslation': turkishTranslation,
-          'targetLanguage': targetLang,
-          'exampleSentence': exampleSentence,
-          'note': note,
-        }, ownerNamespace: ownerNamespace, operationId: operationId);
+        await OfflineQueueService().pushAction('update-flashcard', payload,
+            ownerNamespace: ownerNamespace, operationId: operationId);
         if (!isCurrent()) return;
       }
     }
