@@ -10,6 +10,7 @@ import { getLessons } from "../api/lessonsApi";
 import { fallbackLessons } from "../data/fallbackLessons";
 import type { Lesson } from "../types/lesson";
 import { isLessonLocked } from "../utils/lessonLock";
+import { lessonLanguageCode } from "../utils/lessonLanguage";
 
 export function DashboardPage() {
   const { user, isGuest } = useAuth();
@@ -31,7 +32,7 @@ export function DashboardPage() {
         setLessons(data);
       } catch (e) {
         console.error("Failed to load lessons", e);
-        setLessons(fallbackLessons.filter((l) => l.targetLanguage === targetLanguage));
+        setLessons(fallbackLessons.filter((l) => l.targetLanguage === lessonLanguageCode(targetLanguage)));
       } finally {
         setLoadingLessons(false);
       }

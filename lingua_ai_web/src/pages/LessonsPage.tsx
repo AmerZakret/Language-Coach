@@ -9,6 +9,7 @@ import { getLessons } from "../api/lessonsApi";
 import { fallbackLessons } from "../data/fallbackLessons";
 import type { Lesson } from "../types/lesson";
 import { isLessonLocked } from "../utils/lessonLock";
+import { lessonLanguageCode } from "../utils/lessonLanguage";
 
 export function LessonsPage() {
 
@@ -35,10 +36,10 @@ export function LessonsPage() {
           try {
             setLessons(JSON.parse(cached));
           } catch {
-            setLessons(fallbackLessons.filter((l) => l.targetLanguage === targetLanguage));
+            setLessons(fallbackLessons.filter((l) => l.targetLanguage === lessonLanguageCode(targetLanguage)));
           }
         } else {
-          setLessons(fallbackLessons.filter((l) => l.targetLanguage === targetLanguage));
+          setLessons(fallbackLessons.filter((l) => l.targetLanguage === lessonLanguageCode(targetLanguage)));
         }
       } finally {
         setLoading(false);

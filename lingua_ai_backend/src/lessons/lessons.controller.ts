@@ -1,4 +1,4 @@
-import { Controller, Get, Param, Query } from '@nestjs/common';
+import { Controller, Get, NotFoundException, Param, Query } from '@nestjs/common';
 import { LessonsService } from './lessons.service';
 
 // Maps Flutter language codes (en, de, es, fr, ar) to full names used by web
@@ -50,7 +50,7 @@ export class LessonsController {
   async findOne(@Param('id') id: string) {
     const lesson = await this.lessonsService.findOne(id);
     if (!lesson) {
-      return { error: 'Lesson not found', id };
+      throw new NotFoundException('Lesson not found');
     }
     return lesson;
   }

@@ -61,18 +61,6 @@ export class LessonsService implements OnModuleInit {
   }
 
   async findOne(id: string): Promise<Lesson | null> {
-    const lesson = await this.lessonModel.findOne({ id }).lean();
-    if (lesson) return lesson;
-
-    // Fallback for legacy numeric IDs
-    const index = parseInt(id, 10) - 1;
-    if (!isNaN(index)) {
-      const enLessons = await this.findAll('en');
-      if (index >= 0 && index < enLessons.length) {
-        return enLessons[index];
-      }
-    }
-
-    return null;
+    return this.lessonModel.findOne({ id }).lean();
   }
 }
