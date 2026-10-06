@@ -4,6 +4,7 @@ import { isOfflineQueueSessionActive, isSessionCurrent } from '../utils/queueSes
 import type { QueueSession } from '../utils/queueSession';
 
 const apiClient = axios.create({
+  timeout: 45_000,
   baseURL: import.meta.env.VITE_API_URL || 'http://localhost:3000',
   headers: {
     'Content-Type': 'application/json',

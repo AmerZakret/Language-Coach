@@ -5,8 +5,9 @@ import { useTheme } from "../context/ThemeContext";
 import { useLanguage } from "../context/LanguageContext";
 import { useTargetLanguage } from "../context/TargetLanguageContext";
 import apiClient from "../api/apiClient";
+import { useSync } from "../context/SyncContext";
 import { useNetwork } from "../context/NetworkContext";
-import { pushToOfflineQueue, processOfflineQueue, isPendingBackendCard } from "../utils/offlineQueue";
+import { pushToOfflineQueue, isPendingBackendCard } from "../utils/offlineQueue";
 import { getUserProgressKey } from "../utils/userKey";
 import { useSessionGuard } from "../utils/useSessionGuard";
 import { getSessionRequestConfig } from "../utils/queueSession";
@@ -58,24 +59,10 @@ export function FlashcardsPage() {
   const userId = user?.id || user?.email || (isGuest ? 'guest@lingua.ai' : 'unknown');
   const { isOffline } = useNetwork();
 
+  const { syncRevision, lastDrainSucceeded } = useSync();
   useEffect(() => {
-    let cancelled = false;
-    const isCurrent = captureContext();
-    const syncOfflineData = async () => {
-      if (!isOffline && userId) {
-        try {
-          const success = await processOfflineQueue(userId);
-          if (success && !cancelled && isCurrent()) {
-            fetchCards();
-          }
-        } catch (e) {
-          console.error("Offline sync failed", e);
-        }
-      }
-    };
-    syncOfflineData();
-    return () => { cancelled = true; };
-  }, [isOffline, userId, captureContext]);
+    if (!isOffline && syncRevision > 0 && lastDrainSucceeded) void fetchCards();
+  }, [isOffline, syncRevision, lastDrainSucceeded, captureContext]);
 
   // View & Modal states
   const [view, setView] = useState<"list" | "study">("list");

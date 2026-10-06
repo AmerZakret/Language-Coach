@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../core/config/api_config.dart';
 import 'auth_service.dart';
+import 'sync_retry_policy.dart';
 
 class ProgressApiService {
   Future<Map<String, dynamic>> getProgress(
@@ -13,11 +14,13 @@ class ProgressApiService {
         headers['Authorization'] = 'Bearer $token';
       }
 
-      final response = await http.get(
-        Uri.parse(
-            '${ApiConfig.baseUrl}${ApiConfig.progress}/$userId?targetLanguage=$targetLanguage'),
-        headers: headers,
-      );
+      final response = await http
+          .get(
+            Uri.parse(
+                '${ApiConfig.baseUrl}${ApiConfig.progress}/$userId?targetLanguage=$targetLanguage'),
+            headers: headers,
+          )
+          .timeout(replayTimeout);
 
       if (response.statusCode == 200) {
         return json.decode(response.body);
@@ -42,20 +45,22 @@ class ProgressApiService {
         headers['Authorization'] = 'Bearer $token';
       }
 
-      final response = await http.post(
-        Uri.parse(
-            '${ApiConfig.baseUrl}${ApiConfig.progress}/$userId/complete-lesson'),
-        headers: headers,
-        body: json.encode({
-          'lessonId': lessonId,
-          'score': score,
-        }),
-      );
+      final response = await http
+          .post(
+            Uri.parse(
+                '${ApiConfig.baseUrl}${ApiConfig.progress}/$userId/complete-lesson'),
+            headers: headers,
+            body: json.encode({
+              'lessonId': lessonId,
+              'score': score,
+            }),
+          )
+          .timeout(replayTimeout);
 
       if (response.statusCode == 201 || response.statusCode == 200) {
         return json.decode(response.body);
       } else {
-        throw Exception('Failed to update progress');
+        throw SyncHttpException(response.statusCode);
       }
     } catch (e) {
       rethrow;
@@ -69,9 +74,9 @@ class ProgressApiService {
           if (AuthService().token.isNotEmpty)
             'Authorization': 'Bearer ${AuthService().token}',
           if (operationId != null) 'X-Idempotency-Key': operationId,
-        });
+        }).timeout(replayTimeout);
     if (response.statusCode != 200) {
-      throw StateError('Failed to reset progress');
+      throw SyncHttpException(response.statusCode);
     }
   }
 }

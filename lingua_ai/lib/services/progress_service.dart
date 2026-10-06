@@ -144,7 +144,7 @@ class ProgressService extends ChangeNotifier {
     final language = TargetLanguageService().currentLanguage;
     await OfflineQueueService().preparePendingProgress(owner);
     if (!isCurrent()) return;
-    final actions = await OfflineQueueService().getQueue();
+    final actions = await OfflineQueueService().getProgressActions();
     if (!isCurrent()) return;
     final base = ProgressSnapshot.read(_prefs, owner, language);
     final current = base.overlay(

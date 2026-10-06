@@ -167,12 +167,12 @@ void main() {
       await login(a);
       await enqueue();
       await enqueue();
-      final savedA = prefs.getString(key('registered_$a'));
       final started = Completer<void>();
       progress.started = started;
       progress.release = Completer<void>();
       final drain = queue.processQueue(a);
       await started.future;
+      final savedA = prefs.getString(key('registered_$a'));
       auth.logout();
       await login(returnToSameAccount ? a : b);
       progress.release!.complete();

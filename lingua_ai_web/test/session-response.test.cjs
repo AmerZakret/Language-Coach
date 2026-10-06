@@ -85,7 +85,7 @@ function harness(initial = {}) {
   };
   const jsx = (type, props) => ({ type, props });
   const sources = { userKey: 'utils/userKey.ts', queueSession: 'utils/queueSession.ts',
-    guard: 'utils/useSessionGuard.ts', auth: 'context/AuthContext.tsx',
+    policy: 'utils/syncRetryPolicy.ts', guard: 'utils/useSessionGuard.ts', auth: 'context/AuthContext.tsx',
     storage: 'utils/progressStorage.ts', types: 'types/progress.ts',
     progress: 'context/ProgressContext.tsx', target: 'context/TargetLanguageContext.tsx',
     cards: 'pages/FlashcardsPage.tsx', queue: 'utils/offlineQueue.ts', authPage: 'components/auth/AuthPage.tsx',
@@ -109,7 +109,7 @@ function harness(initial = {}) {
       esModuleInterop: true, target: ts.ScriptTarget.ES2020,
     } }).outputText;
     vm.runInNewContext(compiled, {
-      module, exports: module.exports, localStorage, __capture: value => { activeRunner.exposed = value; },
+      module, exports: module.exports, localStorage, AbortController, __capture: value => { activeRunner.exposed = value; },
       fetch: (...args) => h.fetchGuest(...args), console: { log() {}, error() {} },
       setTimeout: fn => { timers.push(fn); return timers.length; }, clearTimeout() {},
       setInterval: () => 1, clearInterval() {},
@@ -122,6 +122,8 @@ function harness(initial = {}) {
         if (path.endsWith('.png')) return 'image';
         if (path.endsWith('/userKey')) return load('userKey');
         if (path.endsWith('/queueSession')) return load('queueSession');
+        if (path.endsWith('/syncRetryPolicy')) return load('policy');
+        if (path.endsWith('/SyncContext')) return { useSync: () => ({ syncRevision: h.syncRevision || 0, lastDrainSucceeded: true }) };
         if (path.endsWith('/useSessionGuard')) return load('guard');
         if (path.endsWith('/progressStorage')) return load('storage');
         if (path.endsWith('/types/progress')) return load('types');
@@ -307,15 +309,15 @@ for (const kind of ['fetch', 'completion-success', 'completion-failure', 'reset'
   });
 }
 
-for (const kind of ['fetch', 'create', 'update', 'delete', 'review', 'failed-create', 'drain', 'language', 'unmount']) {
+for (const kind of ['fetch', 'create', 'update', 'delete', 'review', 'failed-create', 'sync-refresh', 'language', 'unmount']) {
   test(`flashcards discard stale ${kind} UI/cache changes`, async () => {
     const h = harness(); h.isOffline = false; h.mountAuth(); h.login(A);
     h.mount('cards', 'FlashcardsPage'); await h.settle();
     const pending = deferred(); let operation;
     const originalTransport = h.transport;
-    if (kind === 'drain') {
-      h.drain = id => id === A ? pending.promise : Promise.resolve(false);
-      h.isOffline = true; h.child.render(); h.isOffline = false; h.child.render();
+    if (kind === 'sync-refresh') {
+      h.transport = (method, url, data) => url.includes(B) ? originalTransport(method, url, data) : pending.promise;
+      h.syncRevision = 1; h.child.render();
     } else {
       if (['create', 'failed-create'].includes(kind)) h.child.exposed.handleOpenAdd();
       if (kind === 'update') h.child.exposed.handleOpenEdit(card(A));
@@ -336,7 +338,7 @@ for (const kind of ['fetch', 'create', 'update', 'delete', 'review', 'failed-cre
     const cache = h.localStorage.getItem(`flashcards_all_${B}_English`);
     const count = h.calls.length, writes = h.child.writes;
     if (kind === 'failed-create') pending.reject(new Error('Failed'));
-    else pending.resolve(kind === 'drain' ? true : { data: [card(A)] });
+    else pending.resolve(kind === 'sync-refresh' ? { data: [card(A)] } : { data: [card(A)] });
     if (operation) await operation;
     await h.settle();
     assert.deepEqual(copy(h.child.exposed), state);
@@ -508,7 +510,8 @@ test('Phase 4E: reset waits behind active completion and cannot be undone by its
 
 test('Phase 4E: owner-scoped legacy action lacking a score is retained without inventing 100', async () => {
   const h = await offlineProgressHarness(); h.load('queue').pushToOfflineQueue('complete-lesson', { lessonId: 'unknown-score' }, `registered_${A}`);
-  await h.online(); assert.equal(h.sent.length, 0); assert.equal(h.load('queue').getOfflineQueue().length, 1);
+  await h.online(); assert.equal(h.sent.length, 0); assert.equal(h.load('queue').getOfflineQueue().length, 0);
+  assert.equal(h.load('queue').getFailedOfflineActions().length, 1);
 });
 
 

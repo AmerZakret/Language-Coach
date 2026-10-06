@@ -6,6 +6,8 @@ import 'progress_api_service.dart';
 import 'flashcard_api_service.dart';
 import 'auth_service.dart';
 import 'progress_cache.dart';
+import 'sync_retry_policy.dart';
+import 'package:http/http.dart' as http;
 
 class OfflineQueueAction {
   final String id;
@@ -14,19 +16,36 @@ class OfflineQueueAction {
   final Map<String, dynamic> payload;
   final DateTime createdAt;
   final int schemaVersion;
+  final int attemptCount;
+  final DateTime? lastAttemptAt;
+  final DateTime? nextAttemptAt;
+  final String? lastErrorCategory;
+  final DateTime? failedAt;
   OfflineQueueAction(
       {required this.id,
       required this.type,
       required this.ownerNamespace,
       required this.payload,
       required this.createdAt,
-      this.schemaVersion = 1});
+      this.schemaVersion = 1,
+      this.attemptCount = 0,
+      this.lastAttemptAt,
+      this.nextAttemptAt,
+      this.lastErrorCategory,
+      this.failedAt});
   Map<String, dynamic> toJson() => {
         'id': id,
         'type': type,
         'ownerNamespace': ownerNamespace,
         'payload': payload,
         'createdAt': createdAt.toUtc().toIso8601String(),
+        if (attemptCount > 0) 'attemptCount': attemptCount,
+        if (lastAttemptAt != null)
+          'lastAttemptAt': lastAttemptAt!.toUtc().toIso8601String(),
+        if (nextAttemptAt != null)
+          'nextAttemptAt': nextAttemptAt!.toUtc().toIso8601String(),
+        if (lastErrorCategory != null) 'lastErrorCategory': lastErrorCategory,
+        if (failedAt != null) 'failedAt': failedAt!.toUtc().toIso8601String(),
         'schemaVersion': schemaVersion
       };
   factory OfflineQueueAction.fromJson(Map<String, dynamic> json) {
@@ -41,7 +60,14 @@ class OfflineQueueAction {
         type: json['type'] as String,
         ownerNamespace: json['ownerNamespace'] as String,
         payload: Map<String, dynamic>.from(json['payload']),
-        createdAt: DateTime.parse(json['createdAt'] as String));
+        createdAt: DateTime.parse(json['createdAt'] as String),
+        attemptCount: json['attemptCount'] as int? ?? 0,
+        lastAttemptAt:
+            DateTime.tryParse(json['lastAttemptAt'] as String? ?? ''),
+        nextAttemptAt:
+            DateTime.tryParse(json['nextAttemptAt'] as String? ?? ''),
+        lastErrorCategory: json['lastErrorCategory'] as String?,
+        failedAt: DateTime.tryParse(json['failedAt'] as String? ?? ''));
   }
   OfflineQueueAction withPayload(Map<String, dynamic> value) =>
       OfflineQueueAction(
@@ -50,7 +76,30 @@ class OfflineQueueAction {
           ownerNamespace: ownerNamespace,
           payload: value,
           createdAt: createdAt,
-          schemaVersion: schemaVersion);
+          schemaVersion: schemaVersion,
+          attemptCount: attemptCount,
+          lastAttemptAt: lastAttemptAt,
+          nextAttemptAt: nextAttemptAt,
+          lastErrorCategory: lastErrorCategory,
+          failedAt: failedAt);
+  OfflineQueueAction withRetry(
+          {required int attempts,
+          required DateTime attemptedAt,
+          DateTime? nextAt,
+          String? category,
+          DateTime? failed}) =>
+      OfflineQueueAction(
+          id: id,
+          type: type,
+          ownerNamespace: ownerNamespace,
+          payload: payload,
+          createdAt: createdAt,
+          schemaVersion: schemaVersion,
+          attemptCount: attempts,
+          lastAttemptAt: attemptedAt,
+          nextAttemptAt: nextAt,
+          lastErrorCategory: category,
+          failedAt: failed);
 }
 
 class _QueueState {
@@ -60,8 +109,10 @@ class _QueueState {
   // a restart or an ambiguous network failure. Later mutations stay dependent.
   final Set<String> startedCreates;
   String progressRevision;
+  List<OfflineQueueAction> failedActions;
   _QueueState(this.actions, this.tempIds, this.startedCreates,
-      [this.progressRevision = '']);
+      [this.progressRevision = '', List<OfflineQueueAction>? failedActions])
+      : failedActions = failedActions ?? [];
 }
 
 class OfflineQueueService {
@@ -73,15 +124,26 @@ class OfflineQueueService {
   factory OfflineQueueService() => _instance;
   OfflineQueueService._internal()
       : _progressApi = ProgressApiService(),
-        _flashcardApi = FlashcardApiService();
+        _flashcardApi = FlashcardApiService(),
+        _now = DateTime.now,
+        _timeout = replayTimeout;
   @visibleForTesting
   OfflineQueueService.forTesting(
       {required ProgressApiService progressApi,
-      required FlashcardApiService flashcardApi})
+      required FlashcardApiService flashcardApi,
+      DateTime Function()? now,
+      Duration timeout = replayTimeout})
       : _progressApi = progressApi,
-        _flashcardApi = flashcardApi;
+        _flashcardApi = flashcardApi,
+        _now = now ?? DateTime.now,
+        _timeout = timeout;
   final ProgressApiService _progressApi;
   final FlashcardApiService _flashcardApi;
+  final DateTime Function() _now;
+  final Duration _timeout;
+  static final StreamController<void> _changes =
+      StreamController<void>.broadcast();
+  Stream<void> get changes => _changes.stream;
 
   // Serialize record mutations across instances in this isolate, without
   // holding the write lock during HTTP. New appends can proceed during a drain.
@@ -146,12 +208,17 @@ class OfflineQueueService {
             .toList(),
         Map<String, String>.from(data['tempIds']),
         Set<String>.from(data['startedCreates']),
-        data['progressRevision'] as String? ?? '');
+        data['progressRevision'] as String? ?? '',
+        (data['failedActions'] as List? ?? [])
+            .map((a) =>
+                OfflineQueueAction.fromJson(Map<String, dynamic>.from(a)))
+            .toList());
   }
 
   Future<bool> _write(String owner, _QueueState state,
       {SessionSnapshot? session}) async {
-    if (state.actions.any((a) => a.ownerNamespace != owner)) {
+    if ([...state.actions, ...state.failedActions]
+        .any((a) => a.ownerNamespace != owner)) {
       throw StateError('Cannot save actions in another owner queue');
     }
     final prefs = await SharedPreferences.getInstance();
@@ -162,17 +229,32 @@ class OfflineQueueService {
       'actions': state.actions.map((a) => a.toJson()).toList(),
       'tempIds': state.tempIds,
       'startedCreates': state.startedCreates.toList(),
-      'progressRevision': state.progressRevision
+      'progressRevision': state.progressRevision,
+      'failedActions': state.failedActions.map((a) => a.toJson()).toList()
     });
     if (!await prefs.setString(_storageKey(owner), encoded)) {
       throw StateError('Could not persist the offline queue');
     }
+    _changes.add(null);
     return true;
   }
 
   Future<List<OfflineQueueAction>> getQueue() {
     final owner = AuthService().localStorageNamespace;
     return _locked(owner, () async => (await _read(owner)).actions);
+  }
+
+  Future<List<OfflineQueueAction>> getFailedActions() {
+    final owner = AuthService().localStorageNamespace;
+    return _locked(owner, () async => (await _read(owner)).failedActions);
+  }
+
+  Future<List<OfflineQueueAction>> getProgressActions() {
+    final owner = AuthService().localStorageNamespace;
+    return _locked(owner, () async {
+      final state = await _read(owner);
+      return [...state.actions, ...state.failedActions];
+    });
   }
 
   String? _cardId(Map<String, dynamic> payload) =>
@@ -201,8 +283,21 @@ class OfflineQueueService {
     if (type == 'reset-progress') {
       state.actions.removeWhere(
           (a) => a.type == 'complete-lesson' || a.type == 'reset-progress');
+      state.failedActions.removeWhere(
+          (a) => a.type == 'complete-lesson' || a.type == 'reset-progress');
     }
     final originalId = _cardId(payload);
+    if (type == 'delete-flashcard' &&
+        state.failedActions.any((a) =>
+            a.type == 'create-flashcard' &&
+            a.payload['tempId'] == originalId)) {
+      state.failedActions.removeWhere((a) =>
+          (a.type == 'create-flashcard' && a.payload['tempId'] == originalId) ||
+          (_dependent(a.type) && _cardId(a.payload) == originalId));
+      state.actions.removeWhere(
+          (a) => _dependent(a.type) && _cardId(a.payload) == originalId);
+      return;
+    }
     final creates = state.actions
         .where((a) =>
             a.type == 'create-flashcard' && a.payload['tempId'] == originalId)
@@ -362,7 +457,7 @@ class OfflineQueueService {
         final state = await _read(ownerNamespace);
         final id = _cardId(payload);
         if (!state.tempIds.containsKey(id) &&
-            !state.actions.any((a) =>
+            ![...state.actions, ...state.failedActions].any((a) =>
                 a.type == 'create-flashcard' && a.payload['tempId'] == id)) {
           return false;
         }
@@ -389,6 +484,7 @@ class OfflineQueueService {
     }
     final released = Completer<void>();
     _drainWaiters[owner] = released;
+    var hadFailure = false;
     try {
       final batch =
           await _locked(owner, () async => (await _read(owner)).actions);
@@ -403,8 +499,13 @@ class OfflineQueueService {
           final found =
               state.actions.where((a) => a.id == scheduled.id).toList();
           if (found.isEmpty) return null; // Cancelled before dispatch.
-          final current = found.single.withPayload(
-              _resolve(state, found.single.type, found.single.payload));
+          if (found.single.nextAttemptAt?.isAfter(_now()) == true) return null;
+          final current = found.single
+              .withPayload(
+                  _resolve(state, found.single.type, found.single.payload))
+              .withRetry(
+                  attempts: found.single.attemptCount + 1,
+                  attemptedAt: _now().toUtc());
           if (current.ownerNamespace != owner) {
             throw StateError('Queue owner mismatch');
           }
@@ -419,70 +520,136 @@ class OfflineQueueService {
           return current;
         });
         if (!session.isCurrent) return false;
-        if (action == null) continue;
+        if (action == null) {
+          final remaining = await getQueue();
+          if (remaining.any((a) => a.id == scheduled.id)) {
+            return false; // Backoff holds FIFO.
+          }
+          continue;
+        }
         String? serverId;
         Map<String, dynamic>? completion;
+        final replayClient = http.Client();
         try {
           final payload = action.payload;
           final cardId = _cardId(payload);
+          if (action.type == 'complete-lesson' &&
+              (await getFailedActions())
+                  .any((a) => a.type == 'reset-progress')) {
+            throw const InvalidQueuedPayload();
+          }
           if (_dependent(action.type) &&
               (cardId == null || cardId.startsWith('local_'))) {
-            throw StateError('Pending card has no durable server mapping');
+            throw const InvalidQueuedPayload();
           }
-          switch (action.type) {
-            case 'reset-progress':
-              await _progressApi.resetProgress(userId, operationId: action.id);
-              break;
-            case 'complete-lesson':
-              if (payload['score'] is! int) {
-                throw StateError('Completion has no recorded score');
-              }
-              completion = await _progressApi.completeLesson(userId,
-                  payload['lessonId'].toString(), payload['score'] as int,
-                  operationId: action.id);
-              break;
-            case 'create-flashcard':
-              final card = await _flashcardApi.createFlashcard(
-                  userId,
-                  payload['targetWord'].toString(),
-                  payload['turkishTranslation'].toString(),
-                  payload['targetLanguage'].toString(),
-                  nativeLanguage: payload['nativeLanguage']?.toString(),
-                  nativeTranslation: payload['nativeTranslation']?.toString(),
-                  exampleSentence: payload['exampleSentence']?.toString(),
-                  note: payload['note']?.toString(),
-                  operationId: action.id);
-              serverId = card.id;
-              if (payload['tempId'] != null &&
-                  (serverId.isEmpty || serverId.startsWith('local_'))) {
-                throw StateError('Create response has no server card ID');
-              }
-              break;
-            case 'update-flashcard':
-              await _flashcardApi.updateFlashcard(
-                  cardId!,
-                  payload['targetWord'].toString(),
-                  payload['turkishTranslation'].toString(),
-                  targetLanguage: payload['targetLanguage']?.toString(),
-                  exampleSentence: payload['exampleSentence']?.toString(),
-                  note: payload['note']?.toString(),
-                  operationId: action.id);
-              break;
-            case 'delete-flashcard':
-              await _flashcardApi.deleteFlashcard(cardId!,
-                  operationId: action.id);
-              break;
-            case 'review-flashcard':
-              await _flashcardApi.reviewCard(
-                  cardId!, payload['score'] as int? ?? 4,
-                  operationId: action.id);
-              break;
-            default:
-              throw StateError('Unsupported queued action');
-          }
+          if (!session.isCurrent) return false;
+          await http.runWithClient(() async {
+            switch (action.type) {
+              case 'reset-progress':
+                await _progressApi.resetProgress(userId,
+                    operationId: action.id);
+                break;
+              case 'complete-lesson':
+                if (payload['score'] is! int) {
+                  throw const InvalidQueuedPayload();
+                }
+                completion = await _progressApi.completeLesson(userId,
+                    payload['lessonId'].toString(), payload['score'] as int,
+                    operationId: action.id);
+                break;
+              case 'create-flashcard':
+                final card = await _flashcardApi.createFlashcard(
+                    userId,
+                    payload['targetWord'].toString(),
+                    payload['turkishTranslation'].toString(),
+                    payload['targetLanguage'].toString(),
+                    nativeLanguage: payload['nativeLanguage']?.toString(),
+                    nativeTranslation: payload['nativeTranslation']?.toString(),
+                    exampleSentence: payload['exampleSentence']?.toString(),
+                    note: payload['note']?.toString(),
+                    operationId: action.id);
+                serverId = card.id;
+                if (payload['tempId'] != null &&
+                    (serverId!.isEmpty || serverId!.startsWith('local_'))) {
+                  throw StateError('Create response has no server card ID');
+                }
+                break;
+              case 'update-flashcard':
+                await _flashcardApi.updateFlashcard(
+                    cardId!,
+                    payload['targetWord'].toString(),
+                    payload['turkishTranslation'].toString(),
+                    targetLanguage: payload['targetLanguage']?.toString(),
+                    exampleSentence: payload['exampleSentence']?.toString(),
+                    note: payload['note']?.toString(),
+                    operationId: action.id);
+                break;
+              case 'delete-flashcard':
+                await _flashcardApi.deleteFlashcard(cardId!,
+                    operationId: action.id);
+                break;
+              case 'review-flashcard':
+                await _flashcardApi.reviewCard(
+                    cardId!, payload['score'] as int? ?? 4,
+                    operationId: action.id);
+                break;
+              default:
+                throw const InvalidQueuedPayload();
+            }
+          }, () => replayClient).timeout(_timeout);
         } catch (e) {
-          debugPrint('Offline action retained: $e');
-          return false; // Preserve FIFO and all unacknowledged actions.
+          if (!session.isCurrent) return false;
+          final failure = SyncFailure.classify(e);
+          await _locked(owner, () async {
+            final state = await _read(owner);
+            if (!session.isCurrent) return;
+            final found = state.actions.where((a) => a.id == action.id);
+            if (found.isEmpty) return; // Reset/cancellation won during HTTP.
+            final current = found.single;
+            final failed = current.withRetry(
+                attempts: current.attemptCount,
+                attemptedAt: current.lastAttemptAt!,
+                category: failure.category,
+                failed: failure.terminal ? _now().toUtc() : null,
+                nextAt: failure.terminal
+                    ? null
+                    : _now().toUtc().add(retryDelay(current.attemptCount)));
+            if (failure.terminal) {
+              bool blocked(OfflineQueueAction a) =>
+                  a.id == action.id ||
+                  (action.type == 'create-flashcard' &&
+                      action.payload['tempId'] != null &&
+                      _dependent(a.type) &&
+                      _cardId(a.payload) == action.payload['tempId']) ||
+                  (action.type == 'reset-progress' &&
+                      a.type == 'complete-lesson');
+              state.failedActions.addAll(state.actions.where(blocked).map((a) =>
+                  a.id == action.id
+                      ? failed
+                      : a.withRetry(
+                          attempts: a.attemptCount,
+                          attemptedAt: _now().toUtc(),
+                          category: 'dependency',
+                          failed: _now().toUtc())));
+              state.actions.removeWhere(blocked);
+              if (action.type == 'complete-lesson' ||
+                  action.type == 'reset-progress') {
+                state.progressRevision = 'failed_${action.id}';
+              }
+            } else {
+              state.actions = state.actions
+                  .map((a) => a.id == action.id ? failed : a)
+                  .toList();
+            }
+            await _write(owner, state, session: session);
+          });
+          hadFailure = true;
+          if (!failure.terminal) {
+            return false; // Preserve FIFO across transient failure.
+          }
+          continue;
+        } finally {
+          replayClient.close();
         }
         if (!session.isCurrent) return false;
         final acknowledged = await _locked(owner, () async {
@@ -532,7 +699,7 @@ class OfflineQueueService {
         });
         if (!acknowledged) return false;
       }
-      return session.isCurrent;
+      return !hadFailure && session.isCurrent;
     } finally {
       _drainingOwners.remove(owner);
       _drainWaiters.remove(owner);

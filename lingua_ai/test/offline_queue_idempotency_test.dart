@@ -12,8 +12,9 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   const userId = '507f1f77bcf86cd799439011';
   final auth = AuthService();
+  var now = DateTime.utc(2026);
   OfflineQueueService queue() => OfflineQueueService.forTesting(
-      progressApi: ProgressApiService(), flashcardApi: FlashcardApiService());
+      progressApi: ProgressApiService(), flashcardApi: FlashcardApiService(), now: () => now);
 
   for (final type in [
     'create-flashcard', 'update-flashcard', 'delete-flashcard',
@@ -38,6 +39,7 @@ void main() {
         final disk = {for (final key in prefs.getKeys()) key: prefs.get(key)!};
         SharedPreferences.setMockInitialValues(disk);
         await auth.init();
+        now = now.add(const Duration(minutes: 6));
         final restarted = queue();
         expect((await restarted.getQueue()).single.id, operationId);
         expect(await restarted.processQueue(userId), true);

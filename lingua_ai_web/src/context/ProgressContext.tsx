@@ -2,12 +2,13 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import type { ProgressState } from '../types/progress';
 import { DEFAULT_PROGRESS } from '../types/progress';
 import { useAuth } from './AuthContext';
+import { useSync } from './SyncContext';
 import { useNetwork } from './NetworkContext';
 import { useTargetLanguage } from './TargetLanguageContext';
 import { getUserProgressKey, getLegacyRegisteredProgressKey } from '../utils/userKey';
 import { loadProgress, saveProgress, resetOwnerProgress, overlayPendingProgress } from '../utils/progressStorage';
 import { fetchProgress } from '../api/progressApi';
-import { getOfflineQueue, preparePendingProgress, getProgressQueueRevision, saveServerProgress, pushToOfflineQueue, processOfflineQueue } from '../utils/offlineQueue';
+import { getProgressQueueActions, preparePendingProgress, getProgressQueueRevision, saveServerProgress, pushToOfflineQueue, processOfflineQueue } from '../utils/offlineQueue';
 import { useSessionGuard } from '../utils/useSessionGuard';
 
 interface ProgressContextType {
@@ -23,6 +24,7 @@ export const ProgressProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const { user, isGuest, token } = useAuth();
   const { targetLanguage } = useTargetLanguage();
   const { isOffline } = useNetwork();
+  const { syncRevision } = useSync();
   const [progress, setProgress] = useState<ProgressState>(DEFAULT_PROGRESS);
   const requestRevision = useRef(0);
   const userKey = getUserProgressKey(user, isGuest, token);
@@ -34,7 +36,7 @@ export const ProgressProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const currentDisplay = useCallback(() => {
     const base = loadProgress(userKey, targetLanguage, legacyUserKey);
     preparePendingProgress(userKey);
-    const actions = getOfflineQueue().filter(a => a.ownerNamespace === userKey);
+    const actions = getProgressQueueActions().filter(a => a.ownerNamespace === userKey);
     return overlayPendingProgress(base, actions.filter(a => a.type === 'complete-lesson'
       && a.payload.targetLanguage === targetLanguage).map(a => a.payload),
       actions.some(a => a.type === 'reset-progress'));
@@ -63,7 +65,7 @@ export const ProgressProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     if (isCurrent()) setProgress(previous => isCurrent() ? currentDisplay() : previous);
   }, [captureContext, currentDisplay, backendSession, identifier, isOffline, userKey, targetLanguage]);
 
-  useEffect(() => { void loadCurrentProgress(); }, [loadCurrentProgress]);
+  useEffect(() => { void loadCurrentProgress(); }, [loadCurrentProgress, syncRevision]);
 
   const addXp = (amount: number) => {
     const isCurrent = captureContext();

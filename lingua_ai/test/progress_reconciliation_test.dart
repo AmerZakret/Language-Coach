@@ -278,7 +278,8 @@ void main() {
         ownerNamespace: auth.localStorageNamespace);
     await sync();
     expect(sent, isEmpty);
-    expect(await queue.getQueue(), hasLength(1));
+    expect(await queue.getQueue(), isEmpty);
+    expect(await queue.getFailedActions(), hasLength(1));
   });
   test(
       'valid legacy owned score gains cached context without changing action ID',

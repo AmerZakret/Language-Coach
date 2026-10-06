@@ -73,6 +73,7 @@ void main() {
   late FakeProgressApi progress;
   late DurableCardsApi cards;
   late OfflineQueueService queue;
+  var now = DateTime.utc(2026);
   Future<void> login([String id = a]) => auth.setGuestSession(
       id: id, email: 'guest-$id@guest.lingua.local', token: 'test-$id');
   Future<void> push(String type, Map<String, dynamic> data) =>
@@ -82,8 +83,9 @@ void main() {
     SharedPreferences.setMockInitialValues(values);
     await auth.init();
     prefs = await SharedPreferences.getInstance();
+    now = now.add(const Duration(minutes: 6));
     queue = OfflineQueueService.forTesting(
-        progressApi: progress, flashcardApi: cards);
+        progressApi: progress, flashcardApi: cards, now: () => now);
   }
 
   setUp(() async {
@@ -93,8 +95,9 @@ void main() {
     prefs = await SharedPreferences.getInstance();
     progress = FakeProgressApi();
     cards = DurableCardsApi();
+    now = now.add(const Duration(minutes: 6));
     queue = OfflineQueueService.forTesting(
-        progressApi: progress, flashcardApi: cards);
+        progressApi: progress, flashcardApi: cards, now: () => now);
   });
 
   test(
@@ -230,7 +233,7 @@ void main() {
     final drain = queue.processQueue(a);
     await progress.started!.future;
     final another = OfflineQueueService.forTesting(
-        progressApi: progress, flashcardApi: cards);
+        progressApi: progress, flashcardApi: cards, now: () => now);
     expect(await another.processQueue(a), false);
     expect(progress.calls, hasLength(1));
     progress.release!.complete();
@@ -270,7 +273,7 @@ void main() {
     final drain = queue.processQueue(a);
     await started.future;
     final another = OfflineQueueService.forTesting(
-        progressApi: progress, flashcardApi: cards);
+        progressApi: progress, flashcardApi: cards, now: () => now);
     await another.pushAction(
         'complete-lesson', {'lessonId': 'new', 'score': 73},
         ownerNamespace: owner);
