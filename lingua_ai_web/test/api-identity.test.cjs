@@ -8,7 +8,7 @@ const ts = require('typescript');
 test('AI and pronunciation helpers omit body/query identity and keep active routes', async () => {
   const calls = [];
   const client = Object.fromEntries(['post', 'get', 'delete'].map(method => [method,
-    async (...args) => { calls.push({ method, args }); return { data: {} }; }]));
+    async (...args) => { calls.push({ method, args }); return { data: args[0].includes('writing-check') ? { grammarScore: 85.5, vocabularyScore: 80, clarityScore: 75, overallScore: 80.5, corrections: [], feedback: 'Good', improvedVersion: 'Hello' } : {} }; }]));
   function load(file) {
     const module = { exports: {} };
     const source = readFileSync(join(__dirname, '../src/api', file), 'utf8');

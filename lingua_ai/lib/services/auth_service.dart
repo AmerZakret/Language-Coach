@@ -88,7 +88,7 @@ class AuthService extends ChangeNotifier {
     
     notifyListeners();
 
-    if (_isLoggedIn && !_isGuest && _token.isNotEmpty) {
+    if ((_isLoggedIn || _isGuest) && _token.isNotEmpty) {
       fetchLatestProfile();
     }
   }
@@ -140,15 +140,17 @@ class AuthService extends ChangeNotifier {
   }
 
   Future<void> fetchLatestProfile() async {
-    if (!_isLoggedIn || _isGuest || _token.isEmpty) return;
+    if ((!_isLoggedIn && !_isGuest) || _token.isEmpty) return;
     final session = captureSession();
     try {
       final data = await UserApiService().fetchMe();
       // A stale profile must not pair the previous owner's ID with a new token.
       if (!session.isCurrent) return;
-      _currentUserName = data['name'] ?? _currentUserName;
-      _currentUserEmail = data['email'] ?? _currentUserEmail;
-      _currentUserId = data['id'] ?? _currentUserId;
+      _currentUserName = data['name'] as String;
+      _currentUserEmail = data['email'] as String;
+      _currentUserId = data['id'] as String;
+      _isGuest = data['isGuest'] as bool;
+      _isLoggedIn = !_isGuest;
       
       await _saveSession();
       if (session.isCurrent) notifyListeners();
@@ -217,6 +219,15 @@ class AuthService extends ChangeNotifier {
     }
 
     return null;
+  }
+
+  bool invalidateSession(SessionSnapshot session) {
+    if (!session.isCurrent || session._token.isEmpty ||
+        session.ownerNamespace == 'local_guest') {
+      return false;
+    }
+    logout();
+    return true;
   }
 
   void logout() {

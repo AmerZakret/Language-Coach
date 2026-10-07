@@ -54,13 +54,13 @@ class _LoginScreenState extends State<LoginScreen> {
       final response = await _apiService.login(email, password);
       if (!mounted || !session.isCurrent) return;
       
-      final userData = response['user'] ?? {};
+      final userData = response['user'] as Map<String, dynamic>;
       // Update session with backend data
       auth.setBackendSession(
-        name: userData['name'] ?? email.split('@')[0].toUpperCase(),
-        email: userData['email'] ?? email,
-        token: response['access_token'] ?? '',
-        id: userData['id'] ?? '',
+        name: userData['name'] as String,
+        email: userData['email'] as String,
+        token: response['access_token'] as String,
+        id: userData['id'] as String,
         targetLanguage: userData['targetLanguage'],
       );
       session = auth.captureSession();
@@ -90,12 +90,12 @@ class _LoginScreenState extends State<LoginScreen> {
     try {
       final response = await _apiService.loginGuest();
       if (!mounted || !session.isCurrent) return;
-      final userData = response['user'] ?? {};
+      final userData = response['user'] as Map<String, dynamic>;
       final save = auth.setGuestSession(
         token: response['access_token'] as String,
         id: userData['id'] as String,
         email: userData['email'] as String,
-        name: userData['name'] as String? ?? 'Guest User',
+        name: userData['name'] as String,
       );
       session = auth.captureSession();
       await save;

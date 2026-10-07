@@ -6,7 +6,7 @@ import type { ProgressState } from '../types/progress';
 import type { TargetLanguage } from '../types/language';
 import apiClient from '../api/apiClient';
 import type { AxiosRequestConfig } from 'axios';
-import { getOfflineQueueSession, isOfflineQueueSessionActive } from './queueSession';
+import { getOfflineQueueSession, isOfflineQueueSessionActive, invalidateCurrentSession } from './queueSession';
 import type { QueueSession } from './queueSession';
 import { serializeFlashcardMutation } from './flashcardMutation';
 
@@ -277,6 +277,7 @@ export const processOfflineQueue = async (userId: string, waitForActive = false)
           if (action.type === 'complete-lesson' || action.type === 'reset-progress') latest.progressRevision = `failed_${action.id}`;
         } else latest.actions = latest.actions.map(a => a.id === action.id ? failed : a);
         writeState(latest);
+        if (failure.category === 'authentication') invalidateCurrentSession(session);
         hadFailure = true;
         if (!failure.terminal) return false; // FIFO also protects reset/review dependencies.
         continue; // Unrelated later work can proceed after durable quarantine.

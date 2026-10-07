@@ -86,10 +86,11 @@ function harness(saved = storage(), fakeTimers = false) {
     createElement: (type, props) => ({ type, props }),
   };
   const requestInterceptors = [];
+  const responseInterceptors = [];
   const transport = {
     interceptors: {
       request: { use: handler => requestInterceptors.push(handler) },
-      response: { use: () => {} },
+      response: { use: (success, failure) => responseInterceptors.push({ success, failure }) },
     },
   };
   function request(method, url, data, config = {}) {
@@ -98,7 +99,10 @@ function harness(saved = storage(), fakeTimers = false) {
     for (const interceptor of requestInterceptors) pending = pending.then(interceptor);
     return pending.then(prepared => {
       requests.push(prepared);
-      return control.dispatch(prepared);
+      let result = Promise.resolve().then(() => control.dispatch(prepared))
+        .catch(error => { error.config ??= prepared; throw error; });
+      for (const interceptor of responseInterceptors) result = result.then(interceptor.success, interceptor.failure);
+      return result;
     });
   }
   transport.post = (url, data, config) => request('post', url, data, config);
@@ -704,7 +708,13 @@ test('Phase 4F: public health probe accepts only health success and has no crede
 
 test('Phase 4F: 401 is retained for authentication recovery, not silently quarantined', async () => {
   const h = await durableHarness(); h.enqueue(); h.control.dispatch = async () => { throw { response: { status: 401 } }; };
-  await h.queue.processOfflineQueue(A); assert.equal(h.queue.getOfflineQueue()[0].lastErrorCategory, 'authentication');
+  await h.queue.processOfflineQueue(A);
+  assert.equal(h.auth().token, null);
+  assert.equal(h.saved.getItem('linguaai_token'), null);
+  const retained = JSON.parse(h.saved.getItem(key(`registered_${A}`)));
+  assert.equal(retained.actions[0].lastErrorCategory, 'authentication');
+  h.auth().login(user(A), `new-${A}`);
+  assert.equal(h.queue.getOfflineQueue()[0].lastErrorCategory, 'authentication');
   assert.equal(h.queue.getFailedOfflineActions().length, 0);
 });
 
@@ -801,3 +811,27 @@ for (const type of ['create-flashcard', 'update-flashcard']) {
     }
   });
 }
+
+test('Phase 5E: online current-token 401 invalidates auth and preserves queued owner work', async () => {
+  const h = await durableHarness(); h.enqueue();
+  const rawQueue = h.saved.getItem(key(`registered_${A}`));
+  h.control.dispatch = async () => { throw { response: { status: 401 } }; };
+  await assert.rejects(h.client.get('/users/me'));
+  assert.equal(h.auth().token, null); assert.equal(h.saved.getItem('linguaai_user'), null);
+  assert.equal(h.saved.getItem(key(`registered_${A}`)), rawQueue);
+});
+test('Phase 5E: old-token 401 cannot invalidate the same owner with a replacement token', async () => {
+  const h = await durableHarness(); const started = deferred(), release = deferred();
+  h.control.dispatch = () => { started.resolve(); return release.promise; };
+  const pending = h.client.get('/users/me'); const failed = assert.rejects(pending);
+  await started.promise; h.auth().login(user(A), 'replacement-token');
+  release.resolve(Promise.reject({ response: { status: 401 } })); await failed;
+  assert.equal(h.auth().token, 'replacement-token');
+});
+
+test('Phase 5E: invalid login credentials do not revoke a separate current authenticated token', async () => {
+  const h = await durableHarness();
+  h.control.dispatch = async () => { throw { response: { status: 401 } }; };
+  await assert.rejects(h.client.post('/auth/login', { email: 'other@example.com', password: 'wrong' }));
+  assert.equal(h.auth().token, `test-${A}`);
+});

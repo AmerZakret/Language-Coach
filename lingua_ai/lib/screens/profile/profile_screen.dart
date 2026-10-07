@@ -11,6 +11,7 @@ import '../../core/localization/target_language_service.dart';
 import '../../widgets/target_language_modal.dart';
 import '../../core/routes/app_routes.dart';
 import '../../services/user_api_service.dart';
+import '../../services/api_response.dart';
 
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
@@ -60,7 +61,10 @@ class ProfileScreen extends StatelessWidget {
                     if (!session.isCurrent || !context.mounted) return;
                     auth.updateName(newName);
                   } catch (e) {
-                    debugPrint('Failed to update name: $e');
+                    if (context.mounted && canHandleApiError(session, e)) {
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+                    }
+                    return;
                   }
                 }
                 if (context.mounted && session.isCurrent) {

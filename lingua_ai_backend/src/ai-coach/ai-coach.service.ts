@@ -234,16 +234,7 @@ Do not include markdown code block formatting like \`\`\`json. Return pure JSON.
     ).trim();
 
     if (!apiKey || apiKey === 'your_gemini_api_key') {
-      this.logger.warn('GEMINI_API_KEY is not configured');
-      return {
-        grammarScore: 70,
-        vocabularyScore: 70,
-        clarityScore: 70,
-        overallScore: 70,
-        corrections: [],
-        feedback: language === 'tr' ? 'YZ Koç henüz yapılandırılmadı.' : 'AI Coach is not configured yet.',
-        improvedVersion: text,
-      };
+      throw new HttpException('Writing evaluation is not configured yet.', HttpStatus.SERVICE_UNAVAILABLE);
     }
 
     const interfaceLangName = language === 'tr' ? 'Turkish' : 'English';
@@ -256,10 +247,10 @@ Explanations and general feedback must be in ${interfaceLangName}.
 
 You must return a JSON object with the following structure:
 {
-  "grammarScore": number, (1-100 score for grammar)
-  "vocabularyScore": number, (1-100 score for vocabulary)
-  "clarityScore": number, (1-100 score for clarity and style)
-  "overallScore": number, (1-100 overall score)
+  "grammarScore": number, (0-100 score for grammar)
+  "vocabularyScore": number, (0-100 score for vocabulary)
+  "clarityScore": number, (0-100 score for clarity and style)
+  "overallScore": number, (0-100 overall score)
   "corrections": [
     {
       "original": "the exact mistaken word or phrase from user text",
@@ -298,69 +289,47 @@ Return ONLY this JSON. Do not include markdown formatting like \`\`\`json.`;
       );
 
       if (!response.ok) {
-        const errorText = await response.text();
-        this.logger.error(`Gemini API error: ${response.status} ${errorText}`);
-        if (response.status === 429) {
-          throw new Error('QUOTA_EXCEEDED');
-        }
-        throw new Error(
-          `Failed to fetch from Gemini: ${response.status} ${errorText}`,
+        this.logger.warn(`Writing provider returned HTTP ${response.status}`);
+        throw new HttpException(
+          'Writing evaluation is temporarily unavailable. Please try again.',
+          response.status === 429 ? HttpStatus.SERVICE_UNAVAILABLE : HttpStatus.BAD_GATEWAY,
         );
       }
 
       const data = (await response.json()) as GeminiResponse;
-      const textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
-
-      if (!textResponse) {
-        throw new Error('Invalid response from Gemini API');
-      }
-
-      let parsedResponse: any;
+      const textResponse = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      let evaluation: any;
       try {
-        parsedResponse = JSON.parse(textResponse);
-      } catch (err) {
-        this.logger.error('Failed to parse Gemini writing check response: ' + textResponse);
-        throw new Error('Invalid AI response format');
+        evaluation = JSON.parse(textResponse ?? '');
+      } catch {
+        throw new HttpException('Writing provider returned an invalid evaluation.', HttpStatus.BAD_GATEWAY);
       }
-
-      // Convert 1-10 metrics to 1-100 percentages if Gemini returns low decimals
-      if (typeof parsedResponse.overallScore === 'number' && parsedResponse.overallScore <= 10) {
-        parsedResponse.overallScore *= 10;
-        parsedResponse.grammarScore *= 10;
-        parsedResponse.vocabularyScore *= 10;
-        parsedResponse.clarityScore *= 10;
+      const scoreFields = ['grammarScore', 'vocabularyScore', 'clarityScore', 'overallScore'];
+      if (!evaluation || scoreFields.some(field => typeof evaluation[field] !== 'number'
+        || !Number.isFinite(evaluation[field]) || evaluation[field] < 0 || evaluation[field] > 100)
+        || typeof evaluation.feedback !== 'string' || typeof evaluation.improvedVersion !== 'string'
+        || !Array.isArray(evaluation.corrections)
+        || evaluation.corrections.some((item: any) => !item || ['original', 'correction', 'explanation']
+          .some(field => typeof item[field] !== 'string'))) {
+        throw new HttpException('Writing provider returned an invalid evaluation.', HttpStatus.BAD_GATEWAY);
       }
-
+      // Scores are percentages (0-100), including decimals; never infer a second scale.
       return {
-        grammarScore: Number(parsedResponse.grammarScore) || 70,
-        vocabularyScore: Number(parsedResponse.vocabularyScore) || 70,
-        clarityScore: Number(parsedResponse.clarityScore) || 70,
-        overallScore: Number(parsedResponse.overallScore) || 70,
-        corrections: Array.isArray(parsedResponse.corrections) ? parsedResponse.corrections : [],
-        feedback: typeof parsedResponse.feedback === 'string' ? parsedResponse.feedback : 'Here is your writing feedback.',
-        improvedVersion: typeof parsedResponse.improvedVersion === 'string' ? parsedResponse.improvedVersion : text,
+        grammarScore: evaluation.grammarScore,
+        vocabularyScore: evaluation.vocabularyScore,
+        clarityScore: evaluation.clarityScore,
+        overallScore: evaluation.overallScore,
+        corrections: evaluation.corrections.map(({ original, correction, explanation }) => ({ original, correction, explanation })),
+        feedback: evaluation.feedback,
+        improvedVersion: evaluation.improvedVersion,
       };
     } catch (error) {
-      this.logger.error('Error calling Gemini for writing check', error);
-      const isQuotaError =
-        error instanceof Error &&
-        (error.message.includes('429') || error.message === 'QUOTA_EXCEEDED');
-      const fallbackFeedback = isQuotaError
-        ? language === 'tr'
-          ? 'Üzgünüm, günlük Gemini yapay zeka kotam doldu. Lütfen biraz sonra tekrar deneyin!'
-          : "I'm sorry, my Gemini API quota limit is currently exceeded. Please try again in a minute!"
-        : language === 'tr'
-        ? 'Yazma değerlendirmesi sırasında bir hata oluştu. Lütfen tekrar deneyin.'
-        : 'An error occurred during evaluation. Please try again.';
-      return {
-        grammarScore: 70,
-        vocabularyScore: 70,
-        clarityScore: 70,
-        overallScore: 70,
-        corrections: [],
-        feedback: fallbackFeedback,
-        improvedVersion: text,
-      };
+      if (error instanceof HttpException) throw error;
+      if (error instanceof SyntaxError) {
+        throw new HttpException('Writing provider returned an invalid evaluation.', HttpStatus.BAD_GATEWAY);
+      }
+      this.logger.warn('Writing evaluation provider could not be reached');
+      throw new HttpException('Writing evaluation is temporarily unavailable. Please try again.', HttpStatus.SERVICE_UNAVAILABLE);
     }
   }
 
@@ -374,9 +343,9 @@ Return ONLY this JSON. Do not include markdown formatting like \`\`\`json.`;
     const targetCode = targetLanguageCode(targetLanguage ?? 'en');
     return this.chatMessageModel
       .find({ userId: user._id.toString(), targetLanguage: targetLanguageQuery(targetCode) })
-      .sort({ createdAt: 1 })
+      .sort({ createdAt: -1, _id: -1 })
       .limit(50)
-      .exec().then(messages => messages.map(languageResponse));
+      .exec().then(messages => messages.reverse().map(languageResponse));
   }
 
   /**

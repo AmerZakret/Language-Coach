@@ -659,6 +659,9 @@ class OfflineQueueService {
             }
             await _write(owner, state, session: session);
           });
+          if (failure.category == 'authentication') {
+            AuthService().invalidateSession(session);
+          }
           hadFailure = true;
           if (!failure.terminal) {
             return false; // Preserve FIFO across transient failure.

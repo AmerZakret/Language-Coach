@@ -6,8 +6,28 @@ import '../models/flashcard.dart';
 import 'auth_service.dart';
 import 'sync_retry_policy.dart';
 
+/// A replay receipt may acknowledge a resource that was subsequently deleted.
+/// Such an acknowledgement is not a complete card.
+class FlashcardMutationResult {
+  final String id;
+  final Flashcard? card;
+  const FlashcardMutationResult(this.id, [this.card]);
+  factory FlashcardMutationResult.fromJson(Map<String, dynamic> data) {
+    final id = data['_id'];
+    if (id is! String || id.isEmpty) {
+      throw const FormatException('Missing flashcard acknowledgement identity');
+    }
+    if (data.keys.length == 1) return FlashcardMutationResult(id);
+    if (data['targetWord'] is! String || data['turkishTranslation'] is! String ||
+        data['targetLanguage'] is! String) {
+      throw const FormatException('Incomplete flashcard response');
+    }
+    return FlashcardMutationResult(id, Flashcard.fromJson(data));
+  }
+}
+
 class FlashcardApiService {
-  Future<Flashcard> createFlashcard(
+  Future<FlashcardMutationResult> createFlashcard(
     String targetWord,
     String turkishTranslation,
     String targetLanguage, {
@@ -47,7 +67,7 @@ class FlashcardApiService {
           .timeout(replayTimeout);
 
       if (response.statusCode == 201 || response.statusCode == 200) {
-        return Flashcard.fromJson(json.decode(response.body));
+        return FlashcardMutationResult.fromJson(json.decode(response.body));
       } else {
         throw SyncHttpException(response.statusCode);
       }
@@ -56,7 +76,7 @@ class FlashcardApiService {
     }
   }
 
-  Future<Flashcard> updateFlashcard(
+  Future<FlashcardMutationResult> updateFlashcard(
     String cardId,
     String? targetWord,
     String? turkishTranslation, {
@@ -97,7 +117,7 @@ class FlashcardApiService {
           .timeout(replayTimeout);
 
       if (response.statusCode == 200) {
-        return Flashcard.fromJson(json.decode(response.body));
+        return FlashcardMutationResult.fromJson(json.decode(response.body));
       } else {
         throw SyncHttpException(response.statusCode);
       }
@@ -194,7 +214,7 @@ class FlashcardApiService {
     }
   }
 
-  Future<Flashcard> reviewCard(String cardId, int score,
+  Future<FlashcardMutationResult> reviewCard(String cardId, int score,
       {String? operationId}) async {
     try {
       final headers = <String, String>{
@@ -218,7 +238,7 @@ class FlashcardApiService {
           .timeout(replayTimeout);
 
       if (response.statusCode == 200) {
-        return Flashcard.fromJson(json.decode(response.body));
+        return FlashcardMutationResult.fromJson(json.decode(response.body));
       } else {
         throw SyncHttpException(response.statusCode);
       }

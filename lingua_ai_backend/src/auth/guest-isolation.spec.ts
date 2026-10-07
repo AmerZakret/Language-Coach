@@ -100,7 +100,7 @@ describe('Guest session isolation', () => {
     guestA = (await request(app.getHttpServer()).post('/auth/guest').expect(201)).body;
     guestB = (await request(app.getHttpServer()).post('/auth/guest').expect(201)).body;
     cardB = { _id: new Types.ObjectId(), userId: guestB.user.id, targetWord: 'private',
-      save: jest.fn() };
+      save: jest.fn(), toObject: () => ({ _id: cardB._id, userId: cardB.userId, targetWord: cardB.targetWord }) };
     flashcardModel.findById.mockResolvedValue(cardB);
     flashcardModel.find.mockImplementation(query => ({ exec: async () =>
       query.userId === guestB.user.id ? [cardB] : [] }));
@@ -183,14 +183,14 @@ describe('Guest session isolation', () => {
       'guest@lingua.ai', 'placeholder-hash');
     const historicalCard = { userId: legacy._id.toString(), targetWord: 'historical' };
     flashcardModel.find.mockImplementation(query => ({ exec: async () =>
-      query.userId === legacy._id.toString() ? [historicalCard] : [] }));
+      query.userId === legacy._id.toString() ? [{ ...historicalCard, toObject: () => historicalCard }] : [] }));
     const result = await request(app.getHttpServer()).get('/flashcards/all')
       .query({ userId: 'guest' }).auth(guestA.access_token, { type: 'bearer' }).expect(200);
     expect(result.body).toEqual([]);
     expect(flashcardModel.find).toHaveBeenLastCalledWith({ userId: guestA.user.id });
     await expect(app.get(FlashcardsService).getAll('guest')).rejects.toThrow('Authenticated user not found');
     await expect(app.get(FlashcardsService).getAll('guest@lingua.ai')).rejects.toThrow('Authenticated user not found');
-    expect(await app.get(FlashcardsService).getAll(legacy._id.toString())).toEqual([historicalCard]);
+    expect(await app.get(FlashcardsService).getAll(legacy._id.toString())).toEqual([{ ...historicalCard, targetLanguage: 'en' }]);
     expect(users.get(legacy._id.toString())).toBe(legacy);
   });
 

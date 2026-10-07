@@ -3,6 +3,7 @@ import '../../core/theme/app_theme.dart';
 import '../../widgets/bottom_nav_bar.dart';
 import '../../core/localization/language_service.dart';
 import '../../services/auth_service.dart';
+import '../../services/api_response.dart';
 import '../../services/ai_coach_api_service.dart';
 import '../../core/localization/target_language_service.dart';
 import '../../services/theme_service.dart';
@@ -43,6 +44,11 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
 
   Future<void> _loadHistory() async {
     if (!mounted) return;
+    if (AuthService().token.isEmpty) {
+      setState(() { _messages.clear(); _isHistoryLoading = false; _isLoading = false; });
+      return;
+    }
+    final session = AuthService().captureSession();
 
     setState(() {
       _isHistoryLoading = true;
@@ -56,7 +62,7 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
         targetLanguage: targetLanguage,
       );
 
-      if (mounted) {
+      if (mounted && session.isCurrent) {
         setState(() {
           for (var msg in history) {
             _messages.add({
@@ -92,6 +98,7 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
   Future<void> _sendMessage() async {
     final text = _messageController.text.trim();
     if (text.isEmpty) return;
+    final session = AuthService().captureSession();
 
     setState(() {
       _messages.add({
@@ -113,6 +120,7 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
         targetLanguage: targetLanguageCode,
       );
 
+      if (!mounted || !session.isCurrent) return;
       setState(() {
         _messages.add({
           'text': response['reply'] ?? 'No reply received.',
@@ -121,10 +129,10 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
         });
       });
     } catch (e) {
-      setState(() {
-        _messages.removeLast(); // Rollback optimistic user message
-      });
-      if (mounted) {
+      if (mounted && canHandleApiError(session, e)) {
+        if (session.isCurrent && _messages.isNotEmpty) {
+          setState(() => _messages.removeLast());
+        }
         final errorMsg = e.toString().replaceAll('Exception: ', '');
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

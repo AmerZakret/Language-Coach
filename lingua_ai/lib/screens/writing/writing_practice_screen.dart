@@ -5,6 +5,8 @@ import '../../core/localization/language_service.dart';
 import '../../core/localization/target_language_service.dart';
 import '../../widgets/bottom_nav_bar.dart';
 import '../../services/writing_api_service.dart';
+import '../../services/auth_service.dart';
+import '../../services/api_response.dart';
 import '../../services/progress_service.dart';
 import '../../services/theme_service.dart';
 import '../../services/connectivity_service.dart';
@@ -144,13 +146,15 @@ class _WritingPracticeScreenState extends State<WritingPracticeScreen> {
       _feedback = null;
     });
 
+    final session = AuthService().captureSession();
+    final targetLanguage = TargetLanguageService().currentLanguage;
     try {
       final feedback = await _apiService.checkWriting(
         topic: _currentTopic!,
         userText: text,
-        targetLanguage: TargetLanguageService().currentLanguage,
+        targetLanguage: targetLanguage,
       );
-      if (mounted) {
+      if (mounted && session.isCurrent && targetLanguage == TargetLanguageService().currentLanguage) {
         setState(() {
           _feedback = feedback;
           _isLoading = false;
@@ -161,10 +165,12 @@ class _WritingPracticeScreenState extends State<WritingPracticeScreen> {
         }
       }
     } catch (e) {
-      if (mounted) {
+      if (mounted && canHandleApiError(session, e) && targetLanguage == TargetLanguageService().currentLanguage) {
         setState(() => _isLoading = false);
         _showError(e.toString().replaceAll('Exception: ', ''));
       }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -419,7 +425,7 @@ class _WritingPracticeScreenState extends State<WritingPracticeScreen> {
     );
   }
 
-  Widget _buildScorePill(String label, int score, Color color) {
+  Widget _buildScorePill(String label, double score, Color color) {
     return Container(
       width: 100,
       padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 8),
@@ -436,7 +442,7 @@ class _WritingPracticeScreenState extends State<WritingPracticeScreen> {
       child: Column(
         children: [
           Text(
-            '$score',
+            score.toString().replaceFirst(RegExp(r'\.0$'), ''),
             style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: color),
           ),
           const SizedBox(height: 4),

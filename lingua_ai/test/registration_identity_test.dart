@@ -12,7 +12,7 @@ import 'package:lingua_ai/services/auth_service.dart';
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   const id = '507f1f77bcf86cd799439011';
-  const validUser = {'id': id, 'name': 'Test', 'email': 'test@example.com'};
+  const validUser = {'id': id, 'name': 'Test', 'email': 'test@example.com', 'isGuest': false, 'targetLanguage': 'en'};
   final invalidResponses = <String, Object?>{
     'missing token': {'user': validUser},
     'empty token': {'user': validUser, 'access_token': ''},

@@ -61,8 +61,8 @@ class _RegisterScreenState extends State<RegisterScreen> {
       final userData = response['user'] as Map<String, dynamic>;
       // Update session with backend data
       auth.setBackendSession(
-        name: userData['name'] ?? name,
-        email: userData['email'] ?? email,
+        name: userData['name'] as String,
+        email: userData['email'] as String,
         token: response['access_token'] as String,
         id: userData['id'] as String,
         targetLanguage: userData['targetLanguage'],

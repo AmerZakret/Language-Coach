@@ -214,4 +214,96 @@ describe('Phase 5A JWT domain identity', () => {
       .attach('audio', Buffer.from('fixture'), 'audio.wav').auth(token, { type: 'bearer' }).expect(400);
     expect(pronunciation.assess).not.toHaveBeenCalled();
   });
+  it('auth and profile endpoints share a safe public identity for registered and guest users', async () => {
+    const api = app.getHttpServer();
+    const registered = (await request(api).post('/auth/register').send({
+      name: 'Registered', email: 'new@example.com', password: 'valid-password',
+    }).expect(201)).body;
+    const login = (await request(api).post('/auth/login').send({
+      email: 'new@example.com', password: 'valid-password',
+    }).expect(201)).body;
+    const guest = (await request(api).post('/auth/guest').expect(201)).body;
+    for (const session of [registered, login, guest]) {
+      const expectedGuest = session === guest;
+      const me = (await request(api).get('/users/me').auth(session.access_token, { type: 'bearer' }).expect(200)).body;
+      expect(me).toEqual({ ...session.user, name: session === login ? 'Updated' : session.user.name });
+      expect(me.isGuest).toBe(expectedGuest);
+      expect(me.id).toMatch(/^[a-f0-9]{24}$/);
+      expect(me.targetLanguage).toBe('en');
+      expect(Object.keys(me).sort()).toEqual(['id', 'name', 'email', 'isGuest', 'level', 'totalXp', 'streak', 'targetLanguage'].sort());
+      const updated = (await request(api).patch('/users/profile').send({ name: 'Updated' })
+        .auth(session.access_token, { type: 'bearer' }).expect(200)).body;
+      expect(updated).toEqual({ ...me, name: 'Updated' });
+      expect(updated).not.toHaveProperty('passwordHash');
+      expect(updated).not.toHaveProperty('access_token');
+    }
+  });
+
+  it.each([['unavailable', 429, 503], ['provider failure', 500, 502], ['network failure', 0, 503]])
+  ('writing %s returns a safe non-success HTTP response', async (_case, providerStatus, status) => {
+    (global.fetch as jest.Mock).mockImplementationOnce(async () => {
+      if (!providerStatus) throw new Error('private provider secret');
+      return { ok: false, status: providerStatus, text: async () => 'private provider secret' };
+    });
+    const token = jwt.sign({ sub: existing._id.toString() });
+    const result = await request(app.getHttpServer()).post('/ai-coach/writing-check').send(writingBody)
+      .auth(token, { type: 'bearer' }).expect(status);
+    expect(result.body).not.toHaveProperty('overallScore');
+    expect(JSON.stringify(result.body)).not.toContain('private provider secret');
+  });
+
+  it('writing preserves numeric percentages including decimals and low/zero values', async () => {
+    const evaluation = { grammarScore: 85.75, vocabularyScore: 0, clarityScore: 7.25,
+      overallScore: 8.5, feedback: 'Useful feedback', improvedVersion: 'A better sentence.',
+      corrections: [{ original: 'a', correction: 'b', explanation: 'why' }] };
+    (global.fetch as jest.Mock).mockResolvedValueOnce({ ok: true,
+      json: async () => ({ candidates: [{ content: { parts: [{ text: JSON.stringify(evaluation) }] } }] }) });
+    const result = await request(app.getHttpServer()).post('/ai-coach/writing-check').send(writingBody)
+      .auth(jwt.sign({ sub: existing._id.toString() }), { type: 'bearer' }).expect(201);
+    expect(result.body).toEqual(evaluation);
+  });
+
+  it.each([null, '85', 101, -1])('invalid writing provider score %s cannot become a fallback score', async value => {
+    (global.fetch as jest.Mock).mockResolvedValueOnce({ ok: true, json: async () => ({ candidates: [{ content: {
+      parts: [{ text: JSON.stringify({ grammarScore: value, vocabularyScore: 80, clarityScore: 80,
+        overallScore: 80, corrections: [], feedback: 'Good', improvedVersion: 'Hello' }) }],
+    } }] }) });
+    await request(app.getHttpServer()).post('/ai-coach/writing-check').send(writingBody)
+      .auth(jwt.sign({ sub: existing._id.toString() }), { type: 'bearer' }).expect(502);
+  });
+
+  it('unconfigured writing returns 503 without calling the provider', async () => {
+    jest.spyOn(app.get(ConfigService), 'get').mockReturnValue(undefined);
+    const result = await request(app.getHttpServer()).post('/ai-coach/writing-check').send(writingBody)
+      .auth(jwt.sign({ sub: existing._id.toString() }), { type: 'bearer' }).expect(503);
+    expect(result.body).not.toHaveProperty('overallScore');
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it.each([null, {}, { candidates: [{ content: { parts: [{ text: 'invalid JSON' }] } }] }])
+  ('malformed provider payload %j returns 502 without scores', async payload => {
+    (global.fetch as jest.Mock).mockResolvedValueOnce({ ok: true, json: async () => payload });
+    const result = await request(app.getHttpServer()).post('/ai-coach/writing-check').send(writingBody)
+      .auth(jwt.sign({ sub: existing._id.toString() }), { type: 'bearer' }).expect(502);
+    expect(result.body).not.toHaveProperty('overallScore');
+  });
+
+  it('progress identity is the JWT MongoDB user ID on reads, completion, and reset', async () => {
+    const id = existing._id.toString();
+    expect((await progressService.getUserProgress(id, 'en')).userId).toBe(id);
+    expect((await progressService.completeLesson(id, 'identity-lesson', 73)).data.userId).toBe(id);
+    expect((await progressService.resetProgress(id)).userId).toBe(id);
+  });
+
+  it('history returns the most recent fifty messages in chronological order and remains owner/language scoped', async () => {
+    const id = existing._id.toString();
+    await messages.create(Array.from({ length: 60 }, (_, index) => ({ userId: id, targetLanguage: 'en',
+      role: 'user', message: String(index), createdAt: new Date(1700000000000 + index * 1000) })));
+    await messages.create([{ userId: id, targetLanguage: 'de', role: 'user', message: 'Other language' },
+      { userId: new Types.ObjectId().toString(), targetLanguage: 'en', role: 'user', message: 'Other owner' }]);
+    const result = await request(app.getHttpServer()).get('/ai-coach/history').query({ targetLanguage: 'en' })
+      .auth(jwt.sign({ sub: id }), { type: 'bearer' }).expect(200);
+    expect(result.body.map(item => item.message)).toEqual(Array.from({ length: 50 }, (_, i) => String(i + 10)));
+  });
+
 });

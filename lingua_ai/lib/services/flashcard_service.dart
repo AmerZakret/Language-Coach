@@ -213,7 +213,7 @@ class FlashcardService extends ChangeNotifier {
           operationId: operationId,
         );
         if (!isCurrent()) return;
-        _cards.add(newCard);
+        if (newCard.card != null) _cards.add(newCard.card!);
         await _saveLocal();
       } catch (e) {
         if (!isCurrent()) return;
@@ -319,8 +319,10 @@ class FlashcardService extends ChangeNotifier {
         );
         if (!isCurrent()) return;
         final index = _cards.indexWhere((c) => c.id == cardId);
-        if (index != -1) {
-          _cards[index] = updatedCard;
+        if (updatedCard.card == null) {
+          _cards.removeWhere((c) => c.id == cardId);
+        } else if (index != -1) {
+          _cards[index] = updatedCard.card!;
         }
         await _saveLocal();
         return;
@@ -438,10 +440,12 @@ class FlashcardService extends ChangeNotifier {
         final updatedCard = await _apiService.reviewCard(card.id, score, operationId: operationId);
         if (!isCurrent()) return;
         final index = _cards.indexWhere((c) => c.id == card.id);
-        if (index != -1) {
-          _cards[index] = updatedCard;
+        if (updatedCard.card == null) {
+          _cards.removeWhere((c) => c.id == card.id);
+        } else if (index != -1) {
+          _cards[index] = updatedCard.card!;
         } else {
-          _cards.add(updatedCard);
+          _cards.add(updatedCard.card!);
         }
         await _saveLocal();
         return;

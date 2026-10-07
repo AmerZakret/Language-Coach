@@ -12,7 +12,7 @@ const deferred = () => {
   const promise = new Promise((done, fail) => { resolve = done; reject = fail; });
   return { promise, resolve, reject };
 };
-const user = id => ({ id, name: id === A ? 'A' : 'B', email: `${id}@example.com`, targetLanguage: 'English' });
+const user = id => ({ id, name: id === A ? 'A' : 'B', email: `${id}@example.com`, targetLanguage: 'en', isGuest: false });
 const progress = (xp = 20) => ({ totalXp: xp, streak: 2, completedLessonIds: [], weeklyActivity: [] });
 const card = id => ({ _id: `card-${id}`, userId: id, targetWord: id,
   turkishTranslation: 'translation', interval: 0, easinessFactor: 2.5,
@@ -89,11 +89,12 @@ function harness(initial = {}) {
     storage: 'utils/progressStorage.ts', types: 'types/progress.ts',
     progress: 'context/ProgressContext.tsx', target: 'context/TargetLanguageContext.tsx',
     cards: 'pages/FlashcardsPage.tsx', queue: 'utils/offlineQueue.ts', authPage: 'components/auth/AuthPage.tsx',
-    profile: 'pages/ProfilePage.tsx', language: 'utils/targetLanguage.ts', mutation: 'utils/flashcardMutation.ts', community: 'pages/CommunityPage.tsx' };
+    profile: 'pages/ProfilePage.tsx', writing: 'pages/WritingPracticePage.tsx', language: 'utils/targetLanguage.ts', mutation: 'utils/flashcardMutation.ts', community: 'pages/CommunityPage.tsx' };
   const exposed = {
     cards: 'fetchCards, handleSaveCard, handleDeleteCard, handleStudyScore, handleOpenAdd, handleOpenEdit, setFormData, allCards, dueCards, loading, error, successMsg, modal, studyResults',
     authPage: 'handleSubmit, setEmail, setPassword, loading, error',
     profile: 'handleSave, setName, saved, resetConfirm, setResetConfirm',
+    writing: 'handleSubmit, setTopic, setText, feedback, error, loading',
     community: 'startEditing, setEditingText, handleUpdatePost',
   };
   function load(name) {
@@ -104,7 +105,10 @@ function harness(initial = {}) {
       .replaceAll('import.meta.env.VITE_API_URL', 'undefined');
     // Expose closed-over handlers/state at the existing render return, without
     // replacing their implementation or adding production test exports.
-    if (exposed[name]) source = source.replace(/\n  return \(\r?\n/, `\n  globalThis.__capture({${exposed[name]}});\n  return (\n`);
+    if (name === 'writing') {
+      const position = source.lastIndexOf('\n  return (');
+      source = source.slice(0, position) + `\n  globalThis.__capture({${exposed[name]}});` + source.slice(position);
+    } else if (exposed[name]) source = source.replace(/\n  return \(\r?\n/, `\n  globalThis.__capture({${exposed[name]}});\n  return (\n`);
     const compiled = ts.transpileModule(source, { compilerOptions: {
       module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX,
       esModuleInterop: true, target: ts.ScriptTarget.ES2020,
@@ -125,6 +129,8 @@ function harness(initial = {}) {
         if (path.endsWith('/queueSession')) return load('queueSession');
         if (path.endsWith('/targetLanguage')) return load('language');
         if (path.endsWith('/flashcardMutation')) return load('mutation');
+        if (path.endsWith('/writingTopics')) return h.writingTopics || (h.writingTopics = { writingTopics: { en: { en: ['Topic'] } } });
+        if (path.endsWith('/aiCoachApi')) return { checkWriting: (...args) => h.checkWriting(...args) };
         if (path.endsWith('/communityApi')) return {
           getCommunityPosts: async () => ({ items: h.communityPosts || [] }),
           updateCommunityPost: async (id, body) => { h.calls.push(['community-update', id, body]); },
@@ -141,7 +147,7 @@ function harness(initial = {}) {
         if (path.endsWith('/LanguageContext')) return { useLanguage: () => ({ t: text => text, language: 'en' }) };
         if (path.endsWith('/SoundContext')) return { useSound: () => ({}) };
         if (path.endsWith('/levelUtils')) return { getLevelFromXp: () => 'Beginner' };
-        if (path.endsWith('/ProgressContext')) return { useProgress: () => ({ progress: progress(), resetProgress: () => h.resetProgress() }) };
+        if (path.endsWith('/ProgressContext')) return { useProgress: () => ({ progress: progress(), resetProgress: () => h.resetProgress(), addXp: xp => calls.push(['xp', xp]) }) };
         if (path.endsWith('/authApi')) return new Proxy({}, { get: (_, method) => (...args) => api[method](...args) });
         if (path.endsWith('/progressApi')) return {
           fetchProgress: (id, lang) => { calls.push(['fetch', id, lang]); return h.fetchProgress(id, lang); },
@@ -798,4 +804,70 @@ test('Phase 5C: web image posts allow clearing their caption, text-only posts do
   h.child.exposed.setEditingText(''); h.child.render();
   await h.child.exposed.handleUpdatePost('text');
   assert.equal(h.calls.filter(call => call[0] === 'community-update').length, 1);
+});
+
+for (const backendGuest of [false, true]) {
+  test(`Phase 5E: restored current-token 401 signs out without deleting owner data (guest: ${backendGuest})`, async () => {
+    const restored = { ...user(A), isGuest: backendGuest,
+      email: backendGuest ? 'guest-a@guest.lingua.local' : user(A).email };
+    const ownerKey = `linguaai_offline_queue_${backendGuest ? 'guest' : 'registered'}_${A}`;
+    const h = harness({ linguaai_user: JSON.stringify(restored), linguaai_token: `test-${A}`,
+      ...(backendGuest ? { linguaai_is_guest: 'true' } : {}), [ownerKey]: 'preserved-owner-data' });
+    h.api.fetchMe = async () => { throw { response: { status: 401 } }; };
+    h.mountAuth(); await h.settle();
+    assert.equal(h.auth().user, null); assert.equal(h.auth().token, null);
+    assert.equal(h.auth().isGuest, false); assert.equal(h.auth().loading, false);
+    assert.equal(h.localStorage.getItem(ownerKey), 'preserved-owner-data');
+  });
+}
+test('Phase 5E: stale startup 401 cannot invalidate a replacement session', async () => {
+  const h = harness({ linguaai_user: JSON.stringify(user(A)), linguaai_token: `test-${A}` });
+  const pending = deferred(); h.api.fetchMe = () => pending.promise;
+  h.mountAuth(); h.login(B);
+  pending.reject({ response: { status: 401 } }); await h.settle();
+  assert.equal(h.auth().user.id, B); assert.equal(h.auth().token, `test-${B}`);
+});
+test('Phase 5E: local_guest restoration never sends a token validation request', async () => {
+  const local = { id: 'guest', name: 'Guest User', email: 'guest@lingua.ai', isGuest: true };
+  const h = harness({ linguaai_user: JSON.stringify(local), linguaai_is_guest: 'true' });
+  let calls = 0; h.api.fetchMe = async () => { calls++; throw { response: { status: 401 } }; };
+  h.mountAuth(); await h.settle();
+  assert.equal(calls, 0); assert.equal(h.auth().isGuest, true); assert.equal(h.auth().token, null);
+  assert.equal(h.load('queueSession').getOfflineQueueSession().ownerNamespace, 'local_guest');
+});
+
+async function writingHarness() {
+  const h = harness(); h.mountAuth(); h.login(A); h.isOffline = false;
+  h.mount('writing', 'WritingPracticePage'); await h.settle();
+  h.child.exposed.setTopic('Topic'); h.child.exposed.setText('A sufficiently long writing sample.');
+  h.child.render(); return h;
+}
+
+test('Phase 5E: web displays the actual zero score and retains valid feedback', async () => {
+  const h = await writingHarness();
+  h.checkWriting = async () => ({ grammarScore: 85.75, vocabularyScore: 80, clarityScore: 70,
+    overallScore: 0, feedback: 'Useful feedback', improvedVersion: 'Better text', corrections: [] });
+  await h.child.exposed.handleSubmit(); await h.settle();
+  assert.equal(h.child.exposed.feedback.assessment, 'Useful feedback');
+  function findScore(node) {
+    if (!node || typeof node !== 'object') return;
+    if (node.props?.style?.fontSize === '38px') return node.props.children;
+    for (const child of [node.props?.children].flat(Infinity)) {
+      const found = findScore(child); if (found !== undefined) return found;
+    }
+  }
+  assert.equal(findScore(h.child.result), 0);
+  assert.deepEqual(h.calls.filter(call => call[0] === 'xp'), [['xp', 10]]);
+});
+
+test('Phase 5E: stale writing failure cannot change the replacement session UI', async () => {
+  const h = await writingHarness(); const pending = deferred();
+  h.checkWriting = () => pending.promise;
+  const request = h.child.exposed.handleSubmit(); h.child.render();
+  h.login(B); h.child.render(); await h.settle();
+  pending.reject({ response: { status: 503, data: { message: 'Writing evaluation is temporarily unavailable. Please try again.' } } });
+  await request; await h.settle();
+  assert.equal(h.child.exposed.error, ''); assert.equal(h.child.exposed.loading, false);
+  assert.equal(h.child.exposed.feedback, null);
+  assert.equal(h.calls.some(call => call[0] === 'xp'), false);
 });

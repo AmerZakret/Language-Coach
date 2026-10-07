@@ -192,7 +192,7 @@ void main() {
         () => MockClient((request) async {
               languages
                   .add(jsonDecode(request.body)['targetLanguage'] as String);
-              return http.Response('{"_id":"card","targetLanguage":"de"}', 200);
+              return http.Response('{"_id":"card"}', 200);
             }));
     expect(languages, ['German', 'de']);
   });

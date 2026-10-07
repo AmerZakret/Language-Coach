@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import type { User } from '../types/auth';
 import { fetchMe } from '../api/authApi';
-import { advanceOfflineQueueSession, ensureOfflineQueueSessionRevision, getOfflineQueueSession, isSessionCurrent } from '../utils/queueSession';
+import { advanceOfflineQueueSession, ensureOfflineQueueSessionRevision, getOfflineQueueSession, isSessionCurrent, onSessionInvalidated, invalidateCurrentSession } from '../utils/queueSession';
 import { getUserProgressKey } from '../utils/userKey';
 
 interface AuthContextType {
@@ -23,7 +23,7 @@ const localGuestUser: User = {
 function isBackendGuestUser(value: unknown): value is User {
   if (!value || typeof value !== 'object') return false;
   const guest = value as Partial<User>;
-  return typeof guest.id === 'string' && /^[a-f\d]{24}$/i.test(guest.id)
+  return guest.isGuest === true && typeof guest.id === 'string' && /^[a-f\d]{24}$/i.test(guest.id)
     && typeof guest.name === 'string' && typeof guest.email === 'string'
     && guest.email.toLowerCase().endsWith('@guest.lingua.local');
 }
@@ -38,6 +38,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     lifecycle.current.mounted = true;
     let cancelled = false;
+    const unsubscribe = onSessionInvalidated(() => {
+      if (!lifecycle.current.mounted) return;
+      lifecycle.current.attempt++;
+      setUser(null); setToken(null); setIsGuest(false); setLoading(false);
+    });
     const initializeAuth = async () => {
       ensureOfflineQueueSessionRevision();
       const storedUser = localStorage.getItem('linguaai_user');
@@ -57,8 +62,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           // Incomplete guest state must never retain backend authorization.
         }
         if (storedToken?.trim() && isBackendGuestUser(restoredGuest)) {
-          setUser({ ...restoredGuest, isGuest: true });
+          setUser(restoredGuest);
           setToken(storedToken);
+          try {
+            const me = await fetchMe();
+            if (!sessionUnchanged()) return;
+            setUser(me); setIsGuest(me.isGuest);
+            if (me.isGuest) localStorage.setItem('linguaai_is_guest', 'true');
+            else localStorage.removeItem('linguaai_is_guest');
+            localStorage.setItem('linguaai_user', JSON.stringify(me));
+          } catch (error) {
+            if (!sessionUnchanged()) return;
+            if ((error as { response?: { status?: number } }).response?.status === 401) {
+              invalidateCurrentSession(session); return;
+            }
+          }
         } else {
           localStorage.removeItem('linguaai_token');
           localStorage.setItem('linguaai_user', JSON.stringify(localGuestUser));
@@ -71,20 +89,28 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           const me = await fetchMe();
           // Never pair an old profile's owner ID with the new session's token.
           if (!sessionUnchanged()) return;
-          const mergedUser = { ...me, isGuest: false };
+          const mergedUser = me;
+          setIsGuest(me.isGuest);
+          if (me.isGuest) localStorage.setItem('linguaai_is_guest', 'true');
+          else localStorage.removeItem('linguaai_is_guest');
           setUser(mergedUser);
           localStorage.setItem('linguaai_user', JSON.stringify(mergedUser));
         } catch (e) {
           if (!sessionUnchanged()) return;
-          // Fall back to local storage user if offline/error
+          if ((e as { response?: { status?: number } }).response?.status === 401) {
+            invalidateCurrentSession(session); return;
+          }
+          // Retain the cached owner only for non-authoritative failures.
           if (storedUser) {
             try {
               setUser(JSON.parse(storedUser));
             } catch {
               localStorage.removeItem('linguaai_user');
               localStorage.removeItem('linguaai_token');
+              setUser(null); setToken(null);
             }
           } else {
+            setUser(null); setToken(null);
             localStorage.removeItem('linguaai_token');
           }
         }
@@ -99,23 +125,24 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     };
 
     initializeAuth();
-    return () => { cancelled = true; lifecycle.current.mounted = false; lifecycle.current.attempt++; };
+    return () => { unsubscribe(); cancelled = true; lifecycle.current.mounted = false; lifecycle.current.attempt++; };
   }, []);
 
   const login = (newUser: User, newToken: string) => {
     if (!lifecycle.current.mounted) return;
     const current = getOfflineQueueSession();
-    if (current.ownerNamespace !== getUserProgressKey(newUser, false, newToken)
+    if (current.ownerNamespace !== getUserProgressKey(newUser, newUser.isGuest, newToken)
       || current.token !== newToken) {
       lifecycle.current.attempt++;
       advanceOfflineQueueSession();
     }
     localStorage.setItem('linguaai_user', JSON.stringify(newUser));
     localStorage.setItem('linguaai_token', newToken);
-    localStorage.removeItem('linguaai_is_guest');
+    if (newUser.isGuest) localStorage.setItem('linguaai_is_guest', 'true');
+    else localStorage.removeItem('linguaai_is_guest');
     setUser(newUser);
     setToken(newToken);
-    setIsGuest(false);
+    setIsGuest(newUser.isGuest);
     setLoading(false);
   };
 
@@ -139,7 +166,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         || typeof data.access_token !== 'string' || !data.access_token.trim()) {
         throw new Error('Guest login returned an incomplete session');
       }
-      guestUser = { ...data.user, isGuest: true };
+      guestUser = data.user;
       guestToken = data.access_token;
     } catch {
       // Backend unavailable or invalid response: use a local guest without a token.

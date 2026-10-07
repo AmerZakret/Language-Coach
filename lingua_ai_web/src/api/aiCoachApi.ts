@@ -46,6 +46,7 @@ export interface WritingCorrectionRequest {
   targetLanguage: TargetLanguage | TargetLanguageCode;
 }
 
+// Percentage scores (0-100) may include decimals.
 export interface WritingCorrectionResponse {
   grammarScore: number;
   vocabularyScore: number;
@@ -58,5 +59,15 @@ export interface WritingCorrectionResponse {
 
 export const checkWriting = async (data: WritingCorrectionRequest): Promise<WritingCorrectionResponse> => {
   const response = await apiClient.post<WritingCorrectionResponse>('/ai-coach/writing-check', { ...data, targetLanguage: targetLanguageCode(data.targetLanguage) });
-  return response.data;
+  const result = response.data;
+  if (!result || ['grammarScore', 'vocabularyScore', 'clarityScore', 'overallScore'].some(field => {
+    const value = result[field as keyof WritingCorrectionResponse];
+    return typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 100;
+  }) || typeof result.feedback !== 'string' || typeof result.improvedVersion !== 'string'
+      || !Array.isArray(result.corrections)
+      || result.corrections.some(item => !item || ['original', 'correction', 'explanation']
+          .some(field => typeof item[field as keyof typeof item] !== 'string'))) {
+    throw new Error('The server returned an invalid writing evaluation.');
+  }
+  return result;
 };

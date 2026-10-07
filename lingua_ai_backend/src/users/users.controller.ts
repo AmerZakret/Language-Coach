@@ -1,4 +1,4 @@
-import { tryTargetLanguage } from '../common/target-language';
+import { serializeUser } from './user-response';
 import { Body, Controller, Get, Patch, Req, UseGuards, NotFoundException } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -12,15 +12,7 @@ export class UsersController {
   @Get('me')
   async getMe(@Req() req: any) {
     const user = req.user;
-    return {
-      id: user._id.toString(),
-      name: user.name,
-      email: user.email,
-      level: user.level,
-      totalXp: user.totalXp,
-      streak: user.streak,
-      targetLanguage: tryTargetLanguage(user.targetLanguage) ?? user.targetLanguage ?? 'en',
-    };
+    return serializeUser(user);
   }
 
   @Patch('profile')
@@ -37,14 +29,6 @@ export class UsersController {
     if (!updatedUser) {
       throw new NotFoundException('User profile not found');
     }
-    return {
-      id: updatedUser._id.toString(),
-      name: updatedUser.name,
-      email: updatedUser.email,
-      level: updatedUser.level,
-      totalXp: updatedUser.totalXp,
-      streak: updatedUser.streak,
-      targetLanguage: tryTargetLanguage(updatedUser.targetLanguage) ?? updatedUser.targetLanguage ?? 'en',
-    };
+    return serializeUser(updatedUser);
   }
 }

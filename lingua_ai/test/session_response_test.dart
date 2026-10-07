@@ -46,7 +46,7 @@ void main() {
     final path = request.url.path;
     Object body = {};
     if (path.endsWith('/users/me')) {
-      body = {'id': id, 'name': 'refreshed', 'email': '$id@example.com'};
+      body = {'id': id, 'name': 'refreshed', 'email': '$id@example.com', 'isGuest': false, 'targetLanguage': 'en'};
     } else if (path.endsWith('/all')) {
       body = [card(id)];
     } else if (path.contains('/flashcards') && request.method != 'DELETE') {
@@ -156,7 +156,7 @@ void main() {
       await login(b);
       final version = auth.sessionVersion;
       release.complete(http.Response(
-          jsonEncode({'id': a, 'name': 'stale A', 'email': 'a@example.com'}),
+          jsonEncode({'id': a, 'name': 'stale A', 'email': 'a@example.com', 'isGuest': false, 'targetLanguage': 'en'}),
           200));
       await pending;
       expect(auth.currentUserId, b);
@@ -240,7 +240,7 @@ void main() {
             match: (r) =>
                 r.method == 'GET' &&
                 r.url.path.contains('/progress/') &&
-                r.url.query.contains('English'),
+                r.url.queryParameters['targetLanguage'] == 'en',
             operation: progress.syncWithBackend,
             response: {
               'stats': {'totalXp': 999},
@@ -253,7 +253,7 @@ void main() {
       () => race(
             match: (r) => r.url.path.endsWith('/users/profile'),
             operation: () => language.setLanguage('en'),
-            response: {},
+            response: {'id': a, 'name': 'A', 'email': 'a@example.com', 'isGuest': false, 'targetLanguage': 'en'},
           ));
   test('pending restoration cannot replace a newly established B session',
       () async {
@@ -296,7 +296,7 @@ void main() {
       () => race(
             match: (r) => r.url.path.endsWith('/users/profile'),
             operation: () => language.setLanguage('en'),
-            response: {},
+            response: {'id': a, 'name': 'A', 'email': 'a@example.com', 'isGuest': false, 'targetLanguage': 'en'},
             languageSwitch: true,
           ));
   test('current session progress and card requests still apply normally',

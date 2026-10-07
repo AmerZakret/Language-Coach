@@ -5,7 +5,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:lingua_ai/services/auth_service.dart';
 import 'package:lingua_ai/services/offline_queue_service.dart';
 import 'package:lingua_ai/services/flashcard_api_service.dart';
-import 'package:lingua_ai/models/flashcard.dart';
 import 'offline_queue_ownership_test.dart' show FakeProgressApi;
 
 class DurableCardsApi extends FlashcardApiService {
@@ -15,7 +14,7 @@ class DurableCardsApi extends FlashcardApiService {
   Completer<void>? started;
   Completer<void>? release;
   @override
-  Future<Flashcard> createFlashcard(String targetWord,
+  Future<FlashcardMutationResult> createFlashcard(String targetWord,
       String turkishTranslation, String targetLanguage,
       {String? nativeLanguage,
       String? nativeTranslation,
@@ -25,11 +24,11 @@ class DurableCardsApi extends FlashcardApiService {
     calls.add({'type': 'create', 'word': targetWord, 'note': note});
     started?.complete();
     if (release != null) await release!.future;
-    return Flashcard.fromJson({'_id': 'mongo-real'});
+    return FlashcardMutationResult.fromJson({'_id': 'mongo-real'});
   }
 
   @override
-  Future<Flashcard> updateFlashcard(
+  Future<FlashcardMutationResult> updateFlashcard(
       String cardId, String? targetWord, String? turkishTranslation,
       {String? targetLanguage,
       String? nativeLanguage,
@@ -39,7 +38,7 @@ class DurableCardsApi extends FlashcardApiService {
       String? operationId, bool preserveLegacyLanguage = false}) async {
     calls.add({'type': 'update', 'id': cardId});
     if (failUpdate) throw StateError('Update unavailable');
-    return Flashcard.fromJson({'_id': cardId});
+    return FlashcardMutationResult.fromJson({'_id': cardId});
   }
 
   @override
@@ -48,11 +47,11 @@ class DurableCardsApi extends FlashcardApiService {
   }
 
   @override
-  Future<Flashcard> reviewCard(String cardId, int score,
+  Future<FlashcardMutationResult> reviewCard(String cardId, int score,
       {String? operationId}) async {
     calls.add({'type': 'review', 'id': cardId, 'score': score});
     if (failReview) throw StateError('Review unavailable');
-    return Flashcard.fromJson({'_id': cardId});
+    return FlashcardMutationResult.fromJson({'_id': cardId});
   }
 }
 

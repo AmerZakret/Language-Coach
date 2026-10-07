@@ -74,7 +74,7 @@ export class ProgressService {
     }
 
     return {
-      userId: user.email,
+      userId: user._id.toString(),
       stats: {
         totalXp,
         streak: user.streak,
@@ -129,7 +129,7 @@ export class ProgressService {
           await this.progressModel.updateOne({ _id: existing._id }, { $max: { score } }, { session });
         }
         return { message: 'Lesson marked as completed', data: {
-          userId: user.email, lessonId, score: Math.max(score, existing?.score ?? score),
+          userId: user._id.toString(), lessonId, score: Math.max(score, existing?.score ?? score),
           xpEarned, newTotalXp: this.languageXp(user, lang),
         } };
       }, { readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' } });
@@ -157,7 +157,7 @@ export class ProgressService {
         await this.userModel.updateOne({ _id: user._id }, { $set: {
           totalXp: 0, streak: 0, level: 'Beginner', xpPerLanguage: {}, levelPerLanguage: {},
         } }, { session });
-        return { message: 'Progress successfully reset', userId: user.email };
+        return { message: 'Progress successfully reset', userId: user._id.toString() };
       }, { readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' } });
     } finally { await session.endSession(); }
   }

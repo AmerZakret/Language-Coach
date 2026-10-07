@@ -1,4 +1,4 @@
-import { tryTargetLanguage } from '../common/target-language';
+import { serializeUser } from '../users/user-response';
 import { Injectable, UnauthorizedException, ConflictException, BadRequestException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { randomUUID } from 'node:crypto';
@@ -42,15 +42,7 @@ export class AuthService {
     const payload = { email: user.email, sub: user._id.toString() };
     return {
       access_token: this.jwtService.sign(payload),
-      user: {
-        id: user._id.toString(),
-        name: user.name,
-        email: user.email,
-        level: user.level,
-        totalXp: user.totalXp,
-        streak: user.streak,
-        targetLanguage: tryTargetLanguage(user.targetLanguage) ?? user.targetLanguage ?? 'en',
-      },
+      user: serializeUser(user),
     };
   }
 
@@ -79,15 +71,7 @@ export class AuthService {
     const payload = { email: user.email, sub: user._id.toString() };
     return {
       access_token: this.jwtService.sign(payload),
-      user: {
-        id: user._id.toString(),
-        name: user.name,
-        email: user.email,
-        level: user.level,
-        totalXp: user.totalXp,
-        streak: user.streak,
-        targetLanguage: tryTargetLanguage(user.targetLanguage) ?? user.targetLanguage ?? 'en',
-      },
+      user: serializeUser(user),
     };
   }
 
@@ -107,16 +91,7 @@ export class AuthService {
     const payload = { email: user.email, sub: user._id.toString() };
     return {
       access_token: this.jwtService.sign(payload),
-      user: {
-        id: user._id.toString(),
-        name: user.name,
-        email: user.email,
-        level: user.level,
-        totalXp: user.totalXp,
-        streak: user.streak,
-        targetLanguage: tryTargetLanguage(user.targetLanguage) ?? user.targetLanguage ?? 'en',
-        isGuest: true,
-      },
+      user: serializeUser(user),
     };
   }
 }

@@ -193,7 +193,7 @@ describe('Phase 5C validation and mutation contracts', () => {
       await request(app.getHttpServer()).post('/ai-coach/chat').send({ message: 'Hello', language: 'en', targetLanguage: value })
         .auth(token, { type: 'bearer' }).expect(201);
       await request(app.getHttpServer()).post('/ai-coach/writing-check')
-        .send({ topic: 'Greeting', text: 'Hello', language: 'en', targetLanguage: value }).auth(token, { type: 'bearer' }).expect(201);
+        .send({ topic: 'Greeting', text: 'Hello', language: 'en', targetLanguage: value }).auth(token, { type: 'bearer' }).expect(503);
       await request(app.getHttpServer()).post('/pronunciation/assess').field('targetText', 'Hello')
         .field('targetLanguage', value).attach('audio', Buffer.from('fixture'), 'audio.wav').auth(token, { type: 'bearer' }).expect(201);
     }
