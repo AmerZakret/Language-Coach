@@ -180,11 +180,11 @@ class ProgressService extends ChangeNotifier {
       if (!isCurrent()) return;
       final revision = await queue.progressRevision(owner);
       if (!isCurrent()) return;
-      final response = await _apiService.getProgress(
-          userId, language);
+      final response = await _apiService.getProgress(userId, language);
       if (!isCurrent()) return;
       await queue.saveServerProgress(
-          owner, language, revision, ProgressSnapshot.fromServer(response));
+          owner, language, revision, ProgressSnapshot.fromServer(response),
+          isCurrent: isCurrent);
       if (!isCurrent()) return;
     } catch (e) {
       if (!isCurrent()) return;
@@ -202,6 +202,8 @@ class ProgressService extends ChangeNotifier {
     final queue = OfflineQueueService();
     if (_completedLessonIds.contains(lessonId)) return;
     if (auth.token.isNotEmpty) {
+      final epoch = await queue.epochForNewProgress(owner);
+      if (!isCurrent()) return;
       // Persist the score, reward and language before the first request. The
       // queue supplies the same operation ID on every ambiguous retry.
       await queue.pushAction(
@@ -209,6 +211,7 @@ class ProgressService extends ChangeNotifier {
           {
             'lessonId': lessonId,
             'score': score,
+            'progressEpoch': epoch,
             'xpReward': xpReward,
             'targetLanguage': language,
           },
@@ -259,9 +262,13 @@ class ProgressService extends ChangeNotifier {
     final auth = AuthService();
     final owner = auth.localStorageNamespace;
     if (auth.token.isNotEmpty) {
+      final epoch = await OfflineQueueService()
+          .epochForNewProgress(owner, forReset: true);
+      if (!isCurrent()) return;
       await OfflineQueueService().pushAction(
           'reset-progress',
           {
+            'expectedEpoch': epoch,
             'legacyOwnerNamespace': auth.legacyRegisteredStorageNamespace,
           },
           ownerNamespace: owner);

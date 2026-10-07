@@ -99,8 +99,8 @@ describe('Phase 5A JWT domain identity', () => {
     ['flashcard listing', id => flashcards.getAll(id, 'en')],
     ['due flashcards', id => flashcards.getDueCards(id, 'en')],
     ['progress reading', id => progressService.getUserProgress(id, 'en')],
-    ['progress completion', id => progressService.completeLesson(id, 'identity-lesson', 73)],
-    ['progress reset', id => progressService.resetProgress(id)],
+    ['progress completion', id => progressService.completeLesson(id, 'identity-lesson', 73, 0)],
+    ['progress reset', id => progressService.resetProgress(id, 0, 'identity-reset')],
     ['AI chat', id => coach.sendMessage(id, 'Hello', 'en', 'en')],
     ['AI writing', id => coach.checkWriting(id, writingBody.topic, writingBody.text, 'en', 'en')],
     ['AI history', id => coach.getHistory(id, 'en')],
@@ -157,7 +157,7 @@ describe('Phase 5A JWT domain identity', () => {
     expect((await request(api).get('/flashcards/all')
       .auth(b.access_token, { type: 'bearer' }).expect(200)).body).toEqual([]);
     await request(api).post(`/progress/${b.user.id}/complete-lesson`)
-      .send({ lessonId: 'identity-lesson', score: 73 }).auth(a.access_token, { type: 'bearer' }).expect(201);
+      .send({ lessonId: 'identity-lesson', score: 73, progressEpoch: 0 }).auth(a.access_token, { type: 'bearer' }).expect(201);
     expect((await progress.findOne())?.userId.toString()).toBe(a.user.id);
     const chat = await request(api).post('/ai-coach/chat').send(chatBody)
       .auth(a.access_token, { type: 'bearer' }).expect(201);
@@ -291,8 +291,8 @@ describe('Phase 5A JWT domain identity', () => {
   it('progress identity is the JWT MongoDB user ID on reads, completion, and reset', async () => {
     const id = existing._id.toString();
     expect((await progressService.getUserProgress(id, 'en')).userId).toBe(id);
-    expect((await progressService.completeLesson(id, 'identity-lesson', 73)).data.userId).toBe(id);
-    expect((await progressService.resetProgress(id)).userId).toBe(id);
+    expect((await progressService.completeLesson(id, 'identity-lesson', 73, 0)).data.userId).toBe(id);
+    expect((await progressService.resetProgress(id, 0, 'identity-reset')).userId).toBe(id);
   });
 
   it('history returns the most recent fifty messages in chronological order and remains owner/language scoped', async () => {
@@ -304,6 +304,25 @@ describe('Phase 5A JWT domain identity', () => {
     const result = await request(app.getHttpServer()).get('/ai-coach/history').query({ targetLanguage: 'en' })
       .auth(jwt.sign({ sub: id }), { type: 'bearer' }).expect(200);
     expect(result.body.map(item => item.message)).toEqual(Array.from({ length: 50 }, (_, i) => String(i + 10)));
+  });
+
+  it('6A: HTTP validates epoch/reset key and rejects stale/future work under JWT ownership', async () => {
+    const id = existing._id.toString();
+    const token = jwt.sign({ sub: id, email: existing.email });
+    const api = app.getHttpServer();
+    const complete = (body: any) => request(api).post(`/progress/ignored-owner/complete-lesson`).auth(token, { type: 'bearer' }).send(body);
+    await complete({ lessonId: 'identity-lesson', score: 73 }).expect(400);
+    await complete({ lessonId: 'identity-lesson', score: 73, progressEpoch: -1 }).expect(400);
+    await complete({ lessonId: 'identity-lesson', score: 73, progressEpoch: 0, unexpected: true }).expect(400);
+    await request(api).delete(`/progress/ignored-owner`).auth(token, { type: 'bearer' }).send({ expectedEpoch: 0 }).expect(400);
+    await request(api).delete(`/progress/ignored-owner`).auth(token, { type: 'bearer' }).set('X-Idempotency-Key', 'http-reset').send({}).expect(400);
+    const reset = await request(api).delete(`/progress/ignored-owner`).auth(token, { type: 'bearer' }).set('X-Idempotency-Key', 'http-reset').send({ expectedEpoch: 0 }).expect(200);
+    expect(reset.body).toMatchObject({ userId: id, progressEpoch: 1 });
+    expect((await complete({ lessonId: 'identity-lesson', score: 73, progressEpoch: 0 }).expect(409)).body.code).toBe('STALE_PROGRESS_EPOCH');
+    expect((await complete({ lessonId: 'identity-lesson', score: 73, progressEpoch: 2 }).expect(409)).body.code).toBe('FUTURE_PROGRESS_EPOCH');
+    await complete({ lessonId: 'identity-lesson', score: 73, progressEpoch: 1 }).expect(201);
+    await request(api).delete(`/progress/ignored-owner`).auth(token, { type: 'bearer' }).set('X-Idempotency-Key', 'http-reset').send({ expectedEpoch: 0 }).expect(200);
+    expect((await users.findById(id))?.totalXp).toBe(25);
   });
 
 });

@@ -2,6 +2,27 @@ import type { ProgressState } from '../types/progress';
 import { DEFAULT_PROGRESS } from '../types/progress';
 import type { TargetLanguage } from '../types/language';
 
+export const validProgressEpoch = (epoch: unknown): epoch is number =>
+  typeof epoch === 'number' && Number.isSafeInteger(epoch) && epoch >= 0;
+const epochKey = (owner: string) => `progress_epoch_${owner}`;
+export function getOwnerProgressEpoch(owner: string): number | undefined {
+  if (owner === 'local_guest') return undefined;
+  const raw = localStorage.getItem(epochKey(owner));
+  if (raw === null || !/^(0|[1-9]\d*)$/.test(raw)) return undefined;
+  const value = Number(raw);
+  return validProgressEpoch(value) ? value : undefined;
+}
+// Called only under the existing session guard / synchronous queue mutation.
+export function acknowledgeProgressEpoch(owner: string, epoch: unknown): boolean {
+  if (owner === 'local_guest' || !validProgressEpoch(epoch)) return false;
+  const current = getOwnerProgressEpoch(owner);
+  if (current !== undefined && epoch < current) return false;
+  if (current === epoch) return true;
+  resetOwnerProgress(owner);
+  localStorage.setItem(epochKey(owner), String(epoch));
+  return true;
+}
+
 export const getProgressStorageKey = (userKey: string, targetLanguage: TargetLanguage): string => {
   return `progress_${userKey}_${targetLanguage}`;
 };
@@ -55,7 +76,8 @@ export function overlayPendingProgress(base: ProgressState, payloads: any[], res
 }
 
 export function acknowledgeCompletion(owner: string, payload: any, result: any): void {
-  if (!payload.targetLanguage || typeof result?.newTotalXp !== 'number') return;
+  if (!payload.targetLanguage || typeof result?.newTotalXp !== 'number'
+    || !acknowledgeProgressEpoch(owner, result?.progressEpoch)) return;
   const language = payload.targetLanguage as TargetLanguage;
   const base = loadProgress(owner, language);
   saveProgress(owner, language, { ...base, totalXp: result.newTotalXp,

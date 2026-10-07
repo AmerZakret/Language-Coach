@@ -40,7 +40,7 @@ describe('Completion and XP consistency (real disposable transactions)', () => {
     })));
   });
   afterAll(async () => { await module?.close(); await replica?.stop(); });
-  const complete = (lesson = 'one', score = 73) => service.completeLesson(user._id.toString(), lesson, score);
+  const complete = (lesson = 'one', score = 73) => service.completeLesson(user._id.toString(), lesson, score, 0);
 
   it('preserves 73, awards first completion once, and safely retries a lost response', async () => {
     expect((await complete())?.data.xpEarned).toBe(50);
@@ -50,7 +50,7 @@ describe('Completion and XP consistency (real disposable transactions)', () => {
     expect((await users.findById(user._id))?.totalXp).toBe(50);
   });
   it('higher score improves without XP; lower retry cannot reduce score', async () => {
-    await complete(); await complete('one', 91); await complete('one', 20);
+    await complete(); await complete('one', 91); await complete('one', 20, 0);
     expect((await progress.findOne({ lessonId: 'one' }))?.score).toBe(91);
     expect((await users.findById(user._id))?.totalXp).toBe(50);
   });
@@ -91,7 +91,7 @@ describe('Completion and XP consistency (real disposable transactions)', () => {
   it('different languages and users keep independent aggregates and unchanged thresholds', async () => {
     await Promise.all([complete('one'), complete('german')]);
     const b = await users.create({ name: 'B', email: 'b@example.com', passwordHash: 'fixture' });
-    await service.completeLesson(b._id.toString(), 'one', 20);
+    await service.completeLesson(b._id.toString(), 'one', 20, 0);
     const saved = (await users.findById(user._id))!;
     expect(saved.totalXp).toBe(100);
     expect(saved.xpPerLanguage.get('en')).toBe(50); expect(saved.xpPerLanguage.get('de')).toBe(50);
@@ -102,9 +102,9 @@ describe('Completion and XP consistency (real disposable transactions)', () => {
   it('reset rolls back on failure and atomically clears completions and all XP on success', async () => {
     await complete();
     jest.spyOn(users, 'updateOne').mockImplementationOnce(() => { throw new Error('reset failed'); });
-    await expect(service.resetProgress(user._id.toString())).rejects.toThrow('reset failed');
+    await expect(service.resetProgress(user._id.toString(), 0, 'reset-test')).rejects.toThrow('reset failed');
     expect(await progress.countDocuments()).toBe(1); expect((await users.findById(user._id))?.totalXp).toBe(50);
-    await service.resetProgress(user._id.toString());
+    await service.resetProgress(user._id.toString(), 0, 'reset-test');
     expect(await progress.countDocuments()).toBe(0); expect((await users.findById(user._id))?.totalXp).toBe(0);
   });
   it('GET reads XP and completion IDs from the same snapshot during a concurrent award', async () => {
@@ -127,4 +127,51 @@ describe('Completion and XP consistency (real disposable transactions)', () => {
     expect(current.stats.totalXp).toBe(50); expect(current.completedLessons).toHaveLength(1);
   });
 
+  it('6A: missing epoch is zero; stale/future/epoch-less completions cannot repopulate reset progress', async () => {
+    await users.collection.updateOne({ _id: user._id }, { $unset: { progressEpoch: '' } });
+    expect((await service.getUserProgress(user._id.toString())).progressEpoch).toBe(0);
+    await complete();
+    const reset = await service.resetProgress(user._id.toString(), 0, 'device-b');
+    expect(reset?.progressEpoch).toBe(1);
+    await expect(complete('two')).rejects.toMatchObject({ status: 409 });
+    await expect(service.completeLesson(user._id.toString(), 'two', 90, 2)).rejects.toMatchObject({ status: 409 });
+    await expect(service.completeLesson(user._id.toString(), 'two', 90, undefined as any)).rejects.toMatchObject({ status: 400 });
+    expect(await progress.countDocuments()).toBe(0);
+    expect((await users.findById(user._id))?.totalXp).toBe(0);
+    expect((await service.completeLesson(user._id.toString(), 'two', 90, 1))?.data.progressEpoch).toBe(1);
+  });
+  it('6A: concurrent/lost reset acknowledgements increment once and cannot delete newer work', async () => {
+    await complete();
+    const resets = await Promise.all(Array.from({ length: 5 }, () => service.resetProgress(user._id.toString(), 0, 'lost-ack')));
+    expect(resets.every(r => r?.progressEpoch === 1)).toBe(true);
+    await service.completeLesson(user._id.toString(), 'two', 90, 1);
+    expect((await service.resetProgress(user._id.toString(), 0, 'lost-ack'))?.progressEpoch).toBe(1);
+    expect((await users.findById(user._id))?.totalXp).toBe(80);
+    expect(await progress.countDocuments()).toBe(1);
+    await expect(service.resetProgress(user._id.toString(), 1, 'lost-ack')).rejects.toMatchObject({ status: 409 });
+    await expect(service.resetProgress(user._id.toString(), 0, 'new-stale')).rejects.toMatchObject({ status: 409 });
+    const b = await users.create({ name: 'B', email: 'b-reset@example.com', passwordHash: 'fixture', isGuest: true });
+    expect((await service.resetProgress(b._id.toString(), 0, 'lost-ack'))?.progressEpoch).toBe(1);
+    expect((await users.findById(user._id))?.progressEpoch).toBe(1);
+  });
+  it('6A: failed reset receipt rolls back and completion/reset overlap cannot resurrect old work', async () => {
+    const original = users.updateOne.bind(users);
+    let reached!: () => void, release!: () => void;
+    const started = new Promise<void>(resolve => { reached = resolve; });
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    jest.spyOn(users, 'updateOne').mockImplementationOnce(((...args: any[]) => {
+      const query = (original as any)(...args);
+      const exec = query.exec.bind(query);
+      query.exec = async () => { reached(); await gate; return exec(); };
+      return query;
+    }) as any);
+    const completion = complete();
+    await started;
+    const reset = service.resetProgress(user._id.toString(), 0, 'racing');
+    release();
+    const outcomes = await Promise.allSettled([completion, reset]);
+    expect(outcomes[1].status).toBe('fulfilled');
+    expect(await progress.countDocuments()).toBe(0);
+    expect((await users.findById(user._id))?.totalXp).toBe(0);
+  });
 });

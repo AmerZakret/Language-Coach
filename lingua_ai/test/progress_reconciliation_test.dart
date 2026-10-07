@@ -22,6 +22,7 @@ void main() {
   late SharedPreferences prefs;
   final serverIds = <String>{};
   var serverXp = 0;
+  var serverEpoch = 0;
   var uploadFails = false;
   var fetchFails = false;
   var resetFails = false;
@@ -62,6 +63,7 @@ void main() {
               'lessonId': payload['lessonId'],
               'score': payload['score'],
               'xpEarned': 50,
+              'progressEpoch': serverEpoch,
               'newTotalXp': serverXp
             }
           }),
@@ -72,10 +74,13 @@ void main() {
       if (resetFails) return http.Response('{}', 503);
       serverIds.clear();
       serverXp = 0;
-      return http.Response('{}', 200);
+      serverEpoch = 0;
+      serverEpoch++;
+      return http.Response(jsonEncode({'progressEpoch': serverEpoch}), 200);
     }
     // Capture the snapshot before the GET await, to reproduce stale snapshots.
     final body = {
+      'progressEpoch': serverEpoch,
       'stats': {'totalXp': serverXp, 'streak': 0},
       'completedLessons':
           serverIds.map((id) => {'lessonId': id, 'score': 73}).toList()
@@ -109,7 +114,10 @@ void main() {
         const MethodChannel('dev.fluttercommunity.plus/connectivity_status'),
         (call) async => null);
     await ConnectivityService().init();
-    SharedPreferences.setMockInitialValues({});
+    SharedPreferences.setMockInitialValues({
+      for (final prefix in ['registered', 'guest'])
+        for (final id in [a, b]) 'progress_epoch_${prefix}_$id': 0
+    });
     await auth.init();
     await language.init();
     await progress.init();
@@ -118,8 +126,14 @@ void main() {
   tearDownAll(() => ConnectivityService().dispose());
   setUp(() async {
     await prefs.clear();
+    for (final prefix in ['registered', 'guest']) {
+      for (final id in [a, b]) {
+        await prefs.setInt('progress_epoch_${prefix}_$id', 0);
+      }
+    }
     serverIds.clear();
     serverXp = 0;
+    serverEpoch = 0;
     uploadFails = false;
     fetchFails = false;
     resetFails = false;
@@ -229,15 +243,19 @@ void main() {
     expect(progress.isLessonCompleted('one'), true);
   });
   test(
-      'offline reset cancels obsolete completion across restart and retains later work',
+      'offline reset cancels obsolete completion; later work waits for acknowledged epoch',
       () async {
     await progress.completeLesson('obsolete', 50, score: 73);
     await progress.resetProgress();
     expect(progress.totalXp, 0);
-    await progress.completeLesson('after-reset', 50, score: 42);
+    await expectLater(progress.completeLesson('after-reset', 50, score: 42),
+        throwsStateError);
     await restart();
     await sync();
+    await progress.completeLesson('after-reset', 50, score: 42);
+    await sync();
     expect(sent.single['lessonId'], 'after-reset');
+    expect(sent.single['progressEpoch'], 1);
     expect(events, ['reset', 'complete']);
     expect(progress.totalXp, 50);
     expect(await queue.getQueue(), isEmpty);
@@ -289,8 +307,8 @@ void main() {
         jsonEncode([
           {'id': 'legacy', 'targetLanguage': 'English', 'xpReward': 50}
         ]));
-    await queue.pushAction(
-        'complete-lesson', {'lessonId': 'legacy', 'score': 73},
+    await queue.pushAction('complete-lesson',
+        {'lessonId': 'legacy', 'score': 73, 'progressEpoch': 0},
         ownerNamespace: auth.localStorageNamespace);
     final id = (await queue.getQueue()).single.id;
     await progress.reloadProgress();

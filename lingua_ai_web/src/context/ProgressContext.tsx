@@ -8,7 +8,7 @@ import { useTargetLanguage } from './TargetLanguageContext';
 import { getUserProgressKey, getLegacyRegisteredProgressKey } from '../utils/userKey';
 import { loadProgress, saveProgress, resetOwnerProgress, overlayPendingProgress } from '../utils/progressStorage';
 import { fetchProgress } from '../api/progressApi';
-import { getProgressQueueActions, preparePendingProgress, getProgressQueueRevision, saveServerProgress, pushToOfflineQueue, processOfflineQueue } from '../utils/offlineQueue';
+import { epochForNewProgress, getProgressQueueActions, preparePendingProgress, getProgressQueueRevision, saveServerProgress, pushToOfflineQueue, processOfflineQueue } from '../utils/offlineQueue';
 import { useSessionGuard } from '../utils/useSessionGuard';
 
 interface ProgressContextType {
@@ -81,7 +81,8 @@ export const ProgressProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     if (backendSession) {
       // Persist before any HTTP, including ordinary online completion. A retry
       // carries this exact score/action ID; no reconstruction from cached IDs.
-      pushToOfflineQueue('complete-lesson', { lessonId, score, xpReward, targetLanguage }, userKey);
+      pushToOfflineQueue('complete-lesson', { lessonId, score, xpReward, targetLanguage,
+        progressEpoch: epochForNewProgress(userKey) }, userKey);
     } else {
       const base = loadProgress(userKey, targetLanguage);
       saveProgress(userKey, targetLanguage, { ...base, totalXp: base.totalXp + xpReward,
@@ -95,7 +96,8 @@ export const ProgressProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const isCurrent = captureContext();
     if (!isCurrent()) return;
     ++requestRevision.current;
-    if (backendSession) pushToOfflineQueue('reset-progress', { legacyOwnerNamespace: legacyUserKey }, userKey);
+    if (backendSession) pushToOfflineQueue('reset-progress', { legacyOwnerNamespace: legacyUserKey,
+      expectedEpoch: epochForNewProgress(userKey, true) }, userKey);
     else resetOwnerProgress(userKey, legacyUserKey);
     setProgress(previous => isCurrent() ? DEFAULT_PROGRESS : previous);
     if (backendSession && !isOffline && isCurrent()) await loadCurrentProgress();

@@ -1,7 +1,7 @@
 import { targetLanguageCode } from './targetLanguage';
 import { classifySyncFailure, retryDelay, withReplayTimeout, REPLAY_TIMEOUT_MS, InvalidQueuedPayload } from './syncRetryPolicy';
 import type { RetryState } from './syncRetryPolicy';
-import { acknowledgeCompletion, resetOwnerProgress, saveProgress, loadProgress } from './progressStorage';
+import { acknowledgeCompletion, acknowledgeProgressEpoch, getOwnerProgressEpoch, validProgressEpoch, resetOwnerProgress, saveProgress, loadProgress } from './progressStorage';
 import type { ProgressState } from '../types/progress';
 import type { TargetLanguage } from '../types/language';
 import apiClient from '../api/apiClient';
@@ -124,10 +124,19 @@ export function preparePendingProgress(owner: string): void {
 export const getProgressQueueRevision = (owner: string): string => readState(owner).progressRevision || '';
 export const saveServerProgress = (owner: string, language: TargetLanguage, revision: string, progress: ProgressState): boolean => {
   if (getProgressQueueRevision(owner) !== revision) return false;
+  if (!acknowledgeProgressEpoch(owner, progress.progressEpoch)) return false;
   saveProgress(owner, language, progress); return true;
 };
 export const getFailedOfflineActions = (): OfflineAction[] => readState(getOfflineQueueSession().ownerNamespace).failedActions || [];
 export const getProgressQueueActions = (): OfflineAction[] => [...getOfflineQueue(), ...getFailedOfflineActions()];
+export function epochForNewProgress(owner: string, forReset = false): number {
+  const state = readState(owner);
+  if (!forReset && [...state.actions, ...(state.failedActions || [])].some(a => a.type === 'reset-progress'))
+    throw new Error('Wait for progress reset acknowledgement before submitting new progress');
+  const epoch = getOwnerProgressEpoch(owner);
+  if (epoch === undefined) throw new Error('Connect to acknowledge server progress before submitting progress');
+  return epoch;
+}
 export const getOfflineQueue = (): OfflineAction[] => readState(getOfflineQueueSession().ownerNamespace).actions;
 export const isPendingBackendCard = (id: string, owner: string): boolean => {
   if (owner === 'local_guest') return false;
@@ -225,6 +234,7 @@ export const processOfflineQueue = async (userId: string, waitForActive = false)
       };
       let serverId: string | undefined;
       let completion: any;
+      let resetResult: any;
       try {
         const payload = action.payload;
         const id = cardId(payload);
@@ -234,10 +244,15 @@ export const processOfflineQueue = async (userId: string, waitForActive = false)
         config.signal = signal;
         switch (action.type) {
           case 'reset-progress':
-            await apiClient.delete(`/progress/${session.userId}`, config); break;
+            if (!validProgressEpoch(payload.expectedEpoch)) throw new InvalidQueuedPayload('Reset has no acknowledged epoch');
+            resetResult = (await apiClient.delete(`/progress/${session.userId}`, { ...config, data: { expectedEpoch: payload.expectedEpoch } })).data;
+            if (resetResult?.progressEpoch !== payload.expectedEpoch + 1) throw new InvalidQueuedPayload('Invalid reset acknowledgement');
+            break;
           case 'complete-lesson':
             if (!Number.isInteger(payload.score)) throw new InvalidQueuedPayload('Completion has no recorded score');
-            completion = (await apiClient.post(`/progress/${session.userId}/complete-lesson`, { lessonId: payload.lessonId, score: payload.score }, config)).data?.data;
+            if (!validProgressEpoch(payload.progressEpoch)) throw new InvalidQueuedPayload('Completion has no acknowledged epoch');
+            completion = (await apiClient.post(`/progress/${session.userId}/complete-lesson`, { lessonId: payload.lessonId, score: payload.score, progressEpoch: payload.progressEpoch }, config)).data?.data;
+            if (completion?.progressEpoch !== payload.progressEpoch) throw new InvalidQueuedPayload('Invalid completion acknowledgement');
             break;
           case 'create-flashcard': {
             const response = await apiClient.post('/flashcards', {
@@ -289,7 +304,8 @@ export const processOfflineQueue = async (userId: string, waitForActive = false)
         latest.progressRevision = `ack_${action.id}`;
       }
       if (action.type === 'reset-progress') {
-        resetOwnerProgress(owner, action.payload.legacyOwnerNamespace);
+        acknowledgeProgressEpoch(owner, resetResult.progressEpoch);
+        if (action.payload.legacyOwnerNamespace) resetOwnerProgress(action.payload.legacyOwnerNamespace);
         latest.progressRevision = `ack_${action.id}`;
       }
       if (action.type === 'create-flashcard' && action.payload.tempId) latest.tempIds[action.payload.tempId] = serverId!;

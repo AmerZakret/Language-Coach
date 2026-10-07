@@ -4,6 +4,7 @@ import type { ProgressState } from '../types/progress';
 import { getSessionRequestConfig } from '../utils/queueSession';
 
 interface BackendProgressResponse {
+  progressEpoch: number;
   userId: string;
   stats: {
     totalXp: number;
@@ -27,6 +28,7 @@ export const fetchProgress = async (userId: string, targetLanguage: string): Pro
     const data = response.data;
     if (!data) return null;
     return {
+      progressEpoch: data.progressEpoch,
       totalXp: data.stats?.totalXp ?? 0,
       streak: data.stats?.streak ?? 0,
       completedLessonIds: (data.completedLessons || []).map((l) => l.lessonId),
@@ -37,10 +39,11 @@ export const fetchProgress = async (userId: string, targetLanguage: string): Pro
   }
 };
 
-export const saveProgressToBackend = async (userId: string, lessonId: string, score: number = 100): Promise<void> => {
-  await apiClient.post(`/progress/${userId}/complete-lesson`, { lessonId, score }, getSessionRequestConfig());
+export const saveProgressToBackend = async (userId: string, lessonId: string, score: number, progressEpoch: number): Promise<void> => {
+  await apiClient.post(`/progress/${userId}/complete-lesson`, { lessonId, score, progressEpoch }, getSessionRequestConfig());
 };
 
-export const resetProgressInBackend = async (userId: string): Promise<void> => {
-  await apiClient.delete(`/progress/${userId}`, getSessionRequestConfig());
+export const resetProgressInBackend = async (userId: string, expectedEpoch: number, operationId: string): Promise<void> => {
+  await apiClient.delete(`/progress/${userId}`, { ...getSessionRequestConfig(),
+    data: { expectedEpoch }, headers: { 'X-Idempotency-Key': operationId } });
 };

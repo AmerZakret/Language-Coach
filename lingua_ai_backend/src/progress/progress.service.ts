@@ -1,19 +1,33 @@
 import { targetLanguageCode, targetLanguageQuery, tryTargetLanguage } from '../common/target-language';
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import { ClientSession, Connection, Model, Types } from 'mongoose';
 import { Progress } from './schemas/progress.schema';
 import { User } from '../users/schemas/user.schema';
 import { Lesson } from '../lessons/schemas/lesson.schema';
+import { ProgressReset } from './schemas/progress-reset.schema';
 
 @Injectable()
-export class ProgressService {
+export class ProgressService implements OnModuleInit {
   constructor(
     @InjectConnection() private readonly connection: Connection,
     @InjectModel(Progress.name) private progressModel: Model<Progress>,
     @InjectModel(User.name) private userModel: Model<User>,
     @InjectModel(Lesson.name) private lessonModel: Model<Lesson>,
+    @InjectModel(ProgressReset.name) private resetModel: Model<ProgressReset>,
   ) {}
+
+  async onModuleInit() { await this.resetModel.createIndexes(); }
+
+  private assertEpoch(expected: number, current: number) {
+    if (!Number.isSafeInteger(expected) || expected < 0) {
+      throw new BadRequestException('A valid progress epoch is required');
+    }
+    if (expected !== current) throw new ConflictException({
+      code: expected < current ? 'STALE_PROGRESS_EPOCH' : 'FUTURE_PROGRESS_EPOCH',
+      message: expected < current ? 'Progress was reset; this work is obsolete' : 'Progress epoch is ahead of the server',
+    });
+  }
 
   /**
    * Resolve only the MongoDB identity supplied by an authenticated controller.
@@ -75,6 +89,7 @@ export class ProgressService {
 
     return {
       userId: user._id.toString(),
+      progressEpoch: user.progressEpoch ?? 0,
       stats: {
         totalXp,
         streak: user.streak,
@@ -92,13 +107,14 @@ export class ProgressService {
    * 3. Checks if the user already completed this lesson to prevent double-crediting XP.
    * 4. Updates MongoDB, calculates CEFR level boundaries based on total XP, and saves.
    */
-  async completeLesson(userId: string, lessonId: string, score: number) {
+  async completeLesson(userId: string, lessonId: string, score: number, progressEpoch: number) {
     // The completion's unique key and the XP award commit together. MongoDB
     // retries write conflicts, including simultaneous different lessons.
     const session = await this.connection.startSession();
     try {
       const run = () => session.withTransaction(async () => {
         let user = await this.findUser(userId, session);
+        this.assertEpoch(progressEpoch, user.progressEpoch ?? 0);
         const lesson = await this.lessonModel.findOne({ id: lessonId }).session(session);
         if (!lesson) throw new NotFoundException(`Lesson with ID ${lessonId} not found`);
         const lang = targetLanguageCode(lesson.targetLanguage);
@@ -128,8 +144,12 @@ export class ProgressService {
         } else if (score > existing.score) {
           await this.progressModel.updateOne({ _id: existing._id }, { $max: { score } }, { session });
         }
+        // Even duplicate/score-only completions must contend on the owner with
+        // reset. A read-only epoch check could otherwise commit after a reset.
+        await this.userModel.updateOne({ _id: user._id }, { $inc: { progressWriteRevision: 1 } }, { session });
         return { message: 'Lesson marked as completed', data: {
           userId: user._id.toString(), lessonId, score: Math.max(score, existing?.score ?? score),
+          progressEpoch,
           xpEarned, newTotalXp: this.languageXp(user, lang),
         } };
       }, { readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' } });
@@ -148,17 +168,40 @@ export class ProgressService {
       total + (tryTargetLanguage(key) === code ? xp : 0), 0);
   }
 
-  async resetProgress(userId: string) {
+  async resetProgress(userId: string, expectedEpoch: number, operationId: string) {
+    if (typeof operationId !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(operationId)) {
+      throw new BadRequestException('A valid X-Idempotency-Key is required');
+    }
+    if (!Number.isSafeInteger(expectedEpoch) || expectedEpoch < 0 || expectedEpoch >= Number.MAX_SAFE_INTEGER) {
+      throw new BadRequestException('A valid expected epoch is required');
+    }
+    const result = (receipt: ProgressReset) => {
+      if (receipt.expectedEpoch !== expectedEpoch) throw new ConflictException('Idempotency key was used for a different request');
+      return { message: 'Progress successfully reset', userId, progressEpoch: receipt.progressEpoch };
+    };
     const session = await this.connection.startSession();
     try {
       return await session.withTransaction(async () => {
         const user = await this.findUser(userId, session);
+        const receipt = await this.resetModel.findOne({ userId: user._id.toString(), operationId }).session(session);
+        if (receipt) return result(receipt);
+        this.assertEpoch(expectedEpoch, user.progressEpoch ?? 0);
+        const [saved] = await this.resetModel.create([{
+          userId: user._id.toString(), operationId, expectedEpoch, progressEpoch: expectedEpoch + 1,
+        }], { session });
         await this.progressModel.deleteMany({ userId: user._id.toString() }).session(session);
         await this.userModel.updateOne({ _id: user._id }, { $set: {
           totalXp: 0, streak: 0, level: 'Beginner', xpPerLanguage: {}, levelPerLanguage: {},
+          progressEpoch: expectedEpoch + 1,
         } }, { session });
-        return { message: 'Progress successfully reset', userId: user._id.toString() };
+        return result(saved);
       }, { readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' } });
+    } catch (error) {
+      if (error?.code === 11000) {
+        const winner = await this.resetModel.findOne({ userId, operationId });
+        if (winner) return result(winner);
+      }
+      throw error;
     } finally { await session.endSession(); }
   }
 }

@@ -4,11 +4,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 // Acknowledged cache only. Pending scores/rewards live in the durable queue.
 class ProgressSnapshot {
   final int totalXp;
+  final int? progressEpoch;
   final int streak;
   final Set<String> lessonIds;
   final List<double> activity;
   ProgressSnapshot(
       {this.totalXp = 0,
+      this.progressEpoch,
       this.streak = 0,
       Set<String>? lessonIds,
       List<double>? activity})
@@ -17,6 +19,7 @@ class ProgressSnapshot {
   factory ProgressSnapshot.fromServer(Map<String, dynamic> response) =>
       ProgressSnapshot(
           totalXp: response['stats']?['totalXp'] as int? ?? 0,
+          progressEpoch: response['progressEpoch'] as int?,
           streak: response['stats']?['streak'] as int? ?? 0,
           lessonIds: {
             for (final row in response['completedLessons'] as List? ?? [])

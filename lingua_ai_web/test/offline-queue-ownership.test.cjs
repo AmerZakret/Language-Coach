@@ -20,7 +20,7 @@ const user = id => ({ id, name: 'Test', email: `${id}@example.com`, isGuest: fal
 const guest = id => ({ access_token: `test-${id}`, user: {
   id, name: 'Guest User', email: `guest-${id}@guest.lingua.local`, isGuest: true,
 } });
-const payload = { lessonId: 'lesson', score: 4, cardId: 'card', targetWord: 'word',
+const payload = { progressEpoch: 0, lessonId: 'lesson', score: 4, cardId: 'card', targetWord: 'word',
   turkishTranslation: 'translation', targetLanguage: 'English' };
 
 function storage() {
@@ -99,7 +99,14 @@ function harness(saved = storage(), fakeTimers = false) {
     for (const interceptor of requestInterceptors) pending = pending.then(interceptor);
     return pending.then(prepared => {
       requests.push(prepared);
-      let result = Promise.resolve().then(() => control.dispatch(prepared))
+      let result = Promise.resolve().then(() => control.dispatch(prepared)).then(reply => {
+        // Success fixtures implement the current epoch acknowledgement contract.
+        if (prepared.url.includes('/progress/') && method === 'post') return { ...reply, data: { ...reply.data,
+          data: { ...reply.data?.data, progressEpoch: reply.data?.data?.progressEpoch ?? prepared.data.progressEpoch } } };
+        if (prepared.url.includes('/progress/') && method === 'delete') return { ...reply, data: { ...reply.data,
+          progressEpoch: reply.data?.progressEpoch ?? prepared.data.expectedEpoch + 1 } };
+        return reply;
+      })
         .catch(error => { error.config ??= prepared; throw error; });
       for (const interceptor of responseInterceptors) result = result.then(interceptor.success, interceptor.failure);
       return result;
@@ -109,7 +116,7 @@ function harness(saved = storage(), fakeTimers = false) {
   transport.get = (url, config) => request('get', url, undefined, config);
   transport.patch = (url, data, config) => request('patch', url, data, config);
   transport.put = (url, data, config) => request('put', url, data, config);
-  transport.delete = (url, config) => request('delete', url, undefined, config);
+  transport.delete = (url, config) => request('delete', url, config?.data, config);
 
   const sources = {
     reachability: 'utils/backendReachability.ts', coordinator: 'utils/syncCoordinator.ts',
@@ -167,7 +174,7 @@ function harness(saved = storage(), fakeTimers = false) {
     await tick();
   }
   const enqueue = (type = 'complete-lesson', data = payload) => {
-    queue.pushToOfflineQueue(type, data, session.getOfflineQueueSession().ownerNamespace);
+    queue.pushToOfflineQueue(type, { ...(type === 'complete-lesson' ? { progressEpoch: 0 } : type === 'reset-progress' ? { expectedEpoch: 0 } : {}), ...data }, session.getOfflineQueueSession().ownerNamespace);
   };
   return { advanceTimers, advance: ms => { clock.now += ms; }, load, saved, requests, control, queue, session, auth, mount, enqueue,
     authApi: load('authApi'), progressApi: load('progressApi'), client: load('apiClient').default };
@@ -370,8 +377,8 @@ for (const operation of ['profile-fetch', 'profile-update', 'progress-fetch', 'l
       'profile-fetch': () => h.authApi.fetchMe(),
       'profile-update': () => h.authApi.updateProfile({ name: 'A name' }),
       'progress-fetch': () => h.progressApi.fetchProgress(A, 'English'),
-      'lesson-complete': () => h.progressApi.saveProgressToBackend(A, 'lesson', 4),
-      'progress-reset': () => h.progressApi.resetProgressInBackend(A),
+      'lesson-complete': () => h.progressApi.saveProgressToBackend(A, 'lesson', 4, 0),
+      'progress-reset': () => h.progressApi.resetProgressInBackend(A, 0, 'reset-guard'),
       'card-fetch': () => h.client.get(`/flashcards/all?userId=${A}`, h.session.getSessionRequestConfig()),
     }[operation];
     const pending = send(); h.auth().logout(); h.auth().login(user(B), `test-${B}`);
@@ -834,4 +841,18 @@ test('Phase 5E: invalid login credentials do not revoke a separate current authe
   h.control.dispatch = async () => { throw { response: { status: 401 } }; };
   await assert.rejects(h.client.post('/auth/login', { email: 'other@example.com', password: 'wrong' }));
   assert.equal(h.auth().token, `test-${A}`);
+});
+
+
+test('Phase 6A: HTTP replay retains completion epoch across durable restart and backoff', async () => {
+  const h = await durableHarness(); h.enqueue('complete-lesson', { lessonId: 'one', score: 73, progressEpoch: 5 });
+  const original = h.queue.getOfflineQueue()[0];
+  h.control.dispatch = async () => { throw { response: { status: 503 } }; };
+  assert.equal(await h.queue.processOfflineQueue(A), false);
+  const restarted = await durableHarness(h.saved); restarted.advance(360000);
+  assert.equal(restarted.queue.getOfflineQueue()[0].payload.progressEpoch, 5);
+  assert.equal(await restarted.queue.processOfflineQueue(A), true);
+  assert.equal(h.requests[0].data.progressEpoch, 5);
+  assert.equal(restarted.requests[0].data.progressEpoch, 5);
+  assert.equal(restarted.requests[0].headers['X-Idempotency-Key'], original.id);
 });

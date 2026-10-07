@@ -1,4 +1,5 @@
 export interface ProgressState {
+  progressEpoch?: number;
   totalXp: number;
   streak: number;
   completedLessonIds: string[];

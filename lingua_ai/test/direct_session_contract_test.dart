@@ -51,8 +51,10 @@ void main() {
 
   final requests = <String, Future<Object?> Function()>{
     'progress fetch': () => progress.getProgress(a, 'en'),
-    'progress complete': () => progress.completeLesson(a, 'lesson', 80),
-    'progress reset': () => progress.resetProgress(a),
+    'progress complete': () =>
+        progress.completeLesson(a, 'lesson', 80, progressEpoch: 0),
+    'progress reset': () => progress.resetProgress(a,
+        expectedEpoch: 0, operationId: 'session-reset'),
     'flashcard create': () =>
         cards.createFlashcard('word', 'translation', 'en'),
     'flashcard update': () =>

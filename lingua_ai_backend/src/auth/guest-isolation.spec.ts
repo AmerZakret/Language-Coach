@@ -154,9 +154,9 @@ describe('Guest session isolation', () => {
 
   it('existing reset route uses JWT ownership even with Guest B in the URL', async () => {
     const result = await request(app.getHttpServer()).delete(`/progress/${guestB.user.id}`)
-      .auth(guestA.access_token, { type: 'bearer' }).expect(200);
+      .auth(guestA.access_token, { type: 'bearer' }).set('X-Idempotency-Key', 'guest-reset').send({ expectedEpoch: 0 }).expect(200);
     expect(result.body.userId).toBe(guestA.user.id);
-    expect(progress.resetProgress).toHaveBeenCalledWith(guestA.user.id);
+    expect(progress.resetProgress).toHaveBeenCalledWith(guestA.user.id, 0, 'guest-reset');
     await request(app.getHttpServer()).delete(`/progress/${guestA.user.id}`).expect(401);
     expect(progress.resetProgress).toHaveBeenCalledTimes(1);
   });

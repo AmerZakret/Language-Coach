@@ -21,6 +21,13 @@ export class User extends Document {
   @Prop({ default: 0 })
   totalXp: number;
 
+  @Prop({ default: 0, min: 0 })
+  progressEpoch: number;
+
+  // Serializes score-only/duplicate completion checks with an owner reset.
+  @Prop({ default: 0 })
+  progressWriteRevision: number;
+
   @Prop({ default: 0 })
   streak: number;
 

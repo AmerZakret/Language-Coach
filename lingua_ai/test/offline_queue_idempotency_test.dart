@@ -14,23 +14,39 @@ void main() {
   final auth = AuthService();
   var now = DateTime.utc(2026);
   OfflineQueueService queue() => OfflineQueueService.forTesting(
-      progressApi: ProgressApiService(), flashcardApi: FlashcardApiService(), now: () => now);
+      progressApi: ProgressApiService(),
+      flashcardApi: FlashcardApiService(),
+      now: () => now);
 
   for (final type in [
-    'create-flashcard', 'update-flashcard', 'delete-flashcard',
-    'review-flashcard', 'complete-lesson',
+    'create-flashcard',
+    'update-flashcard',
+    'delete-flashcard',
+    'review-flashcard',
+    'complete-lesson',
   ]) {
-    test('$type retry sends the same durable action ID after restart', () async {
+    test('$type retry sends the same durable action ID after restart',
+        () async {
       SharedPreferences.setMockInitialValues({});
       await auth.init();
       await auth.setGuestSession(
-          id: userId, email: 'guest-test@guest.lingua.local', token: 'test-token');
+          id: userId,
+          email: 'guest-test@guest.lingua.local',
+          token: 'test-token');
       final original = queue();
-      await original.pushAction(type, {
-        'tempId': 'local_123', 'id': '507f1f77bcf86cd799439012',
-        'targetWord': 'word', 'turkishTranslation': 'translation',
-        'targetLanguage': 'English', 'lessonId': 'lesson-1', 'score': 4,
-      }, ownerNamespace: auth.localStorageNamespace);
+      await original.pushAction(
+          type,
+          {
+            'tempId': 'local_123',
+            'id': '507f1f77bcf86cd799439012',
+            'targetWord': 'word',
+            'turkishTranslation': 'translation',
+            'targetLanguage': 'English',
+            'lessonId': 'lesson-1',
+            'progressEpoch': 0,
+            'score': 4,
+          },
+          ownerNamespace: auth.localStorageNamespace);
       final operationId = (await original.getQueue()).single.id;
       final requests = <http.Request>[];
       await http.runWithClient(() async {
@@ -44,16 +60,32 @@ void main() {
         expect((await restarted.getQueue()).single.id, operationId);
         expect(await restarted.processQueue(userId), true);
         expect(await restarted.getQueue(), isEmpty);
-      }, () => MockClient((request) async {
-        if (request.url.path == '/users/me') {
-          return http.Response(jsonEncode({'id': userId, 'email': 'guest-test@guest.lingua.local',
-            'name': 'Guest User', 'isGuest': true, 'targetLanguage': 'en'}), 200);
-        }
-        requests.add(request);
-        // The first response is lost after dispatch; the retry receives success.
-        if (requests.length == 1) return http.Response('Response lost', 500);
-        return http.Response(jsonEncode({'_id': '507f1f77bcf86cd799439012'}), 200);
-      }));
+      },
+          () => MockClient((request) async {
+                if (request.url.path == '/users/me') {
+                  return http.Response(
+                      jsonEncode({
+                        'id': userId,
+                        'email': 'guest-test@guest.lingua.local',
+                        'name': 'Guest User',
+                        'isGuest': true,
+                        'targetLanguage': 'en'
+                      }),
+                      200);
+                }
+                requests.add(request);
+                // The first response is lost after dispatch; the retry receives success.
+                if (requests.length == 1) {
+                  return http.Response('Response lost', 500);
+                }
+                return http.Response(
+                    jsonEncode(type == 'complete-lesson'
+                        ? {
+                            'data': {'progressEpoch': 0}
+                          }
+                        : {'_id': '507f1f77bcf86cd799439012'}),
+                    200);
+              }));
       expect(requests, hasLength(2));
       expect(requests.map((r) => r.headers['X-Idempotency-Key']),
           [operationId, operationId]);

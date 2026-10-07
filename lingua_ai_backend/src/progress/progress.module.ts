@@ -5,6 +5,7 @@ import { ProgressService } from './progress.service';
 import { Progress, ProgressSchema } from './schemas/progress.schema';
 import { User, UserSchema } from '../users/schemas/user.schema';
 import { Lesson, LessonSchema } from '../lessons/schemas/lesson.schema';
+import { ProgressReset, ProgressResetSchema } from './schemas/progress-reset.schema';
 
 @Module({
   imports: [
@@ -12,6 +13,7 @@ import { Lesson, LessonSchema } from '../lessons/schemas/lesson.schema';
       { name: Progress.name, schema: ProgressSchema },
       { name: User.name, schema: UserSchema },
       { name: Lesson.name, schema: LessonSchema },
+      { name: ProgressReset.name, schema: ProgressResetSchema },
     ]),
   ],
   controllers: [ProgressController],

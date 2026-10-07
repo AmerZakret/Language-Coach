@@ -7,6 +7,7 @@ import 'flashcard_api_service.dart';
 import 'auth_service.dart';
 import 'api_response.dart';
 import 'progress_cache.dart';
+import 'progress_epoch.dart';
 import 'sync_retry_policy.dart';
 import 'package:http/http.dart' as http;
 
@@ -429,15 +430,41 @@ class OfflineQueueService {
         }
       });
 
+  Future<int> epochForNewProgress(String owner, {bool forReset = false}) =>
+      _locked(owner, () async {
+        final state = await _read(owner);
+        if (!forReset &&
+            [...state.actions, ...state.failedActions]
+                .any((a) => a.type == 'reset-progress')) {
+          throw StateError(
+              'Wait for progress reset acknowledgement before submitting new progress');
+        }
+        final epoch =
+            ProgressEpoch.read(await SharedPreferences.getInstance(), owner);
+        if (epoch == null) {
+          throw StateError(
+              'Connect to acknowledge server progress before submitting progress');
+        }
+        return epoch;
+      });
+
   Future<String> progressRevision(String owner) =>
       _locked(owner, () async => (await _read(owner)).progressRevision);
 
   Future<bool> saveServerProgress(String owner, String language,
-          String revision, ProgressSnapshot progress) =>
+          String revision, ProgressSnapshot progress,
+          {bool Function()? isCurrent}) =>
       _locked(owner, () async {
         if ((await _read(owner)).progressRevision != revision) return false;
-        await progress.save(
-            await SharedPreferences.getInstance(), owner, language);
+        final prefs = await SharedPreferences.getInstance();
+        if (!ProgressEpoch.valid(progress.progressEpoch) ||
+            !await ProgressEpoch.acknowledge(
+                prefs, owner, progress.progressEpoch!,
+                isCurrent: isCurrent)) {
+          return false;
+        }
+        if (isCurrent != null && !isCurrent()) return false;
+        await progress.save(prefs, owner, language);
         return true;
       });
 
@@ -501,20 +528,22 @@ class OfflineQueueService {
               state.actions.where((a) => a.id == scheduled.id).toList();
           if (found.isEmpty) return null; // Cancelled before dispatch.
           if (found.single.nextAttemptAt?.isAfter(_now()) == true) return null;
-          final replayPayload = _resolve(state, found.single.type, found.single.payload);
+          final replayPayload =
+              _resolve(state, found.single.type, found.single.payload);
           // Freeze the new wire contract before first dispatch. Previously
           // attempted updates retain their old shape for existing receipts.
-          if (found.single.type == 'update-flashcard' && found.single.attemptCount == 0) {
+          if (found.single.type == 'update-flashcard' &&
+              found.single.attemptCount == 0) {
             replayPayload['_mutationContract'] = 2;
           }
-          if ((found.single.type == 'update-flashcard' || found.single.type == 'create-flashcard') && found.single.attemptCount == 0) {
+          if ((found.single.type == 'update-flashcard' ||
+                  found.single.type == 'create-flashcard') &&
+              found.single.attemptCount == 0) {
             replayPayload['_languageContract'] = 1;
           }
-          final current = found.single
-              .withPayload(replayPayload)
-              .withRetry(
-                  attempts: found.single.attemptCount + 1,
-                  attemptedAt: _now().toUtc());
+          final current = found.single.withPayload(replayPayload).withRetry(
+              attempts: found.single.attemptCount + 1,
+              attemptedAt: _now().toUtc());
           if (current.ownerNamespace != owner) {
             throw StateError('Queue owner mismatch');
           }
@@ -538,6 +567,7 @@ class OfflineQueueService {
         }
         String? serverId;
         Map<String, dynamic>? completion;
+        Map<String, dynamic>? resetResult;
         final replayClient = http.Client();
         try {
           final payload = action.payload;
@@ -552,68 +582,90 @@ class OfflineQueueService {
             throw const InvalidQueuedPayload();
           }
           if (!session.isCurrent) return false;
-          await withDeferredUnauthorizedInvalidation(() => http.runWithClient(() async {
-            switch (action.type) {
-              case 'reset-progress':
-                await _progressApi.resetProgress(userId,
-                    operationId: action.id);
-                break;
-              case 'complete-lesson':
-                if (payload['score'] is! int) {
-                  throw const InvalidQueuedPayload();
+          await withDeferredUnauthorizedInvalidation(() =>
+              http.runWithClient(() async {
+                switch (action.type) {
+                  case 'reset-progress':
+                    if (!ProgressEpoch.valid(payload['expectedEpoch'])) {
+                      throw const InvalidQueuedPayload();
+                    }
+                    resetResult = await _progressApi.resetProgress(userId,
+                        expectedEpoch: payload['expectedEpoch'] as int,
+                        operationId: action.id);
+                    if (resetResult?['progressEpoch'] !=
+                        payload['expectedEpoch'] + 1) {
+                      throw const InvalidQueuedPayload();
+                    }
+                    break;
+                  case 'complete-lesson':
+                    if (payload['score'] is! int ||
+                        !ProgressEpoch.valid(payload['progressEpoch'])) {
+                      throw const InvalidQueuedPayload();
+                    }
+                    completion = await _progressApi.completeLesson(userId,
+                        payload['lessonId'].toString(), payload['score'] as int,
+                        progressEpoch: payload['progressEpoch'] as int,
+                        operationId: action.id);
+                    if (completion?['data']?['progressEpoch'] !=
+                        payload['progressEpoch']) {
+                      throw const InvalidQueuedPayload();
+                    }
+                    break;
+                  case 'create-flashcard':
+                    final card = await _flashcardApi.createFlashcard(
+                        payload['targetWord'].toString(),
+                        payload['turkishTranslation'].toString(),
+                        payload['targetLanguage'].toString(),
+                        nativeLanguage: payload['nativeLanguage']?.toString(),
+                        nativeTranslation:
+                            payload['nativeTranslation']?.toString(),
+                        exampleSentence: payload['exampleSentence']?.toString(),
+                        note: payload['note']?.toString(),
+                        operationId: action.id,
+                        preserveLegacyLanguage:
+                            payload['_languageContract'] != 1);
+                    serverId = card.id;
+                    if (payload['tempId'] != null &&
+                        (serverId!.isEmpty || serverId!.startsWith('local_'))) {
+                      throw StateError('Create response has no server card ID');
+                    }
+                    break;
+                  case 'update-flashcard':
+                    final legacy = payload['_mutationContract'] != 2;
+                    String? optional(String field) {
+                      final value = payload[field]?.toString();
+                      return legacy && value == '' ? null : value;
+                    }
+                    await _flashcardApi.updateFlashcard(
+                        cardId!,
+                        payload['targetWord']?.toString(),
+                        payload['turkishTranslation']?.toString(),
+                        targetLanguage: payload['targetLanguage']?.toString(),
+                        nativeLanguage: legacy
+                            ? null
+                            : payload['nativeLanguage']?.toString(),
+                        nativeTranslation: legacy
+                            ? null
+                            : payload['nativeTranslation']?.toString(),
+                        exampleSentence: optional('exampleSentence'),
+                        note: optional('note'),
+                        operationId: action.id,
+                        preserveLegacyLanguage:
+                            payload['_languageContract'] != 1);
+                    break;
+                  case 'delete-flashcard':
+                    await _flashcardApi.deleteFlashcard(cardId!,
+                        operationId: action.id);
+                    break;
+                  case 'review-flashcard':
+                    await _flashcardApi.reviewCard(
+                        cardId!, payload['score'] as int? ?? 4,
+                        operationId: action.id);
+                    break;
+                  default:
+                    throw const InvalidQueuedPayload();
                 }
-                completion = await _progressApi.completeLesson(userId,
-                    payload['lessonId'].toString(), payload['score'] as int,
-                    operationId: action.id);
-                break;
-              case 'create-flashcard':
-                final card = await _flashcardApi.createFlashcard(
-                    payload['targetWord'].toString(),
-                    payload['turkishTranslation'].toString(),
-                    payload['targetLanguage'].toString(),
-                    nativeLanguage: payload['nativeLanguage']?.toString(),
-                    nativeTranslation: payload['nativeTranslation']?.toString(),
-                    exampleSentence: payload['exampleSentence']?.toString(),
-                    note: payload['note']?.toString(),
-                    operationId: action.id,
-                    preserveLegacyLanguage: payload['_languageContract'] != 1);
-                serverId = card.id;
-                if (payload['tempId'] != null &&
-                    (serverId!.isEmpty || serverId!.startsWith('local_'))) {
-                  throw StateError('Create response has no server card ID');
-                }
-                break;
-              case 'update-flashcard':
-                final legacy = payload['_mutationContract'] != 2;
-                String? optional(String field) {
-                  final value = payload[field]?.toString();
-                  return legacy && value == '' ? null : value;
-                }
-                await _flashcardApi.updateFlashcard(
-                    cardId!,
-                    payload['targetWord']?.toString(),
-                    payload['turkishTranslation']?.toString(),
-                    targetLanguage: payload['targetLanguage']?.toString(),
-                    nativeLanguage: legacy ? null : payload['nativeLanguage']?.toString(),
-                    nativeTranslation: legacy ? null : payload['nativeTranslation']?.toString(),
-                    exampleSentence: optional('exampleSentence'),
-                    note: optional('note'),
-                    operationId: action.id,
-                    preserveLegacyLanguage: payload['_languageContract'] != 1);
-                break;
-              case 'delete-flashcard':
-                await _flashcardApi.deleteFlashcard(cardId!,
-                    operationId: action.id);
-                break;
-              case 'review-flashcard':
-                await _flashcardApi.reviewCard(
-                    cardId!, payload['score'] as int? ?? 4,
-                    operationId: action.id);
-                break;
-              default:
-                throw const InvalidQueuedPayload();
-            }
-          }, () => replayClient)).timeout(_timeout);
+              }, () => replayClient)).timeout(_timeout);
         } catch (e) {
           if (!session.isCurrent) return false;
           final failure = SyncFailure.classify(e);
@@ -681,7 +733,12 @@ class OfflineQueueService {
               action.type == 'complete-lesson') {
             final language = action.payload['targetLanguage'] as String?;
             final result = completion?['data'];
-            if (language != null && result?['newTotalXp'] is int) {
+            if (language != null &&
+                result?['newTotalXp'] is int &&
+                await ProgressEpoch.acknowledge(
+                    prefs, owner, result['progressEpoch'] as int,
+                    isCurrent: () => session.isCurrent)) {
+              if (!session.isCurrent) return false;
               final base = ProgressSnapshot.read(prefs, owner, language);
               await ProgressSnapshot(
                       totalXp: result['newTotalXp'] as int,
@@ -696,7 +753,10 @@ class OfflineQueueService {
             state.progressRevision = 'ack_${action.id}';
           }
           if (action.type == 'reset-progress') {
-            await ProgressSnapshot.resetOwner(prefs, owner);
+            await ProgressEpoch.acknowledge(
+                prefs, owner, resetResult!['progressEpoch'] as int,
+                isCurrent: () => session.isCurrent);
+            if (!session.isCurrent) return false;
             final legacyOwner =
                 action.payload['legacyOwnerNamespace'] as String?;
             if (legacyOwner != null) {

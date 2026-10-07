@@ -38,7 +38,7 @@ class ProgressApiService {
 
   Future<Map<String, dynamic>> completeLesson(
       String userId, String lessonId, int score,
-      {String? operationId}) async {
+      {required int progressEpoch, String? operationId}) async {
     try {
       final session = AuthService().captureSession();
       final headers = <String, String>{
@@ -59,6 +59,7 @@ class ProgressApiService {
                 body: json.encode({
                   'lessonId': lessonId,
                   'score': score,
+                  'progressEpoch': progressEpoch,
                 }),
               )
               .timeout(replayTimeout),
@@ -73,19 +74,23 @@ class ProgressApiService {
     }
   }
 
-  Future<void> resetProgress(String userId, {String? operationId}) async {
+  Future<Map<String, dynamic>> resetProgress(String userId,
+      {required int expectedEpoch, required String operationId}) async {
     final session = AuthService().captureSession();
     final response = await apiRequest(
         () => http.delete(
                 Uri.parse('${ApiConfig.baseUrl}${ApiConfig.progress}/$userId'),
+                body: json.encode({'expectedEpoch': expectedEpoch}),
                 headers: {
+                  'Content-Type': 'application/json',
                   if (AuthService().token.isNotEmpty)
                     'Authorization': 'Bearer ${AuthService().token}',
-                  if (operationId != null) 'X-Idempotency-Key': operationId,
+                  'X-Idempotency-Key': operationId,
                 }).timeout(replayTimeout),
         session);
     if (response.statusCode != 200) {
       throw SyncHttpException(response.statusCode);
     }
+    return json.decode(response.body);
   }
 }
