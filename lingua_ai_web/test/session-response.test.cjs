@@ -89,13 +89,14 @@ function harness(initial = {}) {
     storage: 'utils/progressStorage.ts', types: 'types/progress.ts',
     progress: 'context/ProgressContext.tsx', target: 'context/TargetLanguageContext.tsx',
     cards: 'pages/FlashcardsPage.tsx', queue: 'utils/offlineQueue.ts', authPage: 'components/auth/AuthPage.tsx',
-    profile: 'pages/ProfilePage.tsx', writing: 'pages/WritingPracticePage.tsx', language: 'utils/targetLanguage.ts', mutation: 'utils/flashcardMutation.ts', community: 'pages/CommunityPage.tsx' };
+    profile: 'pages/ProfilePage.tsx', writing: 'pages/WritingPracticePage.tsx', language: 'utils/targetLanguage.ts', mutation: 'utils/flashcardMutation.ts', community: 'pages/CommunityPage.tsx', coach: 'pages/AiCoachPage.tsx' };
   const exposed = {
     cards: 'fetchCards, handleSaveCard, handleDeleteCard, handleStudyScore, handleOpenAdd, handleOpenEdit, setFormData, allCards, dueCards, loading, error, successMsg, modal, studyResults',
     authPage: 'handleSubmit, setEmail, setPassword, loading, error',
     profile: 'handleSave, setName, saved, resetConfirm, setResetConfirm',
     writing: 'handleSubmit, setTopic, setText, feedback, error, loading',
     community: 'startEditing, setEditingText, handleUpdatePost',
+    coach: 'messages, historyLoading',
   };
   function load(name) {
     if (modules.has(name)) return modules.get(name).exports;
@@ -105,7 +106,7 @@ function harness(initial = {}) {
       .replaceAll('import.meta.env.VITE_API_URL', 'undefined');
     // Expose closed-over handlers/state at the existing render return, without
     // replacing their implementation or adding production test exports.
-    if (name === 'writing') {
+    if (name === 'writing' || name === 'coach') {
       const position = source.lastIndexOf('\n  return (');
       source = source.slice(0, position) + `\n  globalThis.__capture({${exposed[name]}});` + source.slice(position);
     } else if (exposed[name]) source = source.replace(/\n  return \(\r?\n/, `\n  globalThis.__capture({${exposed[name]}});\n  return (\n`);
@@ -130,7 +131,10 @@ function harness(initial = {}) {
         if (path.endsWith('/targetLanguage')) return load('language');
         if (path.endsWith('/flashcardMutation')) return load('mutation');
         if (path.endsWith('/writingTopics')) return h.writingTopics || (h.writingTopics = { writingTopics: { en: { en: ['Topic'] } } });
-        if (path.endsWith('/aiCoachApi')) return { checkWriting: (...args) => h.checkWriting(...args) };
+        if (path.endsWith('/aiCoachApi')) return {
+          checkWriting: (...args) => h.checkWriting(...args),
+          getChatHistory: (...args) => h.getChatHistory(...args),
+        };
         if (path.endsWith('/communityApi')) return {
           getCommunityPosts: async () => ({ items: h.communityPosts || [] }),
           updateCommunityPost: async (id, body) => { h.calls.push(['community-update', id, body]); },
@@ -217,6 +221,90 @@ async function pendingCardHarness() {
   assert.equal(h.queue.getOfflineQueue().length, 1);
   return h;
 }
+
+for (const boundary of ['language', 'account', 'token refresh', 'language ABA']) {
+  test(`AI history rejects a late response after ${boundary} switch`, async () => {
+    const old = deferred(), current = deferred();
+    const h = harness(); h.mountAuth(); await h.settle(); h.login(A);
+    h.isOffline = false;
+    const calls = [];
+    h.getChatHistory = language => {
+      calls.push(language);
+      return calls.length === 1 ? old.promise : current.promise;
+    };
+    h.mount('coach', 'AiCoachPage'); await h.settle();
+    if (boundary === 'language' || boundary === 'language ABA') {
+      h.language = 'German'; h.localStorage.setItem('linguaai_target_language', 'German');
+      h.child.render();
+      if (boundary === 'language ABA') {
+        h.language = 'English'; h.localStorage.setItem('linguaai_target_language', 'English');
+        h.child.render();
+      }
+    } else if (boundary === 'account') await h.switchToB();
+    else {
+      h.auth().login(user(A), 'replacement-token'); h.authRunner.render(); h.child.render();
+    }
+    await h.settle();
+    assert.equal(h.child.exposed.historyLoading, true);
+    const history = [{ role: 'assistant', message: 'current history' }];
+    current.resolve(history); await h.settle();
+    assert.deepEqual(copy(h.child.exposed.messages), history);
+    assert.equal(h.child.exposed.historyLoading, false);
+    const writes = h.child.writes, storage = h.snapshot();
+    old.resolve([{ role: 'assistant', message: 'stale history' }]); await h.settle();
+    assert.deepEqual(copy(h.child.exposed.messages), history);
+    assert.equal(h.child.writes, writes, 'stale history must not schedule any state write');
+    assert.deepEqual(h.snapshot(), storage, 'stale history must not write cached state');
+    assert.equal(calls[0], 'English');
+  });
+}
+
+test('AI same-language history applies normally', async () => {
+  const h = harness(); h.mountAuth(); await h.settle(); h.login(A); h.isOffline = false;
+  const history = [{ role: 'user', message: 'Hello' }, { role: 'assistant', message: 'Hi' }];
+  h.getChatHistory = async language => { assert.equal(language, 'English'); return history; };
+  h.mount('coach', 'AiCoachPage'); await h.settle();
+  assert.deepEqual(copy(h.child.exposed.messages), history);
+  assert.equal(h.child.exposed.historyLoading, false);
+});
+
+test('AI stale history error cannot finish the new-language load', async () => {
+  const old = deferred(), current = deferred();
+  const h = harness(); h.mountAuth(); await h.settle(); h.login(A); h.isOffline = false;
+  h.getChatHistory = language => language === 'English' ? old.promise : current.promise;
+  h.mount('coach', 'AiCoachPage'); await h.settle();
+  h.language = 'German'; h.localStorage.setItem('linguaai_target_language', 'German'); h.child.render();
+  await h.settle(); const writes = h.child.writes;
+  old.reject(new Error('old failure')); await h.settle();
+  assert.equal(h.child.exposed.historyLoading, true);
+  assert.equal(h.child.writes, writes);
+  current.resolve([{ role: 'assistant', message: 'German history' }]); await h.settle();
+  assert.equal(h.child.exposed.messages[0].message, 'German history');
+});
+
+test('AI history resolved before a deferred updater crosses language boundary is discarded', async () => {
+  const old = deferred();
+  const h = harness(); h.mountAuth(); await h.settle(); h.login(A); h.isOffline = false;
+  h.getChatHistory = () => old.promise;
+  h.mount('coach', 'AiCoachPage'); await h.settle();
+  h.deferChildState = true;
+  old.resolve([{ role: 'assistant', message: 'old history' }]); await tick();
+  h.localStorage.setItem('linguaai_target_language', 'German');
+  for (const apply of h.deferredState.splice(0)) apply();
+  h.deferChildState = false; h.child.render();
+  assert.deepEqual(copy(h.child.exposed.messages), []);
+  assert.equal(h.child.exposed.historyLoading, true);
+});
+
+test('AI history completion after unmount cannot update state', async () => {
+  const pending = deferred();
+  const h = harness(); h.mountAuth(); await h.settle(); h.login(A); h.isOffline = false;
+  h.getChatHistory = () => pending.promise;
+  h.mount('coach', 'AiCoachPage'); await h.settle();
+  h.child.unmount(); const writes = h.child.writes;
+  pending.resolve([{ role: 'assistant', message: 'late history' }]); await h.settle();
+  assert.equal(h.child.writes, writes);
+});
 
 test('reset contract: web queued reset reaches the real Nest route and acknowledges', async () => {
   const { startResetServer } = require('../../lingua_ai_backend/test/progress-reset-server.cjs');

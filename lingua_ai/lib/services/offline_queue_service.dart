@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'progress_api_service.dart';
 import 'flashcard_api_service.dart';
 import 'auth_service.dart';
+import 'api_response.dart';
 import 'progress_cache.dart';
 import 'sync_retry_policy.dart';
 import 'package:http/http.dart' as http;
@@ -551,7 +552,7 @@ class OfflineQueueService {
             throw const InvalidQueuedPayload();
           }
           if (!session.isCurrent) return false;
-          await http.runWithClient(() async {
+          await withDeferredUnauthorizedInvalidation(() => http.runWithClient(() async {
             switch (action.type) {
               case 'reset-progress':
                 await _progressApi.resetProgress(userId,
@@ -612,7 +613,7 @@ class OfflineQueueService {
               default:
                 throw const InvalidQueuedPayload();
             }
-          }, () => replayClient).timeout(_timeout);
+          }, () => replayClient)).timeout(_timeout);
         } catch (e) {
           if (!session.isCurrent) return false;
           final failure = SyncFailure.classify(e);

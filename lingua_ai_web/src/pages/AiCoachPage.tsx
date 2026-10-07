@@ -4,6 +4,8 @@ import aiCoachImg from "../assets/images/ai-coach-icon.png";
 import { useAuth } from "../context/AuthContext";
 import { useLanguage } from "../context/LanguageContext";
 import { useTargetLanguage } from "../context/TargetLanguageContext";
+import { useSessionGuard } from "../utils/useSessionGuard";
+import { getUserProgressKey } from "../utils/userKey";
 import { useNetwork } from "../context/NetworkContext";
 import { sendMessage, getChatHistory, clearChatHistory, type ChatMessage } from "../api/aiCoachApi";
 
@@ -15,41 +17,41 @@ const STARTER_PROMPTS = [
 ];
 
 export function AiCoachPage() {
-  const { user } = useAuth();
+  const { user, isGuest, token } = useAuth();
   const { language, t } = useLanguage();
   const { targetLanguage } = useTargetLanguage();
   const { isOffline } = useNetwork();
+  const captureSession = useSessionGuard(getUserProgressKey(user, isGuest, token), targetLanguage);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(true);
   const endRef = useRef<HTMLDivElement>(null);
-
-  if (isOffline) {
-    return (
-      <div className="flex flex-col items-center justify-center text-center p-8 border rounded-2xl h-[450px]" style={{ background: "var(--l-surface)", borderColor: "var(--l-border)", color: "var(--l-text)" }}>
-        <WifiOff size={48} className="text-amber-500 mb-4 animate-bounce" />
-        <h2 style={{ fontSize: "20px", fontWeight: 800 }}>{t("offline_only_title")}</h2>
-        <p style={{ fontSize: "14px", color: "var(--l-muted)", marginTop: "8px", maxWidth: "340px" }}>{t("offline_only_desc")}</p>
-      </div>
-    );
-  }
-
   useEffect(() => {
+    const isSessionCurrent = captureSession();
+    let cancelled = false;
+    const isCurrent = () => !cancelled && isSessionCurrent();
+    setMessages(prev => isCurrent() ? [] : prev);
+    if (isOffline || !token) {
+      setHistoryLoading(false);
+      return () => { cancelled = true; };
+    }
     const loadHistory = async () => {
       setHistoryLoading(true);
       try {
         const history = await getChatHistory(targetLanguage);
-        setMessages(history);
+        if (!isCurrent()) return;
+        setMessages(prev => isCurrent() ? history : prev);
       } catch (e) {
-        console.error('Failed to load chat history', e);
+        if (isCurrent()) console.error('Failed to load chat history', e);
       } finally {
-        setHistoryLoading(false);
+        if (isCurrent()) setHistoryLoading(prev => isCurrent() ? false : prev);
       }
     };
     loadHistory();
-  }, [user?.id, targetLanguage]);
+    return () => { cancelled = true; };
+  }, [captureSession, targetLanguage, isOffline, token]);
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, isTyping, historyLoading]);
 
@@ -111,6 +113,16 @@ export function AiCoachPage() {
       }
     }
   };
+
+  if (isOffline) {
+    return (
+      <div className="flex flex-col items-center justify-center text-center p-8 border rounded-2xl h-[450px]" style={{ background: "var(--l-surface)", borderColor: "var(--l-border)", color: "var(--l-text)" }}>
+        <WifiOff size={48} className="text-amber-500 mb-4 animate-bounce" />
+        <h2 style={{ fontSize: "20px", fontWeight: 800 }}>{t("offline_only_title")}</h2>
+        <p style={{ fontSize: "14px", color: "var(--l-muted)", marginTop: "8px", maxWidth: "340px" }}>{t("offline_only_desc")}</p>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-full animate-fade-in" style={{ background: "var(--l-bg)" }}>

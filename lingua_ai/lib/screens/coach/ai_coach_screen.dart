@@ -23,6 +23,7 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
   
   bool _isLoading = false;
   bool _isHistoryLoading = true;
+  int _historyRequestRevision = 0;
   final List<Map<String, dynamic>> _messages = [];
 
   @override
@@ -44,11 +45,20 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
 
   Future<void> _loadHistory() async {
     if (!mounted) return;
+    final requestRevision = ++_historyRequestRevision;
     if (AuthService().token.isEmpty) {
       setState(() { _messages.clear(); _isHistoryLoading = false; _isLoading = false; });
       return;
     }
     final session = AuthService().captureSession();
+    final languages = TargetLanguageService();
+    final targetLanguage = languages.currentLanguage;
+    final languageRevision = languages.languageVersion;
+    bool isCurrent() =>
+        mounted && session.isCurrent &&
+        requestRevision == _historyRequestRevision &&
+        languageRevision == languages.languageVersion &&
+        targetLanguage == languages.currentLanguage;
 
     setState(() {
       _isHistoryLoading = true;
@@ -56,13 +66,11 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
     });
 
     try {
-      final targetLanguage = TargetLanguageService().currentLanguage;
-
       final history = await _apiService.getHistory(
         targetLanguage: targetLanguage,
       );
 
-      if (mounted && session.isCurrent) {
+      if (isCurrent()) {
         setState(() {
           for (var msg in history) {
             _messages.add({
@@ -75,7 +83,7 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
         _scrollToBottom();
       }
     } catch (e) {
-      if (mounted) {
+      if (isCurrent()) {
         setState(() {
           _isHistoryLoading = false;
         });

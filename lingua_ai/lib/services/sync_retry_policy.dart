@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'api_response.dart';
 
 const replayTimeout = Duration(seconds: 45);
 
@@ -22,8 +23,12 @@ class SyncFailure {
       return const SyncFailure('malformed', true);
     }
     if (error is TimeoutException) return const SyncFailure('timeout', false);
-    if (error is SyncHttpException) {
-      final status = error.statusCode;
+    final status = error is SyncHttpException
+        ? error.statusCode
+        : error is ApiException
+            ? error.statusCode
+            : null;
+    if (status != null) {
       if (status == 401) return const SyncFailure('authentication', false);
       if (status == 403) return const SyncFailure('forbidden', true);
       if (status == 404) return const SyncFailure('not-found', true);

@@ -6,6 +6,13 @@ import 'auth_service.dart';
 
 enum ApiFailure { network, unauthorized, client, server }
 
+const _deferUnauthorizedInvalidation = #deferUnauthorizedInvalidation;
+
+/// Replay saves its durable retry checkpoint before invalidating authentication.
+/// This changes response handling only; session ownership still uses AuthService.
+Future<T> withDeferredUnauthorizedInvalidation<T>(Future<T> Function() send) =>
+    runZoned(send, zoneValues: {_deferUnauthorizedInvalidation: true});
+
 class ApiException implements Exception {
   final ApiFailure kind;
   final String message;
@@ -72,7 +79,9 @@ Future<http.Response> apiRequest(
   } on FormatException {
     // Use the safe status-specific message for non-JSON responses.
   }
-  final invalidated = status == 401 && AuthService().invalidateSession(session);
+  final invalidated = status == 401 &&
+      Zone.current[_deferUnauthorizedInvalidation] != true &&
+      AuthService().invalidateSession(session);
   throw ApiException(kind, message, status, invalidated);
 }
 
