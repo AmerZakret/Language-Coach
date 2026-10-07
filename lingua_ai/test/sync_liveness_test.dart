@@ -160,7 +160,7 @@ void main() {
               if (request.method == 'GET') {
                 return http.Response(
                     jsonEncode(
-                        {'id': a, 'name': 'Test', 'email': '$a@example.com'}),
+                        {'id': a, 'name': 'Test', 'email': '$a@example.com', 'isGuest': false, 'targetLanguage': 'en'}),
                     200);
               }
               calls++;
@@ -465,6 +465,8 @@ void main() {
     await push();
     await http.runWithClient(() async {
       await queue.processQueue(a);
+      expect(auth.token, isEmpty);
+      await login(a);
       expect(
           (await queue.getQueue()).single.lastErrorCategory, 'authentication');
       expect(await queue.getFailedActions(), isEmpty);

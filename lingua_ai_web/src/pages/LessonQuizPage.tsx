@@ -5,11 +5,12 @@ import { ArrowLeft, ArrowRight, CheckCircle2, XCircle, Trophy, Zap, Lock } from 
 import { useTargetLanguage } from "../context/TargetLanguageContext";
 import { useProgress } from "../context/ProgressContext";
 import { useLanguage } from "../context/LanguageContext";
-import { getLessonById, getLessons } from "../api/lessonsApi";
+import { getLessonById, getLessons, LessonNotFoundError } from "../api/lessonsApi";
 import { fallbackLessons } from "../data/fallbackLessons";
 import type { Lesson } from "../types/lesson";
 import { soundService } from "../utils/soundService";
 import { isLessonLocked } from "../utils/lessonLock";
+import { lessonLanguageCode } from "../utils/lessonLanguage";
 
 type AnswerState = "idle" | "correct" | "incorrect";
 
@@ -31,29 +32,45 @@ export function LessonQuizPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    setCurrent(0);
+    setSelected(null);
+    setAnswerState("idle");
+    setScore(0);
+    setDone(false);
+  }, [id]);
+
+  useEffect(() => {
+    let active = true;
     const loadLesson = async () => {
       setLoading(true);
+      setLesson(null);
+      setIsLocked(false);
       try {
         if (id) {
           const found = await getLessonById(id);
+          if (!active) return;
           setLesson(found);
           const all = await getLessons(targetLanguage);
+          if (!active) return;
           if (found) {
             setIsLocked(isLessonLocked(found, all, userProgress.completedLessonIds));
           }
         }
       } catch (e) {
+        if (!active) return;
+        if (e instanceof LessonNotFoundError) return;
         console.error("Failed to load lesson by ID, trying fallback", e);
         const fallback = fallbackLessons.find((l) => l.id === id);
         if (fallback) {
           setLesson(fallback);
-          setIsLocked(isLessonLocked(fallback, fallbackLessons.filter(l => l.targetLanguage === targetLanguage), userProgress.completedLessonIds));
+          setIsLocked(isLessonLocked(fallback, fallbackLessons.filter(l => l.targetLanguage === lessonLanguageCode(targetLanguage)), userProgress.completedLessonIds));
         }
       } finally {
-        setLoading(false);
+        if (active) setLoading(false);
       }
     };
     loadLesson();
+    return () => { active = false; };
   }, [id, targetLanguage, userProgress.completedLessonIds]);
 
   if (loading) return <div className="min-h-screen flex items-center justify-center" style={{ background: "var(--l-bg)", color: "var(--l-text)" }}>{t('loading')}</div>;

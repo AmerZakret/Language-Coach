@@ -1,13 +1,34 @@
+import '../core/localization/target_language.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../core/config/api_config.dart';
 import '../models/flashcard.dart';
 import 'auth_service.dart';
+import 'api_response.dart';
 import 'sync_retry_policy.dart';
 
+/// A replay receipt may acknowledge a resource that was subsequently deleted.
+/// Such an acknowledgement is not a complete card.
+class FlashcardMutationResult {
+  final String id;
+  final Flashcard? card;
+  const FlashcardMutationResult(this.id, [this.card]);
+  factory FlashcardMutationResult.fromJson(Map<String, dynamic> data) {
+    final id = data['_id'];
+    if (id is! String || id.isEmpty) {
+      throw const FormatException('Missing flashcard acknowledgement identity');
+    }
+    if (data.keys.length == 1) return FlashcardMutationResult(id);
+    if (data['targetWord'] is! String || data['turkishTranslation'] is! String ||
+        data['targetLanguage'] is! String) {
+      throw const FormatException('Incomplete flashcard response');
+    }
+    return FlashcardMutationResult(id, Flashcard.fromJson(data));
+  }
+}
+
 class FlashcardApiService {
-  Future<Flashcard> createFlashcard(
-    String userId,
+  Future<FlashcardMutationResult> createFlashcard(
     String targetWord,
     String turkishTranslation,
     String targetLanguage, {
@@ -16,8 +37,10 @@ class FlashcardApiService {
     String? exampleSentence,
     String? note,
     String? operationId,
+    bool preserveLegacyLanguage = false,
   }) async {
     try {
+      final session = AuthService().captureSession();
       final headers = <String, String>{
         'Content-Type': 'application/json',
         if (operationId != null) 'X-Idempotency-Key': operationId,
@@ -27,27 +50,30 @@ class FlashcardApiService {
         headers['Authorization'] = 'Bearer $token';
       }
 
-      final response = await http
-          .post(
-            Uri.parse('${ApiConfig.baseUrl}${ApiConfig.flashcards}'),
-            headers: headers,
-            body: json.encode({
-              'userId': userId,
-              'targetWord': targetWord,
-              'turkishTranslation': turkishTranslation,
-              'targetLanguage': targetLanguage,
-              if (nativeLanguage != null) 'nativeLanguage': nativeLanguage,
-              if (nativeTranslation != null)
-                'nativeTranslation': nativeTranslation,
-              if (exampleSentence != null && exampleSentence.isNotEmpty)
-                'exampleSentence': exampleSentence,
-              if (note != null && note.isNotEmpty) 'note': note,
-            }),
-          )
-          .timeout(replayTimeout);
+      final response = await apiRequest(
+          () => http
+              .post(
+                Uri.parse('${ApiConfig.baseUrl}${ApiConfig.flashcards}'),
+                headers: headers,
+                body: json.encode({
+                  'targetWord': targetWord,
+                  'turkishTranslation': turkishTranslation,
+                  'targetLanguage': preserveLegacyLanguage
+                      ? targetLanguage
+                      : TargetLanguage.code(targetLanguage),
+                  if (nativeLanguage != null) 'nativeLanguage': nativeLanguage,
+                  if (nativeTranslation != null)
+                    'nativeTranslation': nativeTranslation,
+                  if (exampleSentence != null && exampleSentence.isNotEmpty)
+                    'exampleSentence': exampleSentence,
+                  if (note != null && note.isNotEmpty) 'note': note,
+                }),
+              )
+              .timeout(replayTimeout),
+          session);
 
       if (response.statusCode == 201 || response.statusCode == 200) {
-        return Flashcard.fromJson(json.decode(response.body));
+        return FlashcardMutationResult.fromJson(json.decode(response.body));
       } else {
         throw SyncHttpException(response.statusCode);
       }
@@ -56,18 +82,20 @@ class FlashcardApiService {
     }
   }
 
-  Future<Flashcard> updateFlashcard(
+  Future<FlashcardMutationResult> updateFlashcard(
     String cardId,
-    String targetWord,
-    String turkishTranslation, {
+    String? targetWord,
+    String? turkishTranslation, {
     String? targetLanguage,
     String? nativeLanguage,
     String? nativeTranslation,
     String? exampleSentence,
     String? note,
     String? operationId,
+    bool preserveLegacyLanguage = false,
   }) async {
     try {
+      final session = AuthService().captureSession();
       final headers = <String, String>{
         'Content-Type': 'application/json',
         if (operationId != null) 'X-Idempotency-Key': operationId,
@@ -77,26 +105,33 @@ class FlashcardApiService {
         headers['Authorization'] = 'Bearer $token';
       }
 
-      final response = await http
-          .put(
-            Uri.parse('${ApiConfig.baseUrl}${ApiConfig.flashcards}/$cardId'),
-            headers: headers,
-            body: json.encode({
-              'targetWord': targetWord,
-              'turkishTranslation': turkishTranslation,
-              if (targetLanguage != null) 'targetLanguage': targetLanguage,
-              if (nativeLanguage != null) 'nativeLanguage': nativeLanguage,
-              if (nativeTranslation != null)
-                'nativeTranslation': nativeTranslation,
-              if (exampleSentence != null && exampleSentence.isNotEmpty)
-                'exampleSentence': exampleSentence,
-              if (note != null && note.isNotEmpty) 'note': note,
-            }),
-          )
-          .timeout(replayTimeout);
+      final response = await apiRequest(
+          () => http
+              .put(
+                Uri.parse(
+                    '${ApiConfig.baseUrl}${ApiConfig.flashcards}/$cardId'),
+                headers: headers,
+                body: json.encode({
+                  if (targetWord != null) 'targetWord': targetWord,
+                  if (turkishTranslation != null)
+                    'turkishTranslation': turkishTranslation,
+                  if (targetLanguage != null)
+                    'targetLanguage': preserveLegacyLanguage
+                        ? targetLanguage
+                        : TargetLanguage.code(targetLanguage),
+                  if (nativeLanguage != null) 'nativeLanguage': nativeLanguage,
+                  if (nativeTranslation != null)
+                    'nativeTranslation': nativeTranslation,
+                  if (exampleSentence != null)
+                    'exampleSentence': exampleSentence,
+                  if (note != null) 'note': note,
+                }),
+              )
+              .timeout(replayTimeout),
+          session);
 
       if (response.statusCode == 200) {
-        return Flashcard.fromJson(json.decode(response.body));
+        return FlashcardMutationResult.fromJson(json.decode(response.body));
       } else {
         throw SyncHttpException(response.statusCode);
       }
@@ -107,6 +142,7 @@ class FlashcardApiService {
 
   Future<void> deleteFlashcard(String cardId, {String? operationId}) async {
     try {
+      final session = AuthService().captureSession();
       final headers = <String, String>{};
       if (operationId != null) headers['X-Idempotency-Key'] = operationId;
       final token = AuthService().token;
@@ -114,12 +150,15 @@ class FlashcardApiService {
         headers['Authorization'] = 'Bearer $token';
       }
 
-      final response = await http
-          .delete(
-            Uri.parse('${ApiConfig.baseUrl}${ApiConfig.flashcards}/$cardId'),
-            headers: headers,
-          )
-          .timeout(replayTimeout);
+      final response = await apiRequest(
+          () => http
+              .delete(
+                Uri.parse(
+                    '${ApiConfig.baseUrl}${ApiConfig.flashcards}/$cardId'),
+                headers: headers,
+              )
+              .timeout(replayTimeout),
+          session);
 
       if (response.statusCode != 200) {
         throw SyncHttpException(response.statusCode);
@@ -129,9 +168,9 @@ class FlashcardApiService {
     }
   }
 
-  Future<List<Flashcard>> getDueCards(String userId,
-      {String? targetLanguage}) async {
+  Future<List<Flashcard>> getDueCards({String? targetLanguage}) async {
     try {
+      final session = AuthService().captureSession();
       final headers = <String, String>{};
       final token = AuthService().token;
       if (token.isNotEmpty) {
@@ -139,17 +178,19 @@ class FlashcardApiService {
       }
 
       var url =
-          '${ApiConfig.baseUrl}${ApiConfig.flashcards}/due?userId=$userId';
+          '${ApiConfig.baseUrl}${ApiConfig.flashcards}/due';
       if (targetLanguage != null && targetLanguage.isNotEmpty) {
-        url += '&targetLanguage=$targetLanguage';
+        url += '?targetLanguage=${TargetLanguage.code(targetLanguage)}';
       }
 
-      final response = await http
-          .get(
-            Uri.parse(url),
-            headers: headers,
-          )
-          .timeout(replayTimeout);
+      final response = await apiRequest(
+          () => http
+              .get(
+                Uri.parse(url),
+                headers: headers,
+              )
+              .timeout(replayTimeout),
+          session);
 
       if (response.statusCode == 200) {
         final List body = json.decode(response.body);
@@ -162,9 +203,9 @@ class FlashcardApiService {
     }
   }
 
-  Future<List<Flashcard>> getAllCards(String userId,
-      {String? targetLanguage}) async {
+  Future<List<Flashcard>> getAllCards({String? targetLanguage}) async {
     try {
+      final session = AuthService().captureSession();
       final headers = <String, String>{};
       final token = AuthService().token;
       if (token.isNotEmpty) {
@@ -172,17 +213,19 @@ class FlashcardApiService {
       }
 
       var url =
-          '${ApiConfig.baseUrl}${ApiConfig.flashcards}/all?userId=$userId';
+          '${ApiConfig.baseUrl}${ApiConfig.flashcards}/all';
       if (targetLanguage != null && targetLanguage.isNotEmpty) {
-        url += '&targetLanguage=$targetLanguage';
+        url += '?targetLanguage=${TargetLanguage.code(targetLanguage)}';
       }
 
-      final response = await http
-          .get(
-            Uri.parse(url),
-            headers: headers,
-          )
-          .timeout(replayTimeout);
+      final response = await apiRequest(
+          () => http
+              .get(
+                Uri.parse(url),
+                headers: headers,
+              )
+              .timeout(replayTimeout),
+          session);
 
       if (response.statusCode == 200) {
         final List body = json.decode(response.body);
@@ -195,9 +238,10 @@ class FlashcardApiService {
     }
   }
 
-  Future<Flashcard> reviewCard(String cardId, int score,
+  Future<FlashcardMutationResult> reviewCard(String cardId, int score,
       {String? operationId}) async {
     try {
+      final session = AuthService().captureSession();
       final headers = <String, String>{
         'Content-Type': 'application/json',
         if (operationId != null) 'X-Idempotency-Key': operationId,
@@ -207,19 +251,21 @@ class FlashcardApiService {
         headers['Authorization'] = 'Bearer $token';
       }
 
-      final response = await http
-          .put(
-            Uri.parse(
-                '${ApiConfig.baseUrl}${ApiConfig.flashcards}/$cardId/review'),
-            headers: headers,
-            body: json.encode({
-              'score': score,
-            }),
-          )
-          .timeout(replayTimeout);
+      final response = await apiRequest(
+          () => http
+              .put(
+                Uri.parse(
+                    '${ApiConfig.baseUrl}${ApiConfig.flashcards}/$cardId/review'),
+                headers: headers,
+                body: json.encode({
+                  'score': score,
+                }),
+              )
+              .timeout(replayTimeout),
+          session);
 
       if (response.statusCode == 200) {
-        return Flashcard.fromJson(json.decode(response.body));
+        return FlashcardMutationResult.fromJson(json.decode(response.body));
       } else {
         throw SyncHttpException(response.statusCode);
       }

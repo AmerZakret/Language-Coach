@@ -1,3 +1,4 @@
+import { targetLanguageCode, TARGET_LANGUAGE_NAMES } from '../common/target-language';
 import { Injectable, Logger, HttpException, HttpStatus } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AssessPronunciationDto } from './dto/assess-pronunciation.dto';
@@ -19,6 +20,7 @@ export class PronunciationService {
       throw new HttpException('targetLanguage is required', HttpStatus.BAD_REQUEST);
     }
 
+    const targetCode = targetLanguageCode(dto.targetLanguage);
     const whisperUrl = (
       this.configService.get<string>('PRONUNCIATION_SERVICE_URL') ||
       'http://localhost:8001'
@@ -26,25 +28,11 @@ export class PronunciationService {
 
     // 1. Send Audio to Python Whisper service
     let recognizedText = '';
-    let detectedLanguage = dto.targetLanguage;
+    let detectedLanguage: string = targetCode;
     let languageProbability = 1.0;
 
     try {
-      const fullToShort: Record<string, string> = {
-        english: 'en',
-        german: 'de',
-        spanish: 'es',
-        french: 'fr',
-        arabic: 'ar',
-        turkish: 'tr',
-        en: 'en',
-        de: 'de',
-        es: 'es',
-        fr: 'fr',
-        ar: 'ar',
-        tr: 'tr',
-      };
-      const whisperLanguage = fullToShort[dto.targetLanguage.toLowerCase()] || dto.targetLanguage;
+      const whisperLanguage = targetCode;
 
       const formData = new FormData();
       // Create a Blob from the file buffer to upload via native fetch
@@ -70,7 +58,7 @@ export class PronunciationService {
       };
 
       recognizedText = data.recognizedText || '';
-      detectedLanguage = data.detectedLanguage || dto.targetLanguage;
+      detectedLanguage = data.detectedLanguage || targetCode;
       languageProbability = data.languageProbability ?? 1.0;
     } catch (error) {
       this.logger.error('Failed to communicate with Python Whisper service', error);
@@ -94,7 +82,7 @@ export class PronunciationService {
     // 4. Ask Gemini for friendly feedback
     const aiFeedback = await this.generateGeminiFeedback(
       dto.targetText,
-      dto.targetLanguage,
+      TARGET_LANGUAGE_NAMES[targetCode],
       recognizedText,
       score,
       result,
@@ -103,7 +91,7 @@ export class PronunciationService {
     return {
       targetText: dto.targetText,
       recognizedText: recognizedText || '(No speech detected)',
-      targetLanguage: dto.targetLanguage,
+      targetLanguage: targetCode,
       pronunciationScore: score,
       result,
       aiFeedback,

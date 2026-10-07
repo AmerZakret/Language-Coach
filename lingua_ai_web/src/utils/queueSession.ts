@@ -51,3 +51,17 @@ export function isOfflineQueueSessionActive(session: QueueSession): boolean {
   return session.ownerNamespace !== 'local_guest' && !!session.token.trim()
     && !!session.userId && isSessionCurrent(session);
 }
+
+const invalidationListeners = new Set<() => void>();
+export function onSessionInvalidated(listener: () => void): () => void {
+  invalidationListeners.add(listener);
+  return () => { invalidationListeners.delete(listener); };
+}
+
+export function invalidateCurrentSession(session: QueueSession): void {
+  if (!session.token || session.ownerNamespace === 'local_guest' || !isSessionCurrent(session)) return;
+  advanceOfflineQueueSession();
+  for (const key of ['linguaai_user', 'linguaai_token', 'linguaai_is_guest']) localStorage.removeItem(key);
+  // Owner-scoped queues and caches remain available for a later valid login.
+  invalidationListeners.forEach(listener => listener());
+}

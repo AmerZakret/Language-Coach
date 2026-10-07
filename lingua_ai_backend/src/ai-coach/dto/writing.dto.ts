@@ -1,10 +1,7 @@
+import { IsTargetLanguage } from '../../common/target-language';
 import { IsIn, IsNotEmpty, IsString, MaxLength } from 'class-validator';
 
 export class WritingDto {
-  @IsNotEmpty()
-  @IsString()
-  userId: string;
-
   @IsNotEmpty()
   @IsString()
   topic: string;
@@ -21,17 +18,6 @@ export class WritingDto {
 
   @IsNotEmpty()
   @IsString()
-  @IsIn([
-    'en',
-    'de',
-    'es',
-    'fr',
-    'ar',
-    'English',
-    'German',
-    'Spanish',
-    'French',
-    'Arabic',
-  ])
+  @IsTargetLanguage()
   targetLanguage: string;
 }

@@ -31,7 +31,7 @@ describe('Queued flashcard idempotency', () => {
   let cardA: Flashcard;
   let cardB: Flashcard;
   const ai = { generateContext: jest.fn(async () => ({ sentences: ['example'], mnemonic: 'hint' })) };
-  const body = { userId: 'ignored@example.com', targetWord: 'word',
+  const body = { targetWord: 'word',
     turkishTranslation: 'translation', targetLanguage: 'English', note: 'original' };
   const review = (card = cardA, key = 'review-1', owner = a, score = 4) =>
     request(app.getHttpServer()).put(`/flashcards/${card._id}/review`)
@@ -97,7 +97,7 @@ describe('Queued flashcard idempotency', () => {
     const before = (await cards.findById(cardA._id))!.toObject();
     const restarted = new FlashcardIdempotencyService(app.get<Connection>(getConnectionToken()), operations, cards);
     const controller = new FlashcardsController(app.get(FlashcardsService), restarted);
-    await controller.review(cardA._id.toString(), 4, { user: a }, 'review-1');
+    await controller.review(cardA._id.toString(), { score: 4 }, { user: a }, 'review-1');
     expect((await cards.findById(cardA._id))!.toObject()).toEqual(before);
   });
 

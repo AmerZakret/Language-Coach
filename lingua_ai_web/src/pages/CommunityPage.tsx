@@ -180,11 +180,12 @@ export function CommunityPage() {
   };
 
   const handleUpdatePost = async (postId: string) => {
-    if (!editingText.trim()) return;
+    const post = posts.find(post => post._id === postId);
+    if (!editingText.trim() && !post?.imageUrl) return;
     setIsUpdating(true);
     try {
       const formData = new FormData();
-      formData.append("text", editingText);
+      formData.append("text", editingText.trim());
       await updateCommunityPost(postId, formData);
       setEditingPostId(null);
       fetchFeed();
@@ -471,7 +472,7 @@ export function CommunityPage() {
                         </button>
                         <button
                           onClick={() => handleUpdatePost(post._id)}
-                          disabled={isUpdating || !editingText.trim()}
+                          disabled={isUpdating || (!editingText.trim() && !post.imageUrl)}
                           className="btn-primary py-1 px-3 text-xs"
                         >
                           {isUpdating ? t("updating") : t("save")}

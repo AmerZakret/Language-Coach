@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { targetLanguageCode, targetLanguageQuery, tryTargetLanguage } from '../common/target-language';
+import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import { ClientSession, Connection, Model, Types } from 'mongoose';
 import { Progress } from './schemas/progress.schema';
@@ -6,7 +7,7 @@ import { User } from '../users/schemas/user.schema';
 import { Lesson } from '../lessons/schemas/lesson.schema';
 
 @Injectable()
-export class ProgressService implements OnModuleInit {
+export class ProgressService {
   constructor(
     @InjectConnection() private readonly connection: Connection,
     @InjectModel(Progress.name) private progressModel: Model<Progress>,
@@ -15,59 +16,15 @@ export class ProgressService implements OnModuleInit {
   ) {}
 
   /**
-   * NestJS Lifecycle Hook:
-   * Triggers automatically when the module is fully initialized.
-   * Runs the database data migration helper.
+   * Resolve only the MongoDB identity supplied by an authenticated controller.
    */
-  async onModuleInit() {
-    await this.migrateLegacyProgress();
-  }
-
-  /**
-   * Database Migration Helper:
-   * Older database schemas saved targetLanguage using short codes ('en', 'de').
-   * This migration script scans progress records missing standard fields and resolves them to full names (e.g. 'English').
-   */
-  private async migrateLegacyProgress() {
-    try {
-      const legacyProgressList = await this.progressModel.find({ targetLanguage: { $exists: false } }).exec();
-      if (legacyProgressList.length === 0) return;
-
-      const shortToFull: Record<string, string> = {
-        en: 'English',
-        de: 'German',
-        es: 'Spanish',
-        fr: 'French',
-        ar: 'Arabic',
-        English: 'English',
-        German: 'German',
-        Spanish: 'Spanish',
-        French: 'French',
-        Arabic: 'Arabic',
-      };
-
-      for (const p of legacyProgressList) {
-        const lesson = await this.lessonModel.findOne({ id: p.lessonId }).exec();
-        p.targetLanguage = lesson ? (shortToFull[lesson.targetLanguage] || lesson.targetLanguage) : 'English';
-        await p.save();
-      }
-      console.log(`Migrated ${legacyProgressList.length} legacy progress records.`);
-    } catch (e) {
-      console.error('Failed to migrate legacy progress records', e);
+  private async findUser(userId: string, session: ClientSession | null = null): Promise<User> {
+    if (!Types.ObjectId.isValid(userId)) {
+      throw new NotFoundException('Authenticated user not found');
     }
-  }
-
-  /**
-   * Helper function to find a user profile in MongoDB by email or ObjectId.
-   */
-  private async findUser(userId: string, session: ClientSession | null = null): Promise<User | null> {
-    const isObjectId = Types.ObjectId.isValid(userId);
-    return this.userModel.findOne({
-      $or: [
-        { email: userId },
-        ...(isObjectId ? [{ _id: new Types.ObjectId(userId) }] : []),
-      ],
-    }).session(session).exec();
+    const user = await this.userModel.findById(userId).session(session).exec();
+    if (!user) throw new NotFoundException('Authenticated user not found');
+    return user;
   }
 
   /**
@@ -85,36 +42,13 @@ export class ProgressService implements OnModuleInit {
 
   private async getProgressSnapshot(userId: string, targetLanguage: string | undefined, session: ClientSession) {
     const user = await this.findUser(userId, session);
-    if (!user) {
-      // Return default empty state instead of crashing if user is not yet created
-      return {
-        userId,
-        stats: {
-          totalXp: 0,
-          streak: 0,
-          completedLessonsCount: 0,
-        },
-        completedLessons: [],
-        level: 'Beginner',
-      };
-    }
 
     const filter: Record<string, any> = { userId: user._id.toString() };
-    if (targetLanguage) {
-      const shortToFull: Record<string, string> = {
-        en: 'English',
-        de: 'German',
-        es: 'Spanish',
-        fr: 'French',
-        ar: 'Arabic',
-        English: 'English',
-        German: 'German',
-        Spanish: 'Spanish',
-        French: 'French',
-        Arabic: 'Arabic',
-      };
-      const lang = shortToFull[targetLanguage] || targetLanguage;
-      filter.targetLanguage = lang; // Filter completed records by target language
+    if (targetLanguage !== undefined) {
+      const language = targetLanguageQuery(targetLanguage);
+      const legacyLessons = await this.lessonModel.find({ targetLanguage: language }).session(session).select('id').lean();
+      filter.$or = [{ targetLanguage: language },
+        { targetLanguage: { $exists: false }, lessonId: { $in: legacyLessons.map(lesson => lesson.id) } }];
     }
 
     const completedProgressList = await this.progressModel
@@ -131,34 +65,16 @@ export class ProgressService implements OnModuleInit {
     // Extract language-scoped XP and Levels from User schemas maps
     let totalXp = user.totalXp;
     let level = user.level || 'Beginner';
-    if (targetLanguage) {
-      const shortToFull: Record<string, string> = {
-        en: 'English',
-        de: 'German',
-        es: 'Spanish',
-        fr: 'French',
-        ar: 'Arabic',
-        English: 'English',
-        German: 'German',
-        Spanish: 'Spanish',
-        French: 'French',
-        Arabic: 'Arabic',
-      };
-      const lang = shortToFull[targetLanguage] || targetLanguage;
-      if (user.xpPerLanguage) {
-        totalXp = user.xpPerLanguage.get(lang) || 0;
-      } else {
-        totalXp = 0;
-      }
-      if (user.levelPerLanguage) {
-        level = user.levelPerLanguage.get(lang) || 'Beginner';
-      } else {
-        level = 'Beginner';
-      }
+    if (targetLanguage !== undefined) {
+      const code = targetLanguageCode(targetLanguage);
+      totalXp = this.languageXp(user, code);
+      level = user.levelPerLanguage?.get(code)
+        ?? [...(user.levelPerLanguage ?? [])].find(([key]) => tryTargetLanguage(key) === code)?.[1]
+        ?? 'Beginner';
     }
 
     return {
-      userId: user.email,
+      userId: user._id.toString(),
       stats: {
         totalXp,
         streak: user.streak,
@@ -183,19 +99,9 @@ export class ProgressService implements OnModuleInit {
     try {
       const run = () => session.withTransaction(async () => {
         let user = await this.findUser(userId, session);
-        if (!user) {
-          if (!userId.includes('@') && userId !== 'guest') {
-            throw new NotFoundException(`User with ID ${userId} not found`);
-          }
-          [user] = await this.userModel.create([{
-            name: userId.split('@')[0].toUpperCase(), email: userId,
-            passwordHash: 'placeholder-hash',
-          }], { session });
-        }
         const lesson = await this.lessonModel.findOne({ id: lessonId }).session(session);
         if (!lesson) throw new NotFoundException(`Lesson with ID ${lessonId} not found`);
-        const names: Record<string, string> = { en: 'English', de: 'German', es: 'Spanish', fr: 'French', ar: 'Arabic' };
-        const lang = names[lesson.targetLanguage] || lesson.targetLanguage || 'English';
+        const lang = targetLanguageCode(lesson.targetLanguage);
         const existing = await this.progressModel.findOne({ userId: user._id.toString(), lessonId }).session(session);
         let xpEarned = 0;
         if (!existing) {
@@ -212,7 +118,7 @@ export class ProgressService implements OnModuleInit {
           user = (await this.userModel.findOneAndUpdate({ _id: user._id }, {
             $inc: { totalXp: xpEarned, [`xpPerLanguage.${lang}`]: xpEarned },
           }, { returnDocument: 'after', session }))!;
-          const xp = user.xpPerLanguage.get(lang) || 0;
+          const xp = this.languageXp(user, lang);
           const level = xp >= 2200 ? 'Advanced' : xp >= 1400 ? 'Upper-Intermediate'
             : xp >= 900 ? 'Intermediate' : xp >= 500 ? 'Pre-Intermediate'
             : xp >= 200 ? 'Elementary' : 'Beginner';
@@ -223,8 +129,8 @@ export class ProgressService implements OnModuleInit {
           await this.progressModel.updateOne({ _id: existing._id }, { $max: { score } }, { session });
         }
         return { message: 'Lesson marked as completed', data: {
-          userId: user.email, lessonId, score: Math.max(score, existing?.score ?? score),
-          xpEarned, newTotalXp: user.xpPerLanguage?.get(lang) || 0,
+          userId: user._id.toString(), lessonId, score: Math.max(score, existing?.score ?? score),
+          xpEarned, newTotalXp: this.languageXp(user, lang),
         } };
       }, { readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' } });
       try { return await run(); }
@@ -237,17 +143,21 @@ export class ProgressService implements OnModuleInit {
     } finally { await session.endSession(); }
   }
 
+  private languageXp(user: User, code: string): number {
+    return [...(user.xpPerLanguage ?? [])].reduce((total, [key, xp]) =>
+      total + (tryTargetLanguage(key) === code ? xp : 0), 0);
+  }
+
   async resetProgress(userId: string) {
     const session = await this.connection.startSession();
     try {
       return await session.withTransaction(async () => {
         const user = await this.findUser(userId, session);
-        if (!user) throw new NotFoundException(`User with ID/Email ${userId} not found`);
         await this.progressModel.deleteMany({ userId: user._id.toString() }).session(session);
         await this.userModel.updateOne({ _id: user._id }, { $set: {
           totalXp: 0, streak: 0, level: 'Beginner', xpPerLanguage: {}, levelPerLanguage: {},
         } }, { session });
-        return { message: 'Progress successfully reset', userId: user.email };
+        return { message: 'Progress successfully reset', userId: user._id.toString() };
       }, { readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' } });
     } finally { await session.endSession(); }
   }

@@ -58,13 +58,13 @@ class _RegisterScreenState extends State<RegisterScreen> {
       final response = await _apiService.register(name, email, password);
       if (!mounted || !session.isCurrent) return;
       
-      final userData = response['user'] ?? {};
+      final userData = response['user'] as Map<String, dynamic>;
       // Update session with backend data
       auth.setBackendSession(
-        name: userData['name'] ?? name,
-        email: userData['email'] ?? email,
-        token: response['access_token'] ?? 'placeholder-token',
-        id: userData['id'] ?? '',
+        name: userData['name'] as String,
+        email: userData['email'] as String,
+        token: response['access_token'] as String,
+        id: userData['id'] as String,
         targetLanguage: userData['targetLanguage'],
       );
       session = auth.captureSession();

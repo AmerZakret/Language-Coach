@@ -1,23 +1,24 @@
+import '../core/localization/target_language.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../core/config/api_config.dart';
 import 'auth_service.dart';
+import 'api_response.dart';
 
 class AiCoachApiService {
   Future<Map<String, dynamic>> sendMessage({
-    required String userId,
     required String message,
     required String language,
     String? targetLanguage,
   }) async {
+    final session = AuthService().captureSession();
     try {
       final body = <String, dynamic>{
-        'userId': userId,
         'message': message,
         'language': language,
       };
       if (targetLanguage != null) {
-        body['targetLanguage'] = targetLanguage;
+        body['targetLanguage'] = TargetLanguage.code(targetLanguage);
       }
 
       final headers = <String, String>{
@@ -28,31 +29,24 @@ class AiCoachApiService {
         headers['Authorization'] = 'Bearer $token';
       }
 
-      final response = await http.post(
-        Uri.parse('${ApiConfig.baseUrl}${ApiConfig.aiCoach}/chat'),
-        headers: headers,
-        body: json.encode(body),
-      );
+      final response = await apiRequest(
+          () => http.post(
+                Uri.parse('${ApiConfig.baseUrl}${ApiConfig.aiCoach}/chat'),
+                headers: headers,
+                body: json.encode(body),
+              ),
+          session);
 
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        return json.decode(response.body);
-      } else {
-        try {
-          final errorData = json.decode(response.body);
-          throw Exception(errorData['message'] ?? 'Failed to communicate with AI Coach');
-        } catch (_) {
-          throw Exception('Failed to communicate with AI Coach');
-        }
-      }
-    } catch (e) {
-      throw Exception('Network error or server offline: $e');
+      return json.decode(response.body) as Map<String, dynamic>;
+    } catch (_) {
+      rethrow;
     }
   }
 
   Future<List<dynamic>> getHistory({
-    required String userId,
     required String targetLanguage,
   }) async {
+    final session = AuthService().captureSession();
     try {
       final headers = <String, String>{
         'Content-Type': 'application/json',
@@ -62,27 +56,25 @@ class AiCoachApiService {
         headers['Authorization'] = 'Bearer $token';
       }
 
-      final response = await http.get(
-        Uri.parse(
-          '${ApiConfig.baseUrl}${ApiConfig.aiCoach}/history?userId=$userId&targetLanguage=$targetLanguage',
-        ),
-        headers: headers,
-      );
+      final response = await apiRequest(
+          () => http.get(
+                Uri.parse(
+                  '${ApiConfig.baseUrl}${ApiConfig.aiCoach}/history?targetLanguage=${TargetLanguage.code(targetLanguage)}',
+                ),
+                headers: headers,
+              ),
+          session);
 
-      if (response.statusCode == 200) {
-        return json.decode(response.body);
-      } else {
-        throw Exception('Failed to load chat history');
-      }
-    } catch (e) {
-      throw Exception('Network error or server offline: $e');
+      return json.decode(response.body) as List<dynamic>;
+    } catch (_) {
+      rethrow;
     }
   }
 
   Future<void> clearHistory({
-    required String userId,
     required String targetLanguage,
   }) async {
+    final session = AuthService().captureSession();
     try {
       final headers = <String, String>{};
       final token = AuthService().token;
@@ -90,35 +82,32 @@ class AiCoachApiService {
         headers['Authorization'] = 'Bearer $token';
       }
 
-      final response = await http.delete(
-        Uri.parse(
-          '${ApiConfig.baseUrl}${ApiConfig.aiCoach}/clear?userId=$userId&targetLanguage=$targetLanguage',
-        ),
-        headers: headers,
-      );
-
-      if (response.statusCode != 200 && response.statusCode != 204) {
-        throw Exception('Failed to clear chat history: ${response.body}');
-      }
-    } catch (e) {
-      throw Exception('Network error or server offline: $e');
+      await apiRequest(
+          () => http.delete(
+                Uri.parse(
+                  '${ApiConfig.baseUrl}${ApiConfig.aiCoach}/clear?targetLanguage=${TargetLanguage.code(targetLanguage)}',
+                ),
+                headers: headers,
+              ),
+          session);
+    } catch (_) {
+      rethrow;
     }
   }
 
   Future<Map<String, dynamic>> checkWriting({
-    required String userId,
     required String topic,
     required String text,
     required String language,
     required String targetLanguage,
   }) async {
+    final session = AuthService().captureSession();
     try {
       final body = <String, dynamic>{
-        'userId': userId,
         'topic': topic,
         'text': text,
         'language': language,
-        'targetLanguage': targetLanguage,
+        'targetLanguage': TargetLanguage.code(targetLanguage),
       };
 
       final headers = <String, String>{
@@ -129,19 +118,18 @@ class AiCoachApiService {
         headers['Authorization'] = 'Bearer $token';
       }
 
-      final response = await http.post(
-        Uri.parse('${ApiConfig.baseUrl}${ApiConfig.aiCoach}/writing-check'),
-        headers: headers,
-        body: json.encode(body),
-      );
+      final response = await apiRequest(
+          () => http.post(
+                Uri.parse(
+                    '${ApiConfig.baseUrl}${ApiConfig.aiCoach}/writing-check'),
+                headers: headers,
+                body: json.encode(body),
+              ),
+          session);
 
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        return json.decode(response.body);
-      } else {
-        throw Exception('Failed to get writing assessment');
-      }
-    } catch (e) {
-      throw Exception('Network error or server offline: $e');
+      return json.decode(response.body) as Map<String, dynamic>;
+    } catch (_) {
+      rethrow;
     }
   }
 }

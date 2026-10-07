@@ -1,6 +1,8 @@
+import { serializeUser } from './user-response';
 import { Body, Controller, Get, Patch, Req, UseGuards, NotFoundException } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 
 @Controller('users')
 @UseGuards(JwtAuthGuard)
@@ -10,21 +12,13 @@ export class UsersController {
   @Get('me')
   async getMe(@Req() req: any) {
     const user = req.user;
-    return {
-      id: user._id.toString(),
-      name: user.name,
-      email: user.email,
-      level: user.level,
-      totalXp: user.totalXp,
-      streak: user.streak,
-      targetLanguage: user.targetLanguage || 'English',
-    };
+    return serializeUser(user);
   }
 
   @Patch('profile')
   async updateProfile(
     @Req() req: any,
-    @Body() body: { name?: string; targetLanguage?: string },
+    @Body() body: UpdateProfileDto,
   ) {
     const userId = req.user._id.toString();
     const updatedUser = await this.usersService.updateProfile(
@@ -35,14 +29,6 @@ export class UsersController {
     if (!updatedUser) {
       throw new NotFoundException('User profile not found');
     }
-    return {
-      id: updatedUser._id.toString(),
-      name: updatedUser.name,
-      email: updatedUser.email,
-      level: updatedUser.level,
-      totalXp: updatedUser.totalXp,
-      streak: updatedUser.streak,
-      targetLanguage: updatedUser.targetLanguage || 'English',
-    };
+    return serializeUser(updatedUser);
   }
 }

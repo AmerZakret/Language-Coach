@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'progress_api_service.dart';
 import 'flashcard_api_service.dart';
 import 'auth_service.dart';
+import 'api_response.dart';
 import 'progress_cache.dart';
 import 'sync_retry_policy.dart';
 import 'package:http/http.dart' as http;
@@ -500,9 +501,17 @@ class OfflineQueueService {
               state.actions.where((a) => a.id == scheduled.id).toList();
           if (found.isEmpty) return null; // Cancelled before dispatch.
           if (found.single.nextAttemptAt?.isAfter(_now()) == true) return null;
+          final replayPayload = _resolve(state, found.single.type, found.single.payload);
+          // Freeze the new wire contract before first dispatch. Previously
+          // attempted updates retain their old shape for existing receipts.
+          if (found.single.type == 'update-flashcard' && found.single.attemptCount == 0) {
+            replayPayload['_mutationContract'] = 2;
+          }
+          if ((found.single.type == 'update-flashcard' || found.single.type == 'create-flashcard') && found.single.attemptCount == 0) {
+            replayPayload['_languageContract'] = 1;
+          }
           final current = found.single
-              .withPayload(
-                  _resolve(state, found.single.type, found.single.payload))
+              .withPayload(replayPayload)
               .withRetry(
                   attempts: found.single.attemptCount + 1,
                   attemptedAt: _now().toUtc());
@@ -543,7 +552,7 @@ class OfflineQueueService {
             throw const InvalidQueuedPayload();
           }
           if (!session.isCurrent) return false;
-          await http.runWithClient(() async {
+          await withDeferredUnauthorizedInvalidation(() => http.runWithClient(() async {
             switch (action.type) {
               case 'reset-progress':
                 await _progressApi.resetProgress(userId,
@@ -559,7 +568,6 @@ class OfflineQueueService {
                 break;
               case 'create-flashcard':
                 final card = await _flashcardApi.createFlashcard(
-                    userId,
                     payload['targetWord'].toString(),
                     payload['turkishTranslation'].toString(),
                     payload['targetLanguage'].toString(),
@@ -567,7 +575,8 @@ class OfflineQueueService {
                     nativeTranslation: payload['nativeTranslation']?.toString(),
                     exampleSentence: payload['exampleSentence']?.toString(),
                     note: payload['note']?.toString(),
-                    operationId: action.id);
+                    operationId: action.id,
+                    preserveLegacyLanguage: payload['_languageContract'] != 1);
                 serverId = card.id;
                 if (payload['tempId'] != null &&
                     (serverId!.isEmpty || serverId!.startsWith('local_'))) {
@@ -575,14 +584,22 @@ class OfflineQueueService {
                 }
                 break;
               case 'update-flashcard':
+                final legacy = payload['_mutationContract'] != 2;
+                String? optional(String field) {
+                  final value = payload[field]?.toString();
+                  return legacy && value == '' ? null : value;
+                }
                 await _flashcardApi.updateFlashcard(
                     cardId!,
-                    payload['targetWord'].toString(),
-                    payload['turkishTranslation'].toString(),
+                    payload['targetWord']?.toString(),
+                    payload['turkishTranslation']?.toString(),
                     targetLanguage: payload['targetLanguage']?.toString(),
-                    exampleSentence: payload['exampleSentence']?.toString(),
-                    note: payload['note']?.toString(),
-                    operationId: action.id);
+                    nativeLanguage: legacy ? null : payload['nativeLanguage']?.toString(),
+                    nativeTranslation: legacy ? null : payload['nativeTranslation']?.toString(),
+                    exampleSentence: optional('exampleSentence'),
+                    note: optional('note'),
+                    operationId: action.id,
+                    preserveLegacyLanguage: payload['_languageContract'] != 1);
                 break;
               case 'delete-flashcard':
                 await _flashcardApi.deleteFlashcard(cardId!,
@@ -596,7 +613,7 @@ class OfflineQueueService {
               default:
                 throw const InvalidQueuedPayload();
             }
-          }, () => replayClient).timeout(_timeout);
+          }, () => replayClient)).timeout(_timeout);
         } catch (e) {
           if (!session.isCurrent) return false;
           final failure = SyncFailure.classify(e);
@@ -643,6 +660,9 @@ class OfflineQueueService {
             }
             await _write(owner, state, session: session);
           });
+          if (failure.category == 'authentication') {
+            AuthService().invalidateSession(session);
+          }
           hadFailure = true;
           if (!failure.terminal) {
             return false; // Preserve FIFO across transient failure.

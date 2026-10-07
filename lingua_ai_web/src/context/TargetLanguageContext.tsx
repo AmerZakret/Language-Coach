@@ -1,3 +1,4 @@
+import { targetLanguageName, tryTargetLanguageCode } from '../utils/targetLanguage';
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import type { TargetLanguage } from '../types/language';
 import { useAuth } from './AuthContext';
@@ -18,14 +19,20 @@ export const TargetLanguageProvider: React.FC<{ children: React.ReactNode }> = (
   const languageRequest = useRef(0);
 
   const [targetLanguage, setTargetLanguageState] = useState<TargetLanguage>(() => {
-    return (localStorage.getItem('linguaai_target_language') as TargetLanguage) || 'English';
+    const saved = localStorage.getItem('linguaai_target_language');
+    if (saved == null) return 'English'; // Explicit first-use default only.
+    return targetLanguageName(saved);
   });
 
   // Sync state if backend user's targetLanguage changes (e.g. at login/startup)
   useEffect(() => {
     if (user && !isGuest && user.targetLanguage && user.targetLanguage !== targetLanguage) {
-      setTargetLanguageState(user.targetLanguage as TargetLanguage);
-      localStorage.setItem('linguaai_target_language', user.targetLanguage);
+      if (!tryTargetLanguageCode(user.targetLanguage)) {
+        console.error('Unsupported profile target language', user.targetLanguage);
+        return;
+      }
+      setTargetLanguageState(targetLanguageName(user.targetLanguage));
+      localStorage.setItem('linguaai_target_language', targetLanguageName(user.targetLanguage));
     }
   }, [user, isGuest]);
 

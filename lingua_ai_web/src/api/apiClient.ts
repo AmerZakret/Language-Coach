@@ -1,6 +1,6 @@
 import axios from 'axios';
 import type { InternalAxiosRequestConfig } from 'axios';
-import { isOfflineQueueSessionActive, isSessionCurrent } from '../utils/queueSession';
+import { isOfflineQueueSessionActive, isSessionCurrent, getOfflineQueueSession, invalidateCurrentSession } from '../utils/queueSession';
 import type { QueueSession } from '../utils/queueSession';
 
 const apiClient = axios.create({
@@ -34,7 +34,9 @@ apiClient.interceptors.request.use(
       if (session.token) config.headers.Authorization = `Bearer ${session.token}`;
       return config;
     }
-    const token = localStorage.getItem('linguaai_token');
+    const snapshot = getOfflineQueueSession();
+    (config as InternalAxiosRequestConfig & { sessionSnapshot?: QueueSession }).sessionSnapshot = snapshot;
+    const token = snapshot.token;
     if (token) {
       config.headers.Authorization = `Bearer ${token}`;
     }
@@ -49,11 +51,16 @@ apiClient.interceptors.request.use(
 apiClient.interceptors.response.use(
   (response) => response,
   (error) => {
+    // Queue failures persist their authentication retry state before invalidation.
+    const config = error.config;
+    if (error.response?.status === 401 && !config?.url?.startsWith('/auth/')
+      && !config?.offlineQueueSession && config?.sessionSnapshot) {
+      invalidateCurrentSession(config.sessionSnapshot);
+    }
     console.error('API Request Failed:', {
       url: error.config?.url,
       method: error.config?.method,
       status: error.response?.status,
-      data: error.response?.data,
       message: error.message,
     });
     return Promise.reject(error);

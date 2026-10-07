@@ -1,3 +1,4 @@
+import { targetLanguageCode, targetLanguageQuery, tryTargetLanguage } from '../common/target-language';
 import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
@@ -45,7 +46,7 @@ export class CommunityService {
     const newPost = new this.communityPostModel({
       userId,
       userName,
-      learningLanguage,
+      learningLanguage: targetLanguageCode(learningLanguage),
       text,
       imageUrl,
       likes: [],
@@ -64,7 +65,7 @@ export class CommunityService {
     const query: any = {};
     if (language && language.trim() !== '' && language.toLowerCase() !== 'all') {
       // Direct exact match, or case-insensitive if needed
-      query.learningLanguage = { $regex: new RegExp(`^${language}$`, 'i') };
+      query.learningLanguage = targetLanguageQuery(language);
     }
 
     const total = await this.communityPostModel.countDocuments(query);
@@ -88,6 +89,7 @@ export class CommunityService {
       const currentUserName = userMap.get(post.userId) || post.userName;
       return {
         ...obj,
+        learningLanguage: tryTargetLanguage(obj.learningLanguage) ?? obj.learningLanguage,
         userName: currentUserName,
         likedByMe: post.likes.includes(currentUserId),
       };

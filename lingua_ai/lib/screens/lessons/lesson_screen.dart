@@ -22,6 +22,7 @@ class _LessonScreenState extends State<LessonScreen> {
   bool isChecked = false;
   Lesson? lesson;
   bool _isLoading = false;
+  bool _loadFailed = false;
   final LessonApiService _apiService = LessonApiService();
   final SoundService _soundService = SoundService();
 
@@ -52,13 +53,16 @@ class _LessonScreenState extends State<LessonScreen> {
       }
     } catch (e) {
       if (mounted) {
-        setState(() => _isLoading = false);
+        setState(() {
+          _isLoading = false;
+          _loadFailed = true;
+        });
       }
     }
   }
 
   void _checkAnswer() {
-    if (lesson == null || selectedAnswer == null) return;
+    if (lesson == null || lesson!.questions.isEmpty || selectedAnswer == null) return;
 
     final currentQuestion = lesson!.questions[currentQuestionIndex];
     final isCorrect = selectedAnswer == currentQuestion.correctAnswer;
@@ -76,7 +80,7 @@ class _LessonScreenState extends State<LessonScreen> {
   }
 
   void _nextQuestion() {
-    if (lesson == null) return;
+    if (lesson == null || lesson!.questions.isEmpty) return;
 
     setState(() {
       if (currentQuestionIndex < lesson!.questions.length - 1) {
@@ -109,6 +113,13 @@ class _LessonScreenState extends State<LessonScreen> {
         if (_isLoading || lesson == null) {
           return const Scaffold(
             body: Center(child: CircularProgressIndicator(color: AppTheme.primaryColor)),
+          );
+        }
+
+        if (_loadFailed || lesson!.questions.isEmpty) {
+          return Scaffold(
+            appBar: AppBar(title: Text(lang.getString('error_loading'))),
+            body: Center(child: Text(lang.getString('no_questions'))),
           );
         }
 

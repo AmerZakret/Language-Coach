@@ -86,10 +86,11 @@ function harness(saved = storage(), fakeTimers = false) {
     createElement: (type, props) => ({ type, props }),
   };
   const requestInterceptors = [];
+  const responseInterceptors = [];
   const transport = {
     interceptors: {
       request: { use: handler => requestInterceptors.push(handler) },
-      response: { use: () => {} },
+      response: { use: (success, failure) => responseInterceptors.push({ success, failure }) },
     },
   };
   function request(method, url, data, config = {}) {
@@ -98,7 +99,10 @@ function harness(saved = storage(), fakeTimers = false) {
     for (const interceptor of requestInterceptors) pending = pending.then(interceptor);
     return pending.then(prepared => {
       requests.push(prepared);
-      return control.dispatch(prepared);
+      let result = Promise.resolve().then(() => control.dispatch(prepared))
+        .catch(error => { error.config ??= prepared; throw error; });
+      for (const interceptor of responseInterceptors) result = result.then(interceptor.success, interceptor.failure);
+      return result;
     });
   }
   transport.post = (url, data, config) => request('post', url, data, config);
@@ -113,7 +117,7 @@ function harness(saved = storage(), fakeTimers = false) {
     userKey: 'utils/userKey.ts', queueSession: 'utils/queueSession.ts',
     apiClient: 'api/apiClient.ts', offlineQueue: 'utils/offlineQueue.ts',
     auth: 'context/AuthContext.tsx',
-    authApi: 'api/authApi.ts', progressApi: 'api/progressApi.ts',
+    authApi: 'api/authApi.ts', progressApi: 'api/progressApi.ts', language: 'utils/targetLanguage.ts', mutation: 'utils/flashcardMutation.ts',
   };
   function load(name) {
     if (modules.has(name)) return modules.get(name).exports;
@@ -142,6 +146,8 @@ function harness(saved = storage(), fakeTimers = false) {
         if (name.endsWith('/types/progress')) return load('types');
         if (name.endsWith('/userKey')) return load('userKey');
         if (name.endsWith('/queueSession')) return load('queueSession');
+        if (name.endsWith('/targetLanguage')) return load('language');
+        if (name.endsWith('/flashcardMutation')) return load('mutation');
         if (name.endsWith('/apiClient')) return load('apiClient');
         throw new Error(`Unexpected import: ${name}`);
       },
@@ -278,7 +284,7 @@ test('all operations pin owner credentials and create ignores a stale payload us
   assert.equal(await h.queue.processOfflineQueue(A), true);
   assert.equal(h.requests.length, 5);
   assert.ok(h.requests.every(r => r.headers.Authorization === `Bearer test-${A}`));
-  assert.equal(h.requests.find(r => r.url === '/flashcards').data.userId, A);
+  assert.equal('userId' in h.requests.find(r => r.url === '/flashcards').data, false);
 });
 
 test('new action has precisely the versioned ownership envelope without credentials', async () => {
@@ -702,7 +708,13 @@ test('Phase 4F: public health probe accepts only health success and has no crede
 
 test('Phase 4F: 401 is retained for authentication recovery, not silently quarantined', async () => {
   const h = await durableHarness(); h.enqueue(); h.control.dispatch = async () => { throw { response: { status: 401 } }; };
-  await h.queue.processOfflineQueue(A); assert.equal(h.queue.getOfflineQueue()[0].lastErrorCategory, 'authentication');
+  await h.queue.processOfflineQueue(A);
+  assert.equal(h.auth().token, null);
+  assert.equal(h.saved.getItem('linguaai_token'), null);
+  const retained = JSON.parse(h.saved.getItem(key(`registered_${A}`)));
+  assert.equal(retained.actions[0].lastErrorCategory, 'authentication');
+  h.auth().login(user(A), `new-${A}`);
+  assert.equal(h.queue.getOfflineQueue()[0].lastErrorCategory, 'authentication');
   assert.equal(h.queue.getFailedOfflineActions().length, 0);
 });
 
@@ -756,4 +768,70 @@ test('Phase 4F: account switch during a drain automatically resumes only the new
     assert.equal(h.queue.getOfflineQueue().length, 0);
     assert.equal(h.saved.getItem(key(`registered_${A}`)), oldQueue);
   } finally { h.stop(); }
+});
+
+test('Phase 5C: partial update omits untouched fields, keeps clears and native fields across retry', async () => {
+  const h = harness(); await h.mount(); h.auth().login(user(A), `test-${A}`);
+  h.enqueue('update-flashcard', { cardId: 'card', nativeLanguage: 'tr', nativeTranslation: 'native', note: '', exampleSentence: '' });
+  h.control.dispatch = async () => { if (h.requests.length === 1) throw new Error('lost response'); return { data: {} }; };
+  assert.equal(await h.queue.processOfflineQueue(A), false);
+  h.advance(6 * 60 * 1000);
+  assert.equal(await h.queue.processOfflineQueue(A), true);
+  assert.deepEqual(JSON.parse(JSON.stringify(h.requests[0].data)), {
+    nativeLanguage: 'tr', nativeTranslation: 'native', note: '', exampleSentence: '',
+  });
+  assert.deepEqual(h.requests[0].data, h.requests[1].data);
+  assert.equal(h.requests[0].headers['X-Idempotency-Key'], h.requests[1].headers['X-Idempotency-Key']);
+});
+
+test('Phase 5C: previously attempted legacy web updates retain their receipt payload', async () => {
+  const h = harness(); await h.mount(); h.auth().login(user(A), `test-${A}`);
+  h.enqueue('update-flashcard', { cardId: 'card', targetWord: 'word', turkishTranslation: 'translation',
+    nativeLanguage: 'tr', nativeTranslation: 'native', note: '', exampleSentence: '' });
+  const state = JSON.parse(h.saved.getItem(key(`registered_${A}`)));
+  state.actions[0].attemptCount = 1;
+  h.saved.setItem(key(`registered_${A}`), JSON.stringify(state));
+  assert.equal(await h.queue.processOfflineQueue(A), true);
+  assert.deepEqual(JSON.parse(JSON.stringify(h.requests[0].data)), {
+    targetWord: 'word', turkishTranslation: 'translation', note: '', exampleSentence: '',
+  });
+});
+
+for (const type of ['create-flashcard', 'update-flashcard']) {
+  test(`Phase 5D: ${type} normalizes new aliases and preserves previously attempted receipt language`, async () => {
+    for (const attempted of [false, true]) {
+      const h = harness(); await h.mount(); h.auth().login(user(A), `test-${A}`);
+      h.enqueue(type, { cardId: 'card', targetWord: 'word', turkishTranslation: 'translation', targetLanguage: 'German' });
+      const state = JSON.parse(h.saved.getItem(key(`registered_${A}`)));
+      state.actions[0].attemptCount = attempted ? 1 : 0;
+      h.saved.setItem(key(`registered_${A}`), JSON.stringify(state));
+      assert.equal(await h.queue.processOfflineQueue(A), true);
+      assert.equal(h.requests[0].data.targetLanguage, attempted ? 'German' : 'de');
+      assert.equal(h.requests[0].headers['X-Idempotency-Key'], state.actions[0].id);
+    }
+  });
+}
+
+test('Phase 5E: online current-token 401 invalidates auth and preserves queued owner work', async () => {
+  const h = await durableHarness(); h.enqueue();
+  const rawQueue = h.saved.getItem(key(`registered_${A}`));
+  h.control.dispatch = async () => { throw { response: { status: 401 } }; };
+  await assert.rejects(h.client.get('/users/me'));
+  assert.equal(h.auth().token, null); assert.equal(h.saved.getItem('linguaai_user'), null);
+  assert.equal(h.saved.getItem(key(`registered_${A}`)), rawQueue);
+});
+test('Phase 5E: old-token 401 cannot invalidate the same owner with a replacement token', async () => {
+  const h = await durableHarness(); const started = deferred(), release = deferred();
+  h.control.dispatch = () => { started.resolve(); return release.promise; };
+  const pending = h.client.get('/users/me'); const failed = assert.rejects(pending);
+  await started.promise; h.auth().login(user(A), 'replacement-token');
+  release.resolve(Promise.reject({ response: { status: 401 } })); await failed;
+  assert.equal(h.auth().token, 'replacement-token');
+});
+
+test('Phase 5E: invalid login credentials do not revoke a separate current authenticated token', async () => {
+  const h = await durableHarness();
+  h.control.dispatch = async () => { throw { response: { status: 401 } }; };
+  await assert.rejects(h.client.post('/auth/login', { email: 'other@example.com', password: 'wrong' }));
+  assert.equal(h.auth().token, `test-${A}`);
 });

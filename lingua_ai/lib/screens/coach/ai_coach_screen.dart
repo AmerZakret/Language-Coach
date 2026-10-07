@@ -3,6 +3,7 @@ import '../../core/theme/app_theme.dart';
 import '../../widgets/bottom_nav_bar.dart';
 import '../../core/localization/language_service.dart';
 import '../../services/auth_service.dart';
+import '../../services/api_response.dart';
 import '../../services/ai_coach_api_service.dart';
 import '../../core/localization/target_language_service.dart';
 import '../../services/theme_service.dart';
@@ -22,6 +23,7 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
   
   bool _isLoading = false;
   bool _isHistoryLoading = true;
+  int _historyRequestRevision = 0;
   final List<Map<String, dynamic>> _messages = [];
 
   @override
@@ -43,6 +45,20 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
 
   Future<void> _loadHistory() async {
     if (!mounted) return;
+    final requestRevision = ++_historyRequestRevision;
+    if (AuthService().token.isEmpty) {
+      setState(() { _messages.clear(); _isHistoryLoading = false; _isLoading = false; });
+      return;
+    }
+    final session = AuthService().captureSession();
+    final languages = TargetLanguageService();
+    final targetLanguage = languages.currentLanguage;
+    final languageRevision = languages.languageVersion;
+    bool isCurrent() =>
+        mounted && session.isCurrent &&
+        requestRevision == _historyRequestRevision &&
+        languageRevision == languages.languageVersion &&
+        targetLanguage == languages.currentLanguage;
 
     setState(() {
       _isHistoryLoading = true;
@@ -50,20 +66,11 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
     });
 
     try {
-      final auth = AuthService();
-      final userId = auth.currentUserId.isNotEmpty
-          ? auth.currentUserId
-          : (auth.currentUserEmail.isNotEmpty
-              ? auth.currentUserEmail
-              : 'guest');
-      final targetLanguage = TargetLanguageService().currentLanguage;
-
       final history = await _apiService.getHistory(
-        userId: userId,
         targetLanguage: targetLanguage,
       );
 
-      if (mounted) {
+      if (isCurrent()) {
         setState(() {
           for (var msg in history) {
             _messages.add({
@@ -76,7 +83,7 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
         _scrollToBottom();
       }
     } catch (e) {
-      if (mounted) {
+      if (isCurrent()) {
         setState(() {
           _isHistoryLoading = false;
         });
@@ -99,6 +106,7 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
   Future<void> _sendMessage() async {
     final text = _messageController.text.trim();
     if (text.isEmpty) return;
+    final session = AuthService().captureSession();
 
     setState(() {
       _messages.add({
@@ -111,22 +119,16 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
     _scrollToBottom();
 
     try {
-      final auth = AuthService();
-      final userId = auth.currentUserId.isNotEmpty
-          ? auth.currentUserId
-          : (auth.currentUserEmail.isNotEmpty
-              ? auth.currentUserEmail
-              : 'guest');
       final language = LanguageService().currentLanguage;
       final targetLanguageCode = TargetLanguageService().currentLanguage;
 
       final response = await _apiService.sendMessage(
-        userId: userId,
         message: text,
         language: language,
         targetLanguage: targetLanguageCode,
       );
 
+      if (!mounted || !session.isCurrent) return;
       setState(() {
         _messages.add({
           'text': response['reply'] ?? 'No reply received.',
@@ -135,10 +137,10 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
         });
       });
     } catch (e) {
-      setState(() {
-        _messages.removeLast(); // Rollback optimistic user message
-      });
-      if (mounted) {
+      if (mounted && canHandleApiError(session, e)) {
+        if (session.isCurrent && _messages.isNotEmpty) {
+          setState(() => _messages.removeLast());
+        }
         final errorMsg = e.toString().replaceAll('Exception: ', '');
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -161,7 +163,6 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
 
   Future<void> _clearChat() async {
     final lang = LanguageService();
-    final auth = AuthService();
     final targetLang = TargetLanguageService();
 
     final confirm = await showDialog<bool>(
@@ -195,14 +196,7 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
     if (confirm == true) {
       setState(() => _isLoading = true);
       try {
-        final userId = auth.currentUserId.isNotEmpty
-            ? auth.currentUserId
-            : (auth.currentUserEmail.isNotEmpty
-                ? auth.currentUserEmail
-                : 'guest');
-
         await _apiService.clearHistory(
-          userId: userId,
           targetLanguage: targetLang.currentLanguage,
         );
         setState(() {

@@ -1,3 +1,4 @@
+import { targetLanguageCode, TARGET_LANGUAGE_NAMES } from '../../common/target-language';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 
@@ -7,7 +8,8 @@ export class AiContextService {
 
   constructor(private configService: ConfigService) {}
 
-  async generateContext(word: string, translation: string) {
+  async generateContext(word: string, translation: string, targetLanguage: string) {
+    const language = TARGET_LANGUAGE_NAMES[targetLanguageCode(targetLanguage)];
     const apiKey = this.configService.get<string>('GEMINI_API_KEY')?.trim();
     const model = (this.configService.get<string>('GEMINI_MODEL') || 'gemini-2.5-flash').trim();
 
@@ -20,9 +22,9 @@ export class AiContextService {
     }
 
     const systemPrompt = `You are a creative language teacher. 
-    For the English word "${word}" (Turkish translation: "${translation}"), provide:
-    1. 3 short English sentences using the word contextually.
-    2. 1 phonetic mnemonic bridging the English word to a Turkish concept.
+    For the ${language} word "${word}" (Turkish translation: "${translation}"), provide:
+    1. 3 short ${language} sentences using the word contextually.
+    2. 1 phonetic mnemonic bridging the ${language} word to a Turkish concept.
     
     Return pure JSON with fields: "sentences" (array of strings) and "mnemonic" (string).
     Do not include markdown code block formatting.`;

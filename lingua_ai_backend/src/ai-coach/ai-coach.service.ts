@@ -1,3 +1,4 @@
+import { targetLanguageCode, targetLanguageQuery, TARGET_LANGUAGE_NAMES, languageResponse } from '../common/target-language';
 import { Injectable, Logger, NotFoundException, HttpException, HttpStatus } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
@@ -18,19 +19,6 @@ interface ParsedAIResponse {
   correction: string;
 }
 
-const LANGUAGE_NAMES: Record<string, string> = {
-  en: 'English',
-  de: 'German',
-  es: 'Spanish',
-  fr: 'French',
-  ar: 'Arabic',
-  english: 'English',
-  german: 'German',
-  spanish: 'Spanish',
-  french: 'French',
-  arabic: 'Arabic',
-};
-
 @Injectable()
 export class AiCoachService {
   // Logger instance for tracing API interactions and errors in backend logs
@@ -45,22 +33,20 @@ export class AiCoachService {
   ) {}
 
   /**
-   * Helper function to find a user in the database by email or ObjectId.
-   * Isolates search patterns to ensure compatibility with both registered users and guest session profiles.
+   * Resolve only the MongoDB identity supplied by an authenticated controller.
    */
-  private async findUser(userId: string): Promise<User | null> {
-    const isObjectId = Types.ObjectId.isValid(userId);
-    return this.userModel.findOne({
-      $or: [
-        { email: userId },
-        ...(isObjectId ? [{ _id: new Types.ObjectId(userId) }] : []),
-      ],
-    }).exec();
+  private async findUser(userId: string): Promise<User> {
+    if (!Types.ObjectId.isValid(userId)) {
+      throw new NotFoundException('Authenticated user not found');
+    }
+    const user = await this.userModel.findById(userId).exec();
+    if (!user) throw new NotFoundException('Authenticated user not found');
+    return user;
   }
 
   /**
    * Main AI Coach Chat Handler:
-   * 1. Fetches or initializes the user profile.
+   * 1. Resolves the authenticated user profile.
    * 2. Resolves API configuration and system instructions (translated explanations for TR interface).
    * 3. Submits user message securely to Gemini API requesting structured JSON.
    * 4. Parses the reply, checks grammar, and saves records to MongoDB.
@@ -71,20 +57,11 @@ export class AiCoachService {
     language: string,
     targetLanguage?: string,
   ) {
-    // Locate the user profile or create a lazy-loaded placeholder to ensure guests function cleanly
-    let user = await this.findUser(userId);
-    if (!user) {
-      user = await this.userModel.create({
-        name: userId.split('@')[0].toUpperCase(),
-        email: userId,
-        passwordHash: 'placeholder-hash',
-        totalXp: 0,
-        streak: 0,
-        level: 'Beginner',
-      });
-    }
+    const user = await this.findUser(userId);
 
     // Retrieve secret variables securely from NestJS config provider (protects key from client bundles)
+    const targetCode = targetLanguageCode(targetLanguage ?? 'en');
+    const targetLangName = TARGET_LANGUAGE_NAMES[targetCode];
     const apiKey = this.configService.get<string>('GEMINI_API_KEY')?.trim();
     const model = (
       this.configService.get<string>('GEMINI_MODEL') || 'gemini-2.5-flash'
@@ -104,10 +81,7 @@ export class AiCoachService {
     }
 
     // Convert interface and target language codes to human-readable names for prompt construction
-    const targetLangName =
-      LANGUAGE_NAMES[targetLanguage?.toLowerCase() || ''] ||
-      targetLanguage ||
-      'English';
+
     const interfaceLangName = language === 'tr' ? 'Turkish' : 'English';
 
     // System instruction defining the AI's persona, tasks, and response schema.
@@ -185,7 +159,7 @@ Do not include markdown code block formatting like \`\`\`json. Return pure JSON.
       // 1. Save user's message document to MongoDB
       const savedUserMsg = await new this.chatMessageModel({
         userId: user._id.toString(),
-        targetLanguage: targetLangName,
+        targetLanguage: targetCode,
         role: 'user',
         message,
       }).save();
@@ -193,7 +167,7 @@ Do not include markdown code block formatting like \`\`\`json. Return pure JSON.
       // 2. Save coach's reply document to MongoDB
       const savedAssistantMsg = await new this.chatMessageModel({
         userId: user._id.toString(),
-        targetLanguage: targetLangName,
+        targetLanguage: targetCode,
         role: 'assistant',
         message: parsedResponse.reply,
       }).save();
@@ -250,40 +224,19 @@ Do not include markdown code block formatting like \`\`\`json. Return pure JSON.
     language: string,
     targetLanguage: string,
   ) {
-    let user = await this.findUser(userId);
-    if (!user) {
-      user = await this.userModel.create({
-        name: userId.split('@')[0].toUpperCase(),
-        email: userId,
-        passwordHash: 'placeholder-hash',
-        totalXp: 0,
-        streak: 0,
-        level: 'Beginner',
-      });
-    }
+    await this.findUser(userId);
 
+    const targetCode = targetLanguageCode(targetLanguage ?? 'en');
+    const targetLangName = TARGET_LANGUAGE_NAMES[targetCode];
     const apiKey = this.configService.get<string>('GEMINI_API_KEY')?.trim();
     const model = (
       this.configService.get<string>('GEMINI_MODEL') || 'gemini-2.5-flash'
     ).trim();
 
     if (!apiKey || apiKey === 'your_gemini_api_key') {
-      this.logger.warn('GEMINI_API_KEY is not configured');
-      return {
-        grammarScore: 70,
-        vocabularyScore: 70,
-        clarityScore: 70,
-        overallScore: 70,
-        corrections: [],
-        feedback: language === 'tr' ? 'YZ Koç henüz yapılandırılmadı.' : 'AI Coach is not configured yet.',
-        improvedVersion: text,
-      };
+      throw new HttpException('Writing evaluation is not configured yet.', HttpStatus.SERVICE_UNAVAILABLE);
     }
 
-    const targetLangName =
-      LANGUAGE_NAMES[targetLanguage?.toLowerCase() || ''] ||
-      targetLanguage ||
-      'English';
     const interfaceLangName = language === 'tr' ? 'Turkish' : 'English';
 
     // System instruction layout for structured JSON return (includes corrections array schema)
@@ -294,10 +247,10 @@ Explanations and general feedback must be in ${interfaceLangName}.
 
 You must return a JSON object with the following structure:
 {
-  "grammarScore": number, (1-100 score for grammar)
-  "vocabularyScore": number, (1-100 score for vocabulary)
-  "clarityScore": number, (1-100 score for clarity and style)
-  "overallScore": number, (1-100 overall score)
+  "grammarScore": number, (0-100 score for grammar)
+  "vocabularyScore": number, (0-100 score for vocabulary)
+  "clarityScore": number, (0-100 score for clarity and style)
+  "overallScore": number, (0-100 overall score)
   "corrections": [
     {
       "original": "the exact mistaken word or phrase from user text",
@@ -336,69 +289,47 @@ Return ONLY this JSON. Do not include markdown formatting like \`\`\`json.`;
       );
 
       if (!response.ok) {
-        const errorText = await response.text();
-        this.logger.error(`Gemini API error: ${response.status} ${errorText}`);
-        if (response.status === 429) {
-          throw new Error('QUOTA_EXCEEDED');
-        }
-        throw new Error(
-          `Failed to fetch from Gemini: ${response.status} ${errorText}`,
+        this.logger.warn(`Writing provider returned HTTP ${response.status}`);
+        throw new HttpException(
+          'Writing evaluation is temporarily unavailable. Please try again.',
+          response.status === 429 ? HttpStatus.SERVICE_UNAVAILABLE : HttpStatus.BAD_GATEWAY,
         );
       }
 
       const data = (await response.json()) as GeminiResponse;
-      const textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
-
-      if (!textResponse) {
-        throw new Error('Invalid response from Gemini API');
-      }
-
-      let parsedResponse: any;
+      const textResponse = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      let evaluation: any;
       try {
-        parsedResponse = JSON.parse(textResponse);
-      } catch (err) {
-        this.logger.error('Failed to parse Gemini writing check response: ' + textResponse);
-        throw new Error('Invalid AI response format');
+        evaluation = JSON.parse(textResponse ?? '');
+      } catch {
+        throw new HttpException('Writing provider returned an invalid evaluation.', HttpStatus.BAD_GATEWAY);
       }
-
-      // Convert 1-10 metrics to 1-100 percentages if Gemini returns low decimals
-      if (typeof parsedResponse.overallScore === 'number' && parsedResponse.overallScore <= 10) {
-        parsedResponse.overallScore *= 10;
-        parsedResponse.grammarScore *= 10;
-        parsedResponse.vocabularyScore *= 10;
-        parsedResponse.clarityScore *= 10;
+      const scoreFields = ['grammarScore', 'vocabularyScore', 'clarityScore', 'overallScore'];
+      if (!evaluation || scoreFields.some(field => typeof evaluation[field] !== 'number'
+        || !Number.isFinite(evaluation[field]) || evaluation[field] < 0 || evaluation[field] > 100)
+        || typeof evaluation.feedback !== 'string' || typeof evaluation.improvedVersion !== 'string'
+        || !Array.isArray(evaluation.corrections)
+        || evaluation.corrections.some((item: any) => !item || ['original', 'correction', 'explanation']
+          .some(field => typeof item[field] !== 'string'))) {
+        throw new HttpException('Writing provider returned an invalid evaluation.', HttpStatus.BAD_GATEWAY);
       }
-
+      // Scores are percentages (0-100), including decimals; never infer a second scale.
       return {
-        grammarScore: Number(parsedResponse.grammarScore) || 70,
-        vocabularyScore: Number(parsedResponse.vocabularyScore) || 70,
-        clarityScore: Number(parsedResponse.clarityScore) || 70,
-        overallScore: Number(parsedResponse.overallScore) || 70,
-        corrections: Array.isArray(parsedResponse.corrections) ? parsedResponse.corrections : [],
-        feedback: typeof parsedResponse.feedback === 'string' ? parsedResponse.feedback : 'Here is your writing feedback.',
-        improvedVersion: typeof parsedResponse.improvedVersion === 'string' ? parsedResponse.improvedVersion : text,
+        grammarScore: evaluation.grammarScore,
+        vocabularyScore: evaluation.vocabularyScore,
+        clarityScore: evaluation.clarityScore,
+        overallScore: evaluation.overallScore,
+        corrections: evaluation.corrections.map(({ original, correction, explanation }) => ({ original, correction, explanation })),
+        feedback: evaluation.feedback,
+        improvedVersion: evaluation.improvedVersion,
       };
     } catch (error) {
-      this.logger.error('Error calling Gemini for writing check', error);
-      const isQuotaError =
-        error instanceof Error &&
-        (error.message.includes('429') || error.message === 'QUOTA_EXCEEDED');
-      const fallbackFeedback = isQuotaError
-        ? language === 'tr'
-          ? 'Üzgünüm, günlük Gemini yapay zeka kotam doldu. Lütfen biraz sonra tekrar deneyin!'
-          : "I'm sorry, my Gemini API quota limit is currently exceeded. Please try again in a minute!"
-        : language === 'tr'
-        ? 'Yazma değerlendirmesi sırasında bir hata oluştu. Lütfen tekrar deneyin.'
-        : 'An error occurred during evaluation. Please try again.';
-      return {
-        grammarScore: 70,
-        vocabularyScore: 70,
-        clarityScore: 70,
-        overallScore: 70,
-        corrections: [],
-        feedback: fallbackFeedback,
-        improvedVersion: text,
-      };
+      if (error instanceof HttpException) throw error;
+      if (error instanceof SyntaxError) {
+        throw new HttpException('Writing provider returned an invalid evaluation.', HttpStatus.BAD_GATEWAY);
+      }
+      this.logger.warn('Writing evaluation provider could not be reached');
+      throw new HttpException('Writing evaluation is temporarily unavailable. Please try again.', HttpStatus.SERVICE_UNAVAILABLE);
     }
   }
 
@@ -408,18 +339,13 @@ Return ONLY this JSON. Do not include markdown formatting like \`\`\`json.`;
    */
   async getHistory(userId: string, targetLanguage: string) {
     const user = await this.findUser(userId);
-    if (!user) return [];
 
-    const targetLangName =
-      LANGUAGE_NAMES[targetLanguage?.toLowerCase() || ''] ||
-      targetLanguage ||
-      'English';
-
+    const targetCode = targetLanguageCode(targetLanguage ?? 'en');
     return this.chatMessageModel
-      .find({ userId: user._id.toString(), targetLanguage: targetLangName })
-      .sort({ createdAt: 1 })
+      .find({ userId: user._id.toString(), targetLanguage: targetLanguageQuery(targetCode) })
+      .sort({ createdAt: -1, _id: -1 })
       .limit(50)
-      .exec();
+      .exec().then(messages => messages.reverse().map(languageResponse));
   }
 
   /**
@@ -427,15 +353,10 @@ Return ONLY this JSON. Do not include markdown formatting like \`\`\`json.`;
    */
   async clearHistory(userId: string, targetLanguage: string) {
     const user = await this.findUser(userId);
-    if (!user) return { deletedCount: 0 };
 
-    const targetLangName =
-      LANGUAGE_NAMES[targetLanguage?.toLowerCase() || ''] ||
-      targetLanguage ||
-      'English';
-
+    const targetCode = targetLanguageCode(targetLanguage ?? 'en');
     return this.chatMessageModel
-      .deleteMany({ userId: user._id.toString(), targetLanguage: targetLangName })
+      .deleteMany({ userId: user._id.toString(), targetLanguage: targetLanguageQuery(targetCode) })
       .exec();
   }
 }

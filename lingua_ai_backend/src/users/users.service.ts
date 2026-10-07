@@ -1,3 +1,4 @@
+import { targetLanguageCode } from '../common/target-language';
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
@@ -27,7 +28,7 @@ export class UsersService {
       level: 'Beginner',
       totalXp: 0,
       streak: 0,
-      targetLanguage: 'English',
+      targetLanguage: 'en',
     });
     return user.save();
   }
@@ -40,7 +41,7 @@ export class UsersService {
     const user = await this.userModel.findById(userId).exec();
     if (!user) return null;
     if (name !== undefined) user.name = name;
-    if (targetLanguage !== undefined) user.targetLanguage = targetLanguage;
+    if (targetLanguage !== undefined) user.targetLanguage = targetLanguageCode(targetLanguage);
     return user.save();
   }
 }

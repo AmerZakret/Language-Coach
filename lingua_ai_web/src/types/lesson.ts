@@ -1,4 +1,5 @@
-import type { TargetLanguage } from './language';
+import type { TargetLanguageCode } from './language';
+export type LessonLanguageCode = TargetLanguageCode;
 
 export interface Question {
   id: string;
@@ -16,7 +17,7 @@ export interface Question {
 
 export interface Lesson {
   id: string;
-  targetLanguage: TargetLanguage;
+  targetLanguage: LessonLanguageCode;
   title: string;
   description: string;
   category: string;

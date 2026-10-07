@@ -1,9 +1,11 @@
+import type { TargetLanguageCode, TargetLanguage } from '../types/language';
+import { targetLanguageCode } from '../utils/targetLanguage';
 import apiClient from './apiClient';
 
 export interface PronunciationAssessmentResult {
   targetText: string;
   recognizedText: string;
-  targetLanguage: string;
+  targetLanguage: TargetLanguageCode;
   pronunciationScore: number;
   result: 'correct' | 'almost' | 'try_again';
   aiFeedback: string;
@@ -12,13 +14,11 @@ export interface PronunciationAssessmentResult {
 
 export interface AssessPronunciationRequest {
   audio: Blob | File;
-  userId: string;
   targetText: string;
-  targetLanguage: string;
+  targetLanguage: TargetLanguageCode | TargetLanguage;
   nativeTranslation?: string;
   nativeLanguage?: string;
   sourceType?: 'flashcard' | 'lesson' | 'manual';
-  sourceId?: string;
 }
 
 export const assessPronunciation = async (
@@ -26,9 +26,8 @@ export const assessPronunciation = async (
 ): Promise<PronunciationAssessmentResult> => {
   const formData = new FormData();
   formData.append('audio', request.audio, 'audio.webm');
-  formData.append('userId', request.userId);
   formData.append('targetText', request.targetText);
-  formData.append('targetLanguage', request.targetLanguage);
+  formData.append('targetLanguage', targetLanguageCode(request.targetLanguage));
   
   if (request.nativeTranslation) {
     formData.append('nativeTranslation', request.nativeTranslation);
@@ -38,9 +37,6 @@ export const assessPronunciation = async (
   }
   if (request.sourceType) {
     formData.append('sourceType', request.sourceType);
-  }
-  if (request.sourceId) {
-    formData.append('sourceId', request.sourceId);
   }
 
   const response = await apiClient.post<PronunciationAssessmentResult>(

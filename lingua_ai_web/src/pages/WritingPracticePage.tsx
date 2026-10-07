@@ -1,10 +1,12 @@
+import { getOfflineQueueSession, isSessionCurrent } from '../utils/queueSession';
+import { targetLanguageCode } from '../utils/targetLanguage';
 import { useState, useEffect } from "react";
 import { AlertCircle, CheckCircle2, Sparkles, WifiOff } from "lucide-react";
-import { useAuth } from "../context/AuthContext";
 import { useLanguage } from "../context/LanguageContext";
 import { useTargetLanguage } from "../context/TargetLanguageContext";
 import { useProgress } from "../context/ProgressContext";
 import { useNetwork } from "../context/NetworkContext";
+import { useAuth } from "../context/AuthContext";
 import { checkWriting } from "../api/aiCoachApi";
 import { writingTopics } from "../data/writingTopics";
 
@@ -13,6 +15,7 @@ interface Feedback {
   grammar: number;
   vocabulary: number;
   clarity: number;
+  assessment: string;
   corrected: string;
   mistakes: { original: string; correction: string; explanation: string }[];
 }
@@ -38,16 +41,30 @@ function ScoreRing({ value, color, label }: { value: number; color: string; labe
 }
 
 export function WritingPracticePage() {
-  const { user, isGuest } = useAuth();
   const { language, t } = useLanguage();
   const { targetLanguage } = useTargetLanguage();
   const { addXp } = useProgress();
   const { isOffline } = useNetwork();
+  useAuth(); // Session changes must also clear pending writing UI state.
+  const sessionRevision = getOfflineQueueSession().revision;
 
   const [topic, setTopic] = useState("");
   const [text, setText] = useState("");
   const [feedback, setFeedback] = useState<Feedback | null>(null);
+  const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+
+  const targetCode = targetLanguageCode(targetLanguage);
+  const topicsMap = writingTopics[language] || writingTopics['en'];
+  const topics = topicsMap[targetCode] || topicsMap['en'];
+
+  useEffect(() => {
+    setTopic("");
+    setError("");
+    setFeedback(null);
+    setText("");
+    setLoading(false);
+  }, [targetLanguage, topics, sessionRevision]);
 
   if (isOffline) {
     return (
@@ -58,25 +75,6 @@ export function WritingPracticePage() {
       </div>
     );
   }
-
-  const LANGUAGE_CODES: Record<string, string> = {
-    English: 'en',
-    German: 'de',
-    Spanish: 'es',
-    French: 'fr',
-    Arabic: 'ar',
-    Turkish: 'tr',
-  };
-
-  const targetCode = LANGUAGE_CODES[targetLanguage] || 'en';
-  const topicsMap = writingTopics[language] || writingTopics['en'];
-  const topics = topicsMap[targetCode] || topicsMap['en'];
-
-  useEffect(() => {
-    setTopic("");
-    setFeedback(null);
-    setText("");
-  }, [targetLanguage, topics]);
 
   const handleSuggestTopic = () => {
     if (topics.length === 0) return;
@@ -91,23 +89,26 @@ export function WritingPracticePage() {
   const handleSubmit = async () => {
     if (!topic.trim() || !text.trim() || text.length < 20 || loading) return;
 
+    const session = getOfflineQueueSession();
     setLoading(true);
+    setError('');
     setFeedback(null);
 
     try {
       const response = await checkWriting({
-        userId: user?.id || (isGuest ? 'guest' : 'unknown'),
         topic: topic,
         text: text,
         language: language,
         targetLanguage: targetLanguage
       });
 
+      if (!isSessionCurrent(session)) return;
       const finalResult: Feedback = {
         score: response.overallScore,
         grammar: response.grammarScore,
         vocabulary: response.vocabularyScore,
         clarity: response.clarityScore,
+        assessment: response.feedback,
         corrected: response.improvedVersion,
         mistakes: response.corrections
       };
@@ -115,9 +116,17 @@ export function WritingPracticePage() {
       setFeedback(finalResult);
       addXp(10);
     } catch (e) {
-      console.error('Writing check failed', e);
+      if (!isSessionCurrent(session)) return;
+      const failure = e as { response?: { status?: number; data?: { message?: unknown } }; message?: string };
+      const status = failure.response?.status;
+      const message = failure.response?.data?.message;
+      setError(status === 401 ? 'Your session has expired. Please sign in again.'
+        : typeof message === 'string' && message.length <= 500 && (status && status < 500 || ['Writing evaluation is not configured yet.', 'Writing evaluation is temporarily unavailable. Please try again.', 'Writing provider returned an invalid evaluation.'].includes(message)) ? message
+        : failure.message === 'The server returned an invalid writing evaluation.' ? failure.message
+        : status ? 'The server could not evaluate your writing. Please try again.'
+        : 'Cannot complete the writing request. Check your connection and try again.');
     } finally {
-      setLoading(false);
+      if (isSessionCurrent(session)) setLoading(false);
     }
   };
 
@@ -128,6 +137,7 @@ export function WritingPracticePage() {
         <p style={{ fontSize: "14px", color: "var(--l-muted)", marginTop: "4px" }}>{t('writing_subtitle').replace('{lang}', t('lang_' + targetLanguage.toLowerCase()))}</p>
       </div>
 
+      {error && <p role="alert" className="text-red-500">{error}</p>}
       {/* Topic selector */}
       <div>
         <label style={{ fontSize: "12px", fontWeight: 700, color: "var(--l-muted)", textTransform: "uppercase", letterSpacing: "0.05em", display: "block", marginBottom: "8px" }}>{t('topic')}</label>
@@ -189,10 +199,11 @@ export function WritingPracticePage() {
                 <div style={{ fontSize: "12px", color: "var(--l-muted)" }}>{t('overall_assessment')}</div>
               </div>
               <div className="text-right">
-                <div style={{ fontSize: "38px", fontWeight: 900, color: "#6366F1", lineHeight: 1 }}>{feedback.score || Math.round((feedback.grammar + feedback.vocabulary + feedback.clarity)/3) || 0}</div>
+                <div style={{ fontSize: "38px", fontWeight: 900, color: "#6366F1", lineHeight: 1 }}>{feedback.score}</div>
                 <div style={{ fontSize: "11px", color: "var(--l-muted)" }}>/ 100</div>
               </div>
             </div>
+            <p style={{ color: "var(--l-text2)", marginBottom: 16 }}>{feedback.assessment}</p>
             <div className="flex items-center justify-center gap-8">
               <ScoreRing value={feedback.grammar} color="#6366F1" label={t('grammar')} />
               <ScoreRing value={feedback.vocabulary} color="#10B981" label={t('vocabulary')} />

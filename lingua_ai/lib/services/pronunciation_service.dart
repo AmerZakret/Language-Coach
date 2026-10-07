@@ -1,22 +1,23 @@
+import '../core/localization/target_language.dart';
 import 'dart:convert';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:http/http.dart' as http;
 import '../core/config/api_config.dart';
 import '../models/pronunciation_assessment_result.dart';
 import 'auth_service.dart';
+import 'api_response.dart';
 
 class PronunciationService {
   Future<PronunciationAssessmentResult> assessPronunciation({
     required String audioPath,
-    required String userId,
     required String targetText,
     required String targetLanguage,
     String? nativeTranslation,
     String? nativeLanguage,
     String? sourceType,
-    String? sourceId,
   }) async {
     try {
+      final session = AuthService().captureSession();
       final uri = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.pronunciationAssess}');
       final request = http.MultipartRequest('POST', uri);
 
@@ -27,9 +28,8 @@ class PronunciationService {
       }
 
       // Populate form-data text fields
-      request.fields['userId'] = userId;
       request.fields['targetText'] = targetText;
-      request.fields['targetLanguage'] = targetLanguage;
+      request.fields['targetLanguage'] = TargetLanguage.code(targetLanguage);
       
       if (nativeTranslation != null && nativeTranslation.isNotEmpty) {
         request.fields['nativeTranslation'] = nativeTranslation;
@@ -39,9 +39,6 @@ class PronunciationService {
       }
       if (sourceType != null && sourceType.isNotEmpty) {
         request.fields['sourceType'] = sourceType;
-      }
-      if (sourceId != null && sourceId.isNotEmpty) {
-        request.fields['sourceId'] = sourceId;
       }
 
       // Attach recorded audio file
@@ -59,8 +56,8 @@ class PronunciationService {
       request.files.add(file);
 
       // Send the request
-      final streamedResponse = await request.send();
-      final response = await http.Response.fromStream(streamedResponse);
+      final response = await apiRequest(
+          () async => http.Response.fromStream(await request.send()), session);
 
       if (response.statusCode == 200 || response.statusCode == 201) {
         final decoded = json.decode(response.body);

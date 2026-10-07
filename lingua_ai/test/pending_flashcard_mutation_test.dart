@@ -87,6 +87,23 @@ void main() {
     expect(cards.allCards, isEmpty);
     expect(await queue.getQueue(), isEmpty);
   });
+  test('omitted pending edit fields preserve notes and examples, while empty values clear them', () async {
+    await offline(() async {
+      await cards.createFlashcard('word', 'translation', exampleSentence: 'saved example', note: 'saved note');
+      await settle();
+    });
+    final id = cards.allCards.single.id;
+    await cards.updateFlashcard(id, 'changed', 'translation');
+    await settle();
+    expect((await queue.getQueue()).single.payload['note'], 'saved note');
+    expect((await queue.getQueue()).single.payload['exampleSentence'], 'saved example');
+    expect(cards.allCards.single.note, 'saved note');
+    await cards.updateFlashcard(id, 'changed', 'translation', exampleSentence: '', note: '');
+    await settle();
+    expect((await queue.getQueue()).single.payload['note'], '');
+    expect((await queue.getQueue()).single.payload['exampleSentence'], '');
+    expect(cards.allCards.single.note, '');
+  });
   test(
       'Flutter service review preserves dependency and unchanged SRS calculation',
       () async {

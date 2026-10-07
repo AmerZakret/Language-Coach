@@ -1,8 +1,18 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../core/config/api_config.dart';
+import 'api_response.dart';
 
 class AuthApiService {
+  Map<String, dynamic> _parseSession(dynamic data) {
+    if (data is! Map<String, dynamic> || data['access_token'] is! String ||
+        (data['access_token'] as String).trim().isEmpty) {
+      throw const FormatException('Authentication returned an incomplete session');
+    }
+    parsePublicUser(data['user']);
+    return data;
+  }
+
   Future<Map<String, dynamic>> login(String email, String password) async {
     try {
       final response = await http.post(
@@ -15,7 +25,7 @@ class AuthApiService {
       );
 
       if (response.statusCode == 201 || response.statusCode == 200) {
-        return json.decode(response.body);
+        return _parseSession(json.decode(response.body));
       } else {
         final errorData = json.decode(response.body);
         throw Exception(errorData['message'] ?? 'Failed to login');
@@ -38,7 +48,17 @@ class AuthApiService {
       );
 
       if (response.statusCode == 201 || response.statusCode == 200) {
-        return json.decode(response.body);
+        final data = json.decode(response.body);
+        final user = data is Map<String, dynamic> ? data['user'] : null;
+        final id = user is Map<String, dynamic> ? user['id'] : null;
+        final token = data is Map<String, dynamic> ? data['access_token'] : null;
+        if (id is! String ||
+            !RegExp(r'^[a-f\d]{24}$', caseSensitive: false).hasMatch(id) ||
+            token is! String || token.trim().isEmpty) {
+          throw const FormatException(
+              'Registration returned an incomplete authentication session');
+        }
+        return _parseSession(data);
       } else {
         final errorData = json.decode(response.body);
         throw Exception(errorData['message'] ?? 'Failed to register');
@@ -56,7 +76,7 @@ class AuthApiService {
       );
 
       if (response.statusCode == 201 || response.statusCode == 200) {
-        return json.decode(response.body);
+        return _parseSession(json.decode(response.body));
       } else {
         throw Exception('Failed to login as guest');
       }

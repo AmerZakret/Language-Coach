@@ -45,6 +45,10 @@ void main() {
         expect(await restarted.processQueue(userId), true);
         expect(await restarted.getQueue(), isEmpty);
       }, () => MockClient((request) async {
+        if (request.url.path == '/users/me') {
+          return http.Response(jsonEncode({'id': userId, 'email': 'guest-test@guest.lingua.local',
+            'name': 'Guest User', 'isGuest': true, 'targetLanguage': 'en'}), 200);
+        }
         requests.add(request);
         // The first response is lost after dispatch; the retry receives success.
         if (requests.length == 1) return http.Response('Response lost', 500);

@@ -1,3 +1,4 @@
+import { targetLanguageCode, targetLanguageTtsLocale } from '../utils/targetLanguage';
 import { useState, useEffect, useRef } from "react";
 import { Mic, Square, Sparkles, AlertCircle, Volume2, Loader, Zap, CheckCircle2, WifiOff } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
@@ -14,24 +15,6 @@ interface Flashcard {
   targetWord: string;
   turkishTranslation: string;
 }
-
-const LANGUAGE_CODES: Record<string, string> = {
-  English: 'en',
-  German: 'de',
-  Spanish: 'es',
-  French: 'fr',
-  Arabic: 'ar',
-  Turkish: 'tr',
-};
-
-const LANGUAGE_VOICES: Record<string, string> = {
-  en: 'en-US',
-  de: 'de-DE',
-  es: 'es-ES',
-  fr: 'fr-FR',
-  ar: 'ar-SA',
-  tr: 'tr-TR',
-};
 
 function ScoreRing({ value, color, label }: { value: number; color: string; label: string }) {
   const r = 36;
@@ -99,7 +82,7 @@ export function PronunciationPracticePage() {
     const fetchSources = async () => {
       try {
         if (user?.id && user.id !== "guest") {
-          const fcRes = await apiClient.get(`/flashcards/all?userId=${user.id}&targetLanguage=${targetLanguage}`);
+          const fcRes = await apiClient.get(`/flashcards/all?targetLanguage=${targetLanguageCode(targetLanguage)}`);
           setFlashcards(fcRes.data || []);
         }
       } catch (e) {
@@ -143,8 +126,7 @@ export function PronunciationPracticePage() {
     if (!targetText.trim()) return;
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(targetText);
-    const code = LANGUAGE_CODES[targetLanguage] || "en";
-    const voiceCode = LANGUAGE_VOICES[code] || "en-US";
+    const voiceCode = targetLanguageTtsLocale(targetLanguage);
     utterance.lang = voiceCode;
 
     // Load available voices
@@ -215,12 +197,11 @@ export function PronunciationPracticePage() {
     setError(null);
     setResult(null);
 
-    const langCode = LANGUAGE_CODES[targetLanguage] || "en";
+    const langCode = targetLanguageCode(targetLanguage);
 
     try {
       const assessment = await assessPronunciation({
         audio: audioBlob,
-        userId: user?.id || "guest",
         targetText: targetText.trim(),
         targetLanguage: langCode,
         nativeTranslation: nativeTranslation.trim() || undefined,

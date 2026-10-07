@@ -49,7 +49,7 @@ export function ProfilePage() {
       if (name.trim() && name !== user?.name && !isGuest && token) {
         const updatedUser = await updateProfile({ name });
         if (!isCurrent()) return;
-        login({ ...updatedUser, isGuest: false }, token);
+        login(updatedUser, token);
       }
       setSaved(true);
       setTimeout(() => { if (isCurrent()) setSaved(false); }, 2000);

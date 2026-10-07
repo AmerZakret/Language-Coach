@@ -6,7 +6,6 @@ import 'package:lingua_ai/services/auth_service.dart';
 import 'package:lingua_ai/services/offline_queue_service.dart';
 import 'package:lingua_ai/services/progress_api_service.dart';
 import 'package:lingua_ai/services/flashcard_api_service.dart';
-import 'package:lingua_ai/models/flashcard.dart';
 
 class RecordedDispatch {
   final String type;
@@ -33,29 +32,29 @@ class FakeProgressApi extends ProgressApiService {
 
 class FakeFlashcardApi extends FlashcardApiService {
   final List<RecordedDispatch> calls = [];
-  Flashcard record(String type) {
+  FlashcardMutationResult record(String type) {
     calls.add(RecordedDispatch(type));
-    return Flashcard.fromJson({'_id': 'server-card'});
+    return FlashcardMutationResult.fromJson({'_id': 'server-card'});
   }
 
   @override
-  Future<Flashcard> createFlashcard(String userId, String targetWord,
+  Future<FlashcardMutationResult> createFlashcard(String targetWord,
           String turkishTranslation, String targetLanguage,
           {String? nativeLanguage,
           String? nativeTranslation,
           String? exampleSentence,
           String? note,
-          String? operationId}) async =>
+          String? operationId, bool preserveLegacyLanguage = false}) async =>
       record('create-flashcard');
   @override
-  Future<Flashcard> updateFlashcard(
-          String cardId, String targetWord, String turkishTranslation,
+  Future<FlashcardMutationResult> updateFlashcard(
+          String cardId, String? targetWord, String? turkishTranslation,
           {String? targetLanguage,
           String? nativeLanguage,
           String? nativeTranslation,
           String? exampleSentence,
           String? note,
-          String? operationId}) async =>
+          String? operationId, bool preserveLegacyLanguage = false}) async =>
       record('update-flashcard');
   @override
   Future<void> deleteFlashcard(String cardId, {String? operationId}) async {
@@ -63,7 +62,7 @@ class FakeFlashcardApi extends FlashcardApiService {
   }
 
   @override
-  Future<Flashcard> reviewCard(String cardId, int score, {String? operationId}) async =>
+  Future<FlashcardMutationResult> reviewCard(String cardId, int score, {String? operationId}) async =>
       record('review-flashcard');
 }
 

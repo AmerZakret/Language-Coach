@@ -12,7 +12,7 @@ const deferred = () => {
   const promise = new Promise((done, fail) => { resolve = done; reject = fail; });
   return { promise, resolve, reject };
 };
-const user = id => ({ id, name: id === A ? 'A' : 'B', email: `${id}@example.com`, targetLanguage: 'English' });
+const user = id => ({ id, name: id === A ? 'A' : 'B', email: `${id}@example.com`, targetLanguage: 'en', isGuest: false });
 const progress = (xp = 20) => ({ totalXp: xp, streak: 2, completedLessonIds: [], weeklyActivity: [] });
 const card = id => ({ _id: `card-${id}`, userId: id, targetWord: id,
   turkishTranslation: 'translation', interval: 0, easinessFactor: 2.5,
@@ -40,12 +40,12 @@ function harness(initial = {}) {
   h.saveProgress = async () => {};
   h.resetProgress = async () => {};
   h.drain = async () => false;
-  h.transport = async (method, url) => {
+  h.transport = async (method, url, data, config) => {
     if (method === 'get') {
-      const id = url.includes(A) ? A : B;
+      const id = data?.sessionSnapshot?.userId || h.auth().user.id;
       return { data: [card(id)] };
     }
-    return { data: card(A) };
+    return { data: card(config?.sessionSnapshot?.userId || h.auth().user.id) };
   };
   const depsEqual = (a, b) => a && b && a.length === b.length && a.every((v, i) => Object.is(v, b[i]));
   const react = {
@@ -89,11 +89,14 @@ function harness(initial = {}) {
     storage: 'utils/progressStorage.ts', types: 'types/progress.ts',
     progress: 'context/ProgressContext.tsx', target: 'context/TargetLanguageContext.tsx',
     cards: 'pages/FlashcardsPage.tsx', queue: 'utils/offlineQueue.ts', authPage: 'components/auth/AuthPage.tsx',
-    profile: 'pages/ProfilePage.tsx' };
+    profile: 'pages/ProfilePage.tsx', writing: 'pages/WritingPracticePage.tsx', language: 'utils/targetLanguage.ts', mutation: 'utils/flashcardMutation.ts', community: 'pages/CommunityPage.tsx', coach: 'pages/AiCoachPage.tsx' };
   const exposed = {
     cards: 'fetchCards, handleSaveCard, handleDeleteCard, handleStudyScore, handleOpenAdd, handleOpenEdit, setFormData, allCards, dueCards, loading, error, successMsg, modal, studyResults',
     authPage: 'handleSubmit, setEmail, setPassword, loading, error',
     profile: 'handleSave, setName, saved, resetConfirm, setResetConfirm',
+    writing: 'handleSubmit, setTopic, setText, feedback, error, loading',
+    community: 'startEditing, setEditingText, handleUpdatePost',
+    coach: 'messages, historyLoading',
   };
   function load(name) {
     if (modules.has(name)) return modules.get(name).exports;
@@ -103,13 +106,16 @@ function harness(initial = {}) {
       .replaceAll('import.meta.env.VITE_API_URL', 'undefined');
     // Expose closed-over handlers/state at the existing render return, without
     // replacing their implementation or adding production test exports.
-    if (exposed[name]) source = source.replace(/\n  return \(\r?\n/, `\n  globalThis.__capture({${exposed[name]}});\n  return (\n`);
+    if (name === 'writing' || name === 'coach') {
+      const position = source.lastIndexOf('\n  return (');
+      source = source.slice(0, position) + `\n  globalThis.__capture({${exposed[name]}});` + source.slice(position);
+    } else if (exposed[name]) source = source.replace(/\n  return \(\r?\n/, `\n  globalThis.__capture({${exposed[name]}});\n  return (\n`);
     const compiled = ts.transpileModule(source, { compilerOptions: {
       module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX,
       esModuleInterop: true, target: ts.ScriptTarget.ES2020,
     } }).outputText;
     vm.runInNewContext(compiled, {
-      module, exports: module.exports, localStorage, AbortController, __capture: value => { activeRunner.exposed = value; },
+      module, exports: module.exports, localStorage, AbortController, FormData, __capture: value => { activeRunner.exposed = value; },
       fetch: (...args) => h.fetchGuest(...args), console: { log() {}, error() {} },
       setTimeout: fn => { timers.push(fn); return timers.length; }, clearTimeout() {},
       setInterval: () => 1, clearInterval() {},
@@ -122,6 +128,17 @@ function harness(initial = {}) {
         if (path.endsWith('.png')) return 'image';
         if (path.endsWith('/userKey')) return load('userKey');
         if (path.endsWith('/queueSession')) return load('queueSession');
+        if (path.endsWith('/targetLanguage')) return load('language');
+        if (path.endsWith('/flashcardMutation')) return load('mutation');
+        if (path.endsWith('/writingTopics')) return h.writingTopics || (h.writingTopics = { writingTopics: { en: { en: ['Topic'] } } });
+        if (path.endsWith('/aiCoachApi')) return {
+          checkWriting: (...args) => h.checkWriting(...args),
+          getChatHistory: (...args) => h.getChatHistory(...args),
+        };
+        if (path.endsWith('/communityApi')) return {
+          getCommunityPosts: async () => ({ items: h.communityPosts || [] }),
+          updateCommunityPost: async (id, body) => { h.calls.push(['community-update', id, body]); },
+        };
         if (path.endsWith('/syncRetryPolicy')) return load('policy');
         if (path.endsWith('/SyncContext')) return { useSync: () => ({ syncRevision: h.syncRevision || 0, lastDrainSucceeded: true }) };
         if (path.endsWith('/useSessionGuard')) return load('guard');
@@ -134,7 +151,7 @@ function harness(initial = {}) {
         if (path.endsWith('/LanguageContext')) return { useLanguage: () => ({ t: text => text, language: 'en' }) };
         if (path.endsWith('/SoundContext')) return { useSound: () => ({}) };
         if (path.endsWith('/levelUtils')) return { getLevelFromXp: () => 'Beginner' };
-        if (path.endsWith('/ProgressContext')) return { useProgress: () => ({ progress: progress(), resetProgress: () => h.resetProgress() }) };
+        if (path.endsWith('/ProgressContext')) return { useProgress: () => ({ progress: progress(), resetProgress: () => h.resetProgress(), addXp: xp => calls.push(['xp', xp]) }) };
         if (path.endsWith('/authApi')) return new Proxy({}, { get: (_, method) => (...args) => api[method](...args) });
         if (path.endsWith('/progressApi')) return {
           fetchProgress: (id, lang) => { calls.push(['fetch', id, lang]); return h.fetchProgress(id, lang); },
@@ -204,6 +221,90 @@ async function pendingCardHarness() {
   assert.equal(h.queue.getOfflineQueue().length, 1);
   return h;
 }
+
+for (const boundary of ['language', 'account', 'token refresh', 'language ABA']) {
+  test(`AI history rejects a late response after ${boundary} switch`, async () => {
+    const old = deferred(), current = deferred();
+    const h = harness(); h.mountAuth(); await h.settle(); h.login(A);
+    h.isOffline = false;
+    const calls = [];
+    h.getChatHistory = language => {
+      calls.push(language);
+      return calls.length === 1 ? old.promise : current.promise;
+    };
+    h.mount('coach', 'AiCoachPage'); await h.settle();
+    if (boundary === 'language' || boundary === 'language ABA') {
+      h.language = 'German'; h.localStorage.setItem('linguaai_target_language', 'German');
+      h.child.render();
+      if (boundary === 'language ABA') {
+        h.language = 'English'; h.localStorage.setItem('linguaai_target_language', 'English');
+        h.child.render();
+      }
+    } else if (boundary === 'account') await h.switchToB();
+    else {
+      h.auth().login(user(A), 'replacement-token'); h.authRunner.render(); h.child.render();
+    }
+    await h.settle();
+    assert.equal(h.child.exposed.historyLoading, true);
+    const history = [{ role: 'assistant', message: 'current history' }];
+    current.resolve(history); await h.settle();
+    assert.deepEqual(copy(h.child.exposed.messages), history);
+    assert.equal(h.child.exposed.historyLoading, false);
+    const writes = h.child.writes, storage = h.snapshot();
+    old.resolve([{ role: 'assistant', message: 'stale history' }]); await h.settle();
+    assert.deepEqual(copy(h.child.exposed.messages), history);
+    assert.equal(h.child.writes, writes, 'stale history must not schedule any state write');
+    assert.deepEqual(h.snapshot(), storage, 'stale history must not write cached state');
+    assert.equal(calls[0], 'English');
+  });
+}
+
+test('AI same-language history applies normally', async () => {
+  const h = harness(); h.mountAuth(); await h.settle(); h.login(A); h.isOffline = false;
+  const history = [{ role: 'user', message: 'Hello' }, { role: 'assistant', message: 'Hi' }];
+  h.getChatHistory = async language => { assert.equal(language, 'English'); return history; };
+  h.mount('coach', 'AiCoachPage'); await h.settle();
+  assert.deepEqual(copy(h.child.exposed.messages), history);
+  assert.equal(h.child.exposed.historyLoading, false);
+});
+
+test('AI stale history error cannot finish the new-language load', async () => {
+  const old = deferred(), current = deferred();
+  const h = harness(); h.mountAuth(); await h.settle(); h.login(A); h.isOffline = false;
+  h.getChatHistory = language => language === 'English' ? old.promise : current.promise;
+  h.mount('coach', 'AiCoachPage'); await h.settle();
+  h.language = 'German'; h.localStorage.setItem('linguaai_target_language', 'German'); h.child.render();
+  await h.settle(); const writes = h.child.writes;
+  old.reject(new Error('old failure')); await h.settle();
+  assert.equal(h.child.exposed.historyLoading, true);
+  assert.equal(h.child.writes, writes);
+  current.resolve([{ role: 'assistant', message: 'German history' }]); await h.settle();
+  assert.equal(h.child.exposed.messages[0].message, 'German history');
+});
+
+test('AI history resolved before a deferred updater crosses language boundary is discarded', async () => {
+  const old = deferred();
+  const h = harness(); h.mountAuth(); await h.settle(); h.login(A); h.isOffline = false;
+  h.getChatHistory = () => old.promise;
+  h.mount('coach', 'AiCoachPage'); await h.settle();
+  h.deferChildState = true;
+  old.resolve([{ role: 'assistant', message: 'old history' }]); await tick();
+  h.localStorage.setItem('linguaai_target_language', 'German');
+  for (const apply of h.deferredState.splice(0)) apply();
+  h.deferChildState = false; h.child.render();
+  assert.deepEqual(copy(h.child.exposed.messages), []);
+  assert.equal(h.child.exposed.historyLoading, true);
+});
+
+test('AI history completion after unmount cannot update state', async () => {
+  const pending = deferred();
+  const h = harness(); h.mountAuth(); await h.settle(); h.login(A); h.isOffline = false;
+  h.getChatHistory = () => pending.promise;
+  h.mount('coach', 'AiCoachPage'); await h.settle();
+  h.child.unmount(); const writes = h.child.writes;
+  pending.resolve([{ role: 'assistant', message: 'late history' }]); await h.settle();
+  assert.equal(h.child.writes, writes);
+});
 
 test('reset contract: web queued reset reaches the real Nest route and acknowledges', async () => {
   const { startResetServer } = require('../../lingua_ai_backend/test/progress-reset-server.cjs');
@@ -275,7 +376,7 @@ for (const backendGuest of [true, false]) {
       assert.equal(session.userId, A); assert.equal(session.token, `test-${A}`);
       assert.equal(session.ownerNamespace, `${backendGuest ? 'guest' : 'registered'}_${A}`);
       mutations.push(method);
-      if (method === 'post') { assert.equal(data.userId, A); savedCard = { ...card(A), ...data }; }
+      if (method === 'post') { assert.equal('userId' in data, false); savedCard = { ...card(A), ...data }; }
       if (method === 'put' && !url.endsWith('/review')) savedCard = { ...savedCard, ...data };
       if (method === 'delete') savedCard = null;
       return { data: savedCard || {} };
@@ -441,13 +542,15 @@ for (const kind of ['fetch', 'create', 'update', 'delete', 'review', 'failed-cre
     const pending = deferred(); let operation;
     const originalTransport = h.transport;
     if (kind === 'sync-refresh') {
-      h.transport = (method, url, data) => url.includes(B) ? originalTransport(method, url, data) : pending.promise;
+      h.transport = (method, url, data, config) => (method === 'get' ? data : config)?.sessionSnapshot?.userId === B
+        ? originalTransport(method, url, data, config) : pending.promise;
       h.syncRevision = 1; h.child.render();
     } else {
       if (['create', 'failed-create'].includes(kind)) h.child.exposed.handleOpenAdd();
       if (kind === 'update') h.child.exposed.handleOpenEdit(card(A));
       h.child.exposed.setFormData({ targetWord: 'new', turkishTranslation: 'translation' }); h.child.render();
-      h.transport = (method, url, data) => url.includes(B) ? originalTransport(method, url, data) : pending.promise;
+      h.transport = (method, url, data, config) => (method === 'get' || method === 'delete' ? data : config)?.sessionSnapshot?.userId === B
+        ? originalTransport(method, url, data, config) : pending.promise;
       if (kind === 'delete') operation = h.child.exposed.handleDeleteCard(`card-${A}`);
       else if (kind === 'review') operation = h.child.exposed.handleStudyScore(4);
       else if (['create', 'update', 'failed-create'].includes(kind)) operation = h.child.exposed.handleSaveCard({ preventDefault() {} });
@@ -455,7 +558,7 @@ for (const kind of ['fetch', 'create', 'update', 'delete', 'review', 'failed-cre
     }
     if (kind === 'language') {
       h.language = 'German'; h.localStorage.setItem('linguaai_target_language', 'German');
-      h.transport = (method, url, data) => url.includes('German') ? originalTransport(method, url, data) : pending.promise;
+      h.transport = (method, url, data) => url.includes('targetLanguage=de') ? originalTransport(method, url, data) : pending.promise;
       h.child.render(); await h.settle();
     } else if (kind === 'unmount') h.child.unmount();
     else await h.switchToB();
@@ -691,4 +794,168 @@ test('Phase 4E: deferred React updater checks session again before applying pend
   assert.equal(h.load('queue').getOfflineQueue().length, 0);
   h.auth().logout(); h.login(A); h.child.render(); await h.settle();
   assert.equal(h.value().progress.totalXp, 50);
+});
+
+async function onlineMutationHarness() {
+  const h = harness(); h.mountAuth(); h.login(A); h.isOffline = false;
+  h.mutations = [];
+  h.transport = async (method, url, data, config) => {
+    if (method === 'get') return { data: [card(A)] };
+    h.mutations.push({ method, url, data: method === 'delete' ? undefined : copy(data),
+      config: method === 'delete' ? data : config });
+    if (h.failMutation) throw new Error('response lost');
+    return { data: card(A) };
+  };
+  h.mount('cards', 'FlashcardsPage'); await h.settle();
+  return h;
+}
+
+test('Phase 5C: online and queued web update serialize all fields and explicit clears equally', async () => {
+  const h = await onlineMutationHarness();
+  const payload = { targetWord: 'changed', turkishTranslation: 'translation',
+    nativeLanguage: 'tr', nativeTranslation: 'native', exampleSentence: '', note: '' };
+  h.child.exposed.handleOpenEdit(h.child.exposed.allCards[0]); h.child.render();
+  h.child.exposed.setFormData(payload); h.child.render();
+  await h.child.exposed.handleSaveCard({ preventDefault() {} }); await h.settle();
+  const online = h.mutations[0];
+  h.isOffline = true;
+  h.child.exposed.handleOpenEdit(h.child.exposed.allCards[0]); h.child.render();
+  h.child.exposed.setFormData(payload); h.child.render();
+  await h.child.exposed.handleSaveCard({ preventDefault() {} }); await h.settle();
+  const queue = h.load('queue');
+  assert.equal(await queue.processOfflineQueue(A), true);
+  assert.deepEqual(h.mutations[1].data, online.data);
+  assert.equal(online.data.note, ''); assert.equal(online.data.exampleSentence, '');
+  assert.equal(online.data.nativeTranslation, 'native');
+});
+
+test('Phase 5C: online create, update, delete and review carry distinct idempotency keys', async () => {
+  const h = await onlineMutationHarness();
+  h.child.exposed.handleOpenAdd(); h.child.render();
+  h.child.exposed.setFormData({ targetWord: 'word', turkishTranslation: 'translation', note: '', exampleSentence: '' }); h.child.render();
+  await h.child.exposed.handleSaveCard({ preventDefault() {} }); await h.settle();
+  h.child.exposed.handleOpenEdit(h.child.exposed.allCards[0]); h.child.render();
+  await h.child.exposed.handleSaveCard({ preventDefault() {} }); await h.settle();
+  await h.child.exposed.handleDeleteCard(`card-${A}`); await h.settle();
+  await h.child.exposed.handleStudyScore(4); await h.settle();
+  assert.equal(h.mutations.length, 4);
+  const keys = h.mutations.map(call => call.config.headers['X-Idempotency-Key']);
+  assert.ok(keys.every(key => typeof key === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(key)));
+  assert.equal(new Set(keys).size, 4);
+  assert.ok(h.mutations.every(call => call.config.sessionSnapshot.userId === A));
+});
+
+for (const operation of ['create', 'update', 'delete']) {
+  test(`Phase 5C: ${operation} manual retry reuses the operation key`, async () => {
+    const h = await onlineMutationHarness();
+    h.failMutation = true;
+    if (operation === 'create') h.child.exposed.handleOpenAdd();
+    if (operation === 'update') h.child.exposed.handleOpenEdit(h.child.exposed.allCards[0]);
+    h.child.render();
+    if (operation === 'create') {
+      h.child.exposed.setFormData({ targetWord: 'word', turkishTranslation: 'translation', note: '', exampleSentence: '' }); h.child.render();
+    }
+    const execute = () => operation === 'delete' ? h.child.exposed.handleDeleteCard(`card-${A}`)
+      : h.child.exposed.handleSaveCard({ preventDefault() {} });
+    await execute(); await h.settle();
+    h.failMutation = false;
+    await execute(); await h.settle();
+    assert.equal(h.mutations.length, 2);
+    assert.equal(h.mutations[0].config.headers['X-Idempotency-Key'], h.mutations[1].config.headers['X-Idempotency-Key']);
+    assert.deepEqual(h.mutations[0].data, h.mutations[1].data);
+  });
+}
+
+test('Phase 5C: changing a failed mutation payload creates a new operation key', async () => {
+  const h = await onlineMutationHarness(); h.failMutation = true;
+  h.child.exposed.handleOpenAdd(); h.child.render();
+  h.child.exposed.setFormData({ targetWord: 'word', turkishTranslation: 'translation', note: '', exampleSentence: '' }); h.child.render();
+  await h.child.exposed.handleSaveCard({ preventDefault() {} }); await h.settle();
+  h.child.exposed.setFormData({ targetWord: 'changed', turkishTranslation: 'translation', note: '', exampleSentence: '' }); h.child.render();
+  await h.child.exposed.handleSaveCard({ preventDefault() {} }); await h.settle();
+  assert.notEqual(h.mutations[0].config.headers['X-Idempotency-Key'], h.mutations[1].config.headers['X-Idempotency-Key']);
+});
+
+test('Phase 5C: web image posts allow clearing their caption, text-only posts do not', async () => {
+  const h = harness(); h.mountAuth(); h.login(A);
+  h.communityPosts = [{ _id: 'image', userId: A, userName: 'Test', text: 'caption', imageUrl: '/image.png',
+    learningLanguage: 'English', likes: [], likesCount: 0, createdAt: new Date().toISOString() },
+    { _id: 'text', userId: A, userName: 'Test', text: 'caption', learningLanguage: 'English',
+      likes: [], likesCount: 0, createdAt: new Date().toISOString() }];
+  h.mount('community', 'CommunityPage'); await h.settle();
+  h.child.exposed.startEditing(h.communityPosts[0]); h.child.render();
+  h.child.exposed.setEditingText('  '); h.child.render();
+  await h.child.exposed.handleUpdatePost('image'); await h.settle();
+  const update = h.calls.find(call => call[0] === 'community-update');
+  assert.equal(update[2].has('text'), true); assert.equal(update[2].get('text'), '');
+  h.child.exposed.startEditing(h.communityPosts[1]); h.child.render();
+  h.child.exposed.setEditingText(''); h.child.render();
+  await h.child.exposed.handleUpdatePost('text');
+  assert.equal(h.calls.filter(call => call[0] === 'community-update').length, 1);
+});
+
+for (const backendGuest of [false, true]) {
+  test(`Phase 5E: restored current-token 401 signs out without deleting owner data (guest: ${backendGuest})`, async () => {
+    const restored = { ...user(A), isGuest: backendGuest,
+      email: backendGuest ? 'guest-a@guest.lingua.local' : user(A).email };
+    const ownerKey = `linguaai_offline_queue_${backendGuest ? 'guest' : 'registered'}_${A}`;
+    const h = harness({ linguaai_user: JSON.stringify(restored), linguaai_token: `test-${A}`,
+      ...(backendGuest ? { linguaai_is_guest: 'true' } : {}), [ownerKey]: 'preserved-owner-data' });
+    h.api.fetchMe = async () => { throw { response: { status: 401 } }; };
+    h.mountAuth(); await h.settle();
+    assert.equal(h.auth().user, null); assert.equal(h.auth().token, null);
+    assert.equal(h.auth().isGuest, false); assert.equal(h.auth().loading, false);
+    assert.equal(h.localStorage.getItem(ownerKey), 'preserved-owner-data');
+  });
+}
+test('Phase 5E: stale startup 401 cannot invalidate a replacement session', async () => {
+  const h = harness({ linguaai_user: JSON.stringify(user(A)), linguaai_token: `test-${A}` });
+  const pending = deferred(); h.api.fetchMe = () => pending.promise;
+  h.mountAuth(); h.login(B);
+  pending.reject({ response: { status: 401 } }); await h.settle();
+  assert.equal(h.auth().user.id, B); assert.equal(h.auth().token, `test-${B}`);
+});
+test('Phase 5E: local_guest restoration never sends a token validation request', async () => {
+  const local = { id: 'guest', name: 'Guest User', email: 'guest@lingua.ai', isGuest: true };
+  const h = harness({ linguaai_user: JSON.stringify(local), linguaai_is_guest: 'true' });
+  let calls = 0; h.api.fetchMe = async () => { calls++; throw { response: { status: 401 } }; };
+  h.mountAuth(); await h.settle();
+  assert.equal(calls, 0); assert.equal(h.auth().isGuest, true); assert.equal(h.auth().token, null);
+  assert.equal(h.load('queueSession').getOfflineQueueSession().ownerNamespace, 'local_guest');
+});
+
+async function writingHarness() {
+  const h = harness(); h.mountAuth(); h.login(A); h.isOffline = false;
+  h.mount('writing', 'WritingPracticePage'); await h.settle();
+  h.child.exposed.setTopic('Topic'); h.child.exposed.setText('A sufficiently long writing sample.');
+  h.child.render(); return h;
+}
+
+test('Phase 5E: web displays the actual zero score and retains valid feedback', async () => {
+  const h = await writingHarness();
+  h.checkWriting = async () => ({ grammarScore: 85.75, vocabularyScore: 80, clarityScore: 70,
+    overallScore: 0, feedback: 'Useful feedback', improvedVersion: 'Better text', corrections: [] });
+  await h.child.exposed.handleSubmit(); await h.settle();
+  assert.equal(h.child.exposed.feedback.assessment, 'Useful feedback');
+  function findScore(node) {
+    if (!node || typeof node !== 'object') return;
+    if (node.props?.style?.fontSize === '38px') return node.props.children;
+    for (const child of [node.props?.children].flat(Infinity)) {
+      const found = findScore(child); if (found !== undefined) return found;
+    }
+  }
+  assert.equal(findScore(h.child.result), 0);
+  assert.deepEqual(h.calls.filter(call => call[0] === 'xp'), [['xp', 10]]);
+});
+
+test('Phase 5E: stale writing failure cannot change the replacement session UI', async () => {
+  const h = await writingHarness(); const pending = deferred();
+  h.checkWriting = () => pending.promise;
+  const request = h.child.exposed.handleSubmit(); h.child.render();
+  h.login(B); h.child.render(); await h.settle();
+  pending.reject({ response: { status: 503, data: { message: 'Writing evaluation is temporarily unavailable. Please try again.' } } });
+  await request; await h.settle();
+  assert.equal(h.child.exposed.error, ''); assert.equal(h.child.exposed.loading, false);
+  assert.equal(h.child.exposed.feedback, null);
+  assert.equal(h.calls.some(call => call[0] === 'xp'), false);
 });

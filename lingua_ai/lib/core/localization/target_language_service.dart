@@ -1,3 +1,4 @@
+import 'target_language.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/progress_service.dart';
@@ -17,34 +18,24 @@ class TargetLanguageService extends ChangeNotifier {
   String get currentLanguage => _currentLanguage;
   int get languageVersion => _languageVersion;
 
-  static String toShortCode(String lang) {
-    switch (lang.toLowerCase()) {
-      case 'english': return 'en';
-      case 'german': return 'de';
-      case 'spanish': return 'es';
-      case 'french': return 'fr';
-      case 'arabic': return 'ar';
-      default: return 'en';
-    }
-  }
-
-  static String toFullName(String code) {
-    switch (code) {
-      case 'en': return 'English';
-      case 'de': return 'German';
-      case 'es': return 'Spanish';
-      case 'fr': return 'French';
-      case 'ar': return 'Arabic';
-      default: return 'English';
-    }
-  }
-
+  static String toShortCode(String language) => TargetLanguage.code(language);
+  static String toFullName(String language) => TargetLanguage.name(language);
   Future<void> init() async {
     final session = AuthService().captureSession();
     final version = ++_languageVersion;
     _prefs = await SharedPreferences.getInstance();
     if (!session.isCurrent || version != _languageVersion) return;
-    _currentLanguage = _prefs.getString('targetLanguage') ?? 'en';
+    final saved = _prefs.getString('targetLanguage');
+    // A missing preference starts a new English session. Invalid saved values
+    // retain the current selection and are reported instead of coercing to en.
+    final normalized = TargetLanguage.tryCode(saved);
+    if (saved == null) {
+      _currentLanguage = 'en';
+    } else if (normalized != null) {
+      _currentLanguage = normalized;
+    } else {
+      debugPrint('Ignoring unsupported saved target language: $saved');
+    }
     notifyListeners();
   }
 
@@ -52,7 +43,7 @@ class TargetLanguageService extends ChangeNotifier {
     final session = AuthService().captureSession();
     final version = ++_languageVersion;
     bool isCurrent() => session.isCurrent && version == _languageVersion;
-    _currentLanguage = langCode;
+    _currentLanguage = TargetLanguage.code(langCode);
     await _prefs.setString('targetLanguage', _currentLanguage);
     if (!isCurrent()) return;
 
@@ -61,7 +52,7 @@ class TargetLanguageService extends ChangeNotifier {
       if (auth.isLoggedIn && !auth.isGuest) {
         try {
           await UserApiService().updateProfile(
-            targetLanguage: toFullName(langCode),
+            targetLanguage: _currentLanguage,
           );
         } catch (e) {
           debugPrint('Failed to sync target language to backend: $e');
@@ -91,7 +82,7 @@ class TargetLanguageService extends ChangeNotifier {
       case 'de': return isTr ? 'Almanca' : 'German';
       case 'fr': return isTr ? 'Fransızca' : 'French';
       case 'ar': return isTr ? 'Arapça' : 'Arabic';
-      default: return isTr ? 'İngilizce' : 'English';
+      default: return code;
     }
   }
 
@@ -102,7 +93,7 @@ class TargetLanguageService extends ChangeNotifier {
       case 'de': return '🇩🇪';
       case 'fr': return '🇫🇷';
       case 'ar': return '🇸🇦';
-      default: return '🇬🇧';
+      default: return '🌐';
     }
   }
 }

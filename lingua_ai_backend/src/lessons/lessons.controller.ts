@@ -1,19 +1,6 @@
-import { Controller, Get, Param, Query } from '@nestjs/common';
+import { targetLanguageCode, languageResponse } from '../common/target-language';
+import { Controller, Get, NotFoundException, Param, Query } from '@nestjs/common';
 import { LessonsService } from './lessons.service';
-
-// Maps Flutter language codes (en, de, es, fr, ar) to full names used by web
-const LANG_CODE_MAP: Record<string, string> = {
-  en: 'en',
-  de: 'de',
-  es: 'es',
-  fr: 'fr',
-  ar: 'ar',
-  English: 'en',
-  German: 'de',
-  Spanish: 'es',
-  French: 'fr',
-  Arabic: 'ar',
-};
 
 @Controller('lessons')
 export class LessonsController {
@@ -24,17 +11,14 @@ export class LessonsController {
     @Query('targetLanguage') targetLanguage?: string,
     @Query('level') level?: string,
   ) {
-    let code: string | undefined = undefined;
-    if (targetLanguage) {
-      code = LANG_CODE_MAP[targetLanguage] || targetLanguage;
-    }
+    const code = targetLanguage === undefined ? undefined : targetLanguageCode(targetLanguage);
 
     const lessons = await this.lessonsService.findAll(code, level);
 
     // Return summary (no questions) for list view
     return lessons.map((l) => ({
       id: l.id,
-      targetLanguage: l.targetLanguage,
+      targetLanguage: targetLanguageCode(l.targetLanguage),
       title: l.title,
       description: l.description,
       category: l.category,
@@ -50,8 +34,8 @@ export class LessonsController {
   async findOne(@Param('id') id: string) {
     const lesson = await this.lessonsService.findOne(id);
     if (!lesson) {
-      return { error: 'Lesson not found', id };
+      throw new NotFoundException('Lesson not found');
     }
-    return lesson;
+    return languageResponse(lesson);
   }
 }

@@ -1,10 +1,7 @@
+import { IsTargetLanguage } from '../../common/target-language';
 import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class CreateFlashcardDto {
-  @IsNotEmpty()
-  @IsString()
-  userId: string;
-
   @IsNotEmpty()
   @IsString()
   @MaxLength(100)
@@ -17,6 +14,7 @@ export class CreateFlashcardDto {
 
   @IsNotEmpty()
   @IsString()
+  @IsTargetLanguage()
   targetLanguage: string;
 
   @IsOptional()

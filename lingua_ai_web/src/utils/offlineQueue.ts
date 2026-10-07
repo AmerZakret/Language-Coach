@@ -1,3 +1,4 @@
+import { targetLanguageCode } from './targetLanguage';
 import { classifySyncFailure, retryDelay, withReplayTimeout, REPLAY_TIMEOUT_MS, InvalidQueuedPayload } from './syncRetryPolicy';
 import type { RetryState } from './syncRetryPolicy';
 import { acknowledgeCompletion, resetOwnerProgress, saveProgress, loadProgress } from './progressStorage';
@@ -5,8 +6,9 @@ import type { ProgressState } from '../types/progress';
 import type { TargetLanguage } from '../types/language';
 import apiClient from '../api/apiClient';
 import type { AxiosRequestConfig } from 'axios';
-import { getOfflineQueueSession, isOfflineQueueSessionActive } from './queueSession';
+import { getOfflineQueueSession, isOfflineQueueSessionActive, invalidateCurrentSession } from './queueSession';
 import type { QueueSession } from './queueSession';
+import { serializeFlashcardMutation } from './flashcardMutation';
 
 export interface OfflineAction extends RetryState {
   readonly id: string;
@@ -206,6 +208,13 @@ export const processOfflineQueue = async (userId: string, waitForActive = false)
       if (stored.nextAttemptAt && Date.parse(stored.nextAttemptAt) > Date.now()) return false;
       const action = { ...stored, attemptCount: (stored.attemptCount || 0) + 1,
         lastAttemptAt: new Date().toISOString(), payload: resolvePayload(state, stored.type, stored.payload) };
+      // Preserve the wire shape of previously dispatched legacy updates.
+      if (action.type === 'update-flashcard' && !stored.attemptCount) {
+        action.payload = { ...action.payload, _mutationContract: 2 };
+      }
+      if (['create-flashcard', 'update-flashcard'].includes(action.type) && !stored.attemptCount) {
+        action.payload = { ...action.payload, _languageContract: 1 };
+      }
       if (action.type === 'create-flashcard' && action.payload.tempId && !state.startedCreates.includes(action.id)) state.startedCreates.push(action.id);
       state.actions = state.actions.map(a => a.id === action.id ? action : a);
       writeState(state);
@@ -232,8 +241,8 @@ export const processOfflineQueue = async (userId: string, waitForActive = false)
             break;
           case 'create-flashcard': {
             const response = await apiClient.post('/flashcards', {
-              userId: session.userId, targetWord: payload.targetWord, turkishTranslation: payload.turkishTranslation,
-              targetLanguage: payload.targetLanguage, nativeLanguage: payload.nativeLanguage,
+              targetWord: payload.targetWord, turkishTranslation: payload.turkishTranslation,
+              targetLanguage: payload._languageContract === 1 ? targetLanguageCode(payload.targetLanguage) : payload.targetLanguage, nativeLanguage: payload.nativeLanguage,
               nativeTranslation: payload.nativeTranslation, exampleSentence: payload.exampleSentence, note: payload.note,
             }, config);
             serverId = response.data?._id || response.data?.id;
@@ -241,9 +250,9 @@ export const processOfflineQueue = async (userId: string, waitForActive = false)
             break;
           }
           case 'update-flashcard':
-            await apiClient.put(`/flashcards/${id}`, { targetWord: payload.targetWord,
-              turkishTranslation: payload.turkishTranslation, targetLanguage: payload.targetLanguage,
-              exampleSentence: payload.exampleSentence, note: payload.note }, config); break;
+            await apiClient.put(`/flashcards/${id}`, serializeFlashcardMutation({ ...payload,
+              ...(payload._mutationContract !== 2 ? { nativeLanguage: undefined, nativeTranslation: undefined } : {}),
+            }, payload._languageContract === 1), config); break;
           case 'delete-flashcard': await apiClient.delete(`/flashcards/${id}`, config); break;
           case 'review-flashcard': await apiClient.put(`/flashcards/${id}/review`, { score: payload.score }, config); break;
           default: throw new InvalidQueuedPayload('Unsupported queued action');
@@ -268,6 +277,7 @@ export const processOfflineQueue = async (userId: string, waitForActive = false)
           if (action.type === 'complete-lesson' || action.type === 'reset-progress') latest.progressRevision = `failed_${action.id}`;
         } else latest.actions = latest.actions.map(a => a.id === action.id ? failed : a);
         writeState(latest);
+        if (failure.category === 'authentication') invalidateCurrentSession(session);
         hadFailure = true;
         if (!failure.terminal) return false; // FIFO also protects reset/review dependencies.
         continue; // Unrelated later work can proceed after durable quarantine.

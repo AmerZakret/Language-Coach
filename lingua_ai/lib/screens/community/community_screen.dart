@@ -251,7 +251,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
                       ? null
                       : () async {
                           final text = editController.text.trim();
-                          if (text.isEmpty) return;
+                          if (text.isEmpty && (post.imageUrl == null || post.imageUrl!.isEmpty)) return;
 
                           setDialogState(() => isSaving = true);
                           try {
@@ -913,5 +913,4 @@ class _CommunityScreenState extends State<CommunityScreen> {
     );
   }
 }
-
 

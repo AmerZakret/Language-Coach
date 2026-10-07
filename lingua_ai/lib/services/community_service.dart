@@ -1,3 +1,4 @@
+import '../core/localization/target_language.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
@@ -7,11 +8,13 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../core/config/api_config.dart';
 import '../models/community_post.dart';
 import 'auth_service.dart';
+import 'api_response.dart';
 import 'connectivity_service.dart';
 
 class CommunityService {
   Future<List<CommunityPost>> fetchPosts({String? language}) async {
     try {
+      final session = AuthService().captureSession();
       if (ConnectivityService().isOffline) {
         throw Exception('Device is offline');
       }
@@ -24,10 +27,11 @@ class CommunityService {
 
       String url = '${ApiConfig.baseUrl}${ApiConfig.communityPosts}?page=1&limit=50';
       if (language != null && language.isNotEmpty && language != 'All') {
-        url += '&language=$language';
+        url += '&language=${TargetLanguage.code(language)}';
       }
 
-      final response = await http.get(Uri.parse(url), headers: headers);
+      final response = await apiRequest(
+          () => http.get(Uri.parse(url), headers: headers), session);
 
       if (response.statusCode == 200) {
         // Cache posts in SharedPreferences
@@ -42,6 +46,7 @@ class CommunityService {
         throw Exception('Failed to load community feed: ${response.statusCode}');
       }
     } catch (e) {
+      if (e is ApiException && e.kind == ApiFailure.unauthorized) rethrow;
       // Fallback to cached posts
       try {
         final prefs = await SharedPreferences.getInstance();
@@ -63,6 +68,7 @@ class CommunityService {
     String? imagePath,
   }) async {
     try {
+      final session = AuthService().captureSession();
       final token = AuthService().token;
       final uri = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.communityPosts}');
       final request = http.MultipartRequest('POST', uri);
@@ -71,7 +77,7 @@ class CommunityService {
         request.headers['Authorization'] = 'Bearer $token';
       }
 
-      request.fields['learningLanguage'] = learningLanguage;
+      request.fields['learningLanguage'] = TargetLanguage.code(learningLanguage);
       if (text != null && text.trim().isNotEmpty) {
         request.fields['text'] = text.trim();
       }
@@ -99,8 +105,8 @@ class CommunityService {
         }
       }
 
-      final streamedResponse = await request.send();
-      final response = await http.Response.fromStream(streamedResponse);
+      final response = await apiRequest(
+          () async => http.Response.fromStream(await request.send()), session);
 
       if (response.statusCode == 200 || response.statusCode == 201) {
         final decoded = json.decode(response.body);
@@ -120,6 +126,7 @@ class CommunityService {
     String? newImagePath,
   }) async {
     try {
+      final session = AuthService().captureSession();
       final token = AuthService().token;
       final uri = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.communityPosts}/$postId');
       final request = http.MultipartRequest('PUT', uri);
@@ -128,7 +135,7 @@ class CommunityService {
         request.headers['Authorization'] = 'Bearer $token';
       }
 
-      if (text != null && text.trim().isNotEmpty) {
+      if (text != null) {
         request.fields['text'] = text.trim();
       }
       if (removeImage != null) {
@@ -158,8 +165,8 @@ class CommunityService {
         }
       }
 
-      final streamedResponse = await request.send();
-      final response = await http.Response.fromStream(streamedResponse);
+      final response = await apiRequest(
+          () async => http.Response.fromStream(await request.send()), session);
 
       if (response.statusCode == 200 || response.statusCode == 201) {
         final decoded = json.decode(response.body);
@@ -174,6 +181,7 @@ class CommunityService {
 
   Future<void> deletePost({required String postId}) async {
     try {
+      final session = AuthService().captureSession();
       final token = AuthService().token;
       final headers = <String, String>{};
       if (token.isNotEmpty) {
@@ -181,7 +189,8 @@ class CommunityService {
       }
 
       final url = '${ApiConfig.baseUrl}${ApiConfig.communityPosts}/$postId';
-      final response = await http.delete(Uri.parse(url), headers: headers);
+      final response = await apiRequest(
+          () => http.delete(Uri.parse(url), headers: headers), session);
 
       if (response.statusCode != 200 && response.statusCode != 204) {
         throw Exception('Failed to delete post: ${response.body}');
@@ -193,6 +202,7 @@ class CommunityService {
 
   Future<Map<String, dynamic>> toggleLike({required String postId}) async {
     try {
+      final session = AuthService().captureSession();
       final token = AuthService().token;
       final headers = <String, String>{};
       if (token.isNotEmpty) {
@@ -200,7 +210,8 @@ class CommunityService {
       }
 
       final url = '${ApiConfig.baseUrl}${ApiConfig.communityPosts}/$postId/like';
-      final response = await http.post(Uri.parse(url), headers: headers);
+      final response = await apiRequest(
+          () => http.post(Uri.parse(url), headers: headers), session);
 
       if (response.statusCode == 200 || response.statusCode == 201) {
         final decoded = json.decode(response.body);
