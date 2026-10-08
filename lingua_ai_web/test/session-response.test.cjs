@@ -90,12 +90,13 @@ function harness(initial = {}) {
     storage: 'utils/progressStorage.ts', types: 'types/progress.ts',
     progress: 'context/ProgressContext.tsx', target: 'context/TargetLanguageContext.tsx',
     cards: 'pages/FlashcardsPage.tsx', queue: 'utils/offlineQueue.ts', authPage: 'components/auth/AuthPage.tsx',
-    profile: 'pages/ProfilePage.tsx', writing: 'pages/WritingPracticePage.tsx', language: 'utils/targetLanguage.ts', mutation: 'utils/flashcardMutation.ts', community: 'pages/CommunityPage.tsx', coach: 'pages/AiCoachPage.tsx' };
+    profile: 'pages/ProfilePage.tsx', writing: 'pages/WritingPracticePage.tsx', pronunciation: 'pages/PronunciationPracticePage.tsx', language: 'utils/targetLanguage.ts', mutation: 'utils/flashcardMutation.ts', community: 'pages/CommunityPage.tsx', coach: 'pages/AiCoachPage.tsx' };
   const exposed = {
     cards: 'fetchCards, handleSaveCard, handleDeleteCard, handleStudyScore, handleOpenAdd, handleOpenEdit, setFormData, allCards, dueCards, loading, error, successMsg, modal, studyResults',
     authPage: 'handleSubmit, setEmail, setPassword, loading, error',
     profile: 'handleSave, setName, saved, resetConfirm, setResetConfirm',
     writing: 'handleSubmit, setTopic, setText, feedback, error, loading',
+    pronunciation: 'handleSubmitAssessment, setAudioBlob, setTargetText, result, error',
     community: 'startEditing, setEditingText, handleUpdatePost',
     coach: 'messages, historyLoading',
   };
@@ -107,7 +108,7 @@ function harness(initial = {}) {
       .replaceAll('import.meta.env.VITE_API_URL', 'undefined');
     // Expose closed-over handlers/state at the existing render return, without
     // replacing their implementation or adding production test exports.
-    if (name === 'writing' || name === 'coach') {
+    if (name === 'writing' || name === 'coach' || name === 'pronunciation') {
       const position = source.lastIndexOf('\n  return (');
       source = source.slice(0, position) + `\n  globalThis.__capture({${exposed[name]}});` + source.slice(position);
     } else if (exposed[name]) source = source.replace(/\n  return \(\r?\n/, `\n  globalThis.__capture({${exposed[name]}});\n  return (\n`);
@@ -136,6 +137,7 @@ function harness(initial = {}) {
           checkWriting: (...args) => h.checkWriting(...args),
           getChatHistory: (...args) => h.getChatHistory(...args),
         };
+        if (path.endsWith('/pronunciationApi')) return { assessPronunciation: (...args) => h.assessPronunciation(...args) };
         if (path.endsWith('/communityApi')) return {
           getCommunityPosts: async () => ({ items: h.communityPosts || [] }),
           updateCommunityPost: async (id, body) => { h.calls.push(['community-update', id, body]); },
@@ -949,7 +951,8 @@ test('Phase 5E: web displays the actual zero score and retains valid feedback', 
     }
   }
   assert.equal(findScore(h.child.result), 0);
-  assert.deepEqual(h.calls.filter(call => call[0] === 'xp'), [['xp', 10]]);
+  assert.deepEqual(h.calls.filter(call => call[0] === 'xp'), [],
+    'Writing feedback is not an authoritative XP award');
 });
 
 test('Phase 5E: stale writing failure cannot change the replacement session UI', async () => {
@@ -962,6 +965,21 @@ test('Phase 5E: stale writing failure cannot change the replacement session UI',
   assert.equal(h.child.exposed.error, ''); assert.equal(h.child.exposed.loading, false);
   assert.equal(h.child.exposed.feedback, null);
   assert.equal(h.calls.some(call => call[0] === 'xp'), false);
+});
+
+test('Phase 6B: successful pronunciation is feedback only, with no persistent XP or reward badge', async () => {
+  const h = harness(); h.mountAuth(); h.login(A); h.isOffline = false;
+  h.mount('pronunciation', 'PronunciationPracticePage'); await h.settle();
+  h.child.exposed.setTargetText('Hello world'); h.child.render(); await h.settle();
+  h.child.exposed.setAudioBlob({ recorded: true }); h.child.render();
+  const before = h.snapshot();
+  h.assessPronunciation = async () => ({ targetText: 'Hello world', recognizedText: 'Hello world',
+    targetLanguage: 'en', pronunciationScore: 95, result: 'correct', aiFeedback: 'Useful feedback', provider: 'test' });
+  await h.child.exposed.handleSubmitAssessment(); await h.settle();
+  assert.equal(h.child.exposed.result.pronunciationScore, 95);
+  assert.deepEqual(h.calls.filter(call => call[0] === 'xp'), []);
+  assert.deepEqual(h.snapshot(), before);
+  assert.equal(JSON.stringify(h.child.result).includes('xp_earned_badge'), false);
 });
 
 

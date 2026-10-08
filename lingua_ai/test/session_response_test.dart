@@ -53,6 +53,7 @@ void main() {
       body = card(id);
     } else if (path.contains('/progress/') && request.method == 'GET') {
       body = {
+        'progressEpoch': 0,
         'stats': {'totalXp': id == a ? 10 : 20, 'streak': 2},
         'completedLessons': [
           {'lessonId': 'current-$id'}

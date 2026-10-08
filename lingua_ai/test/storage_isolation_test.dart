@@ -7,6 +7,7 @@ import 'package:lingua_ai/services/auth_service.dart';
 import 'package:lingua_ai/services/flashcard_service.dart';
 import 'package:lingua_ai/services/progress_service.dart';
 import 'package:lingua_ai/services/progress_cache.dart';
+import 'package:lingua_ai/services/progress_epoch.dart';
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -29,9 +30,16 @@ void main() {
     await progress.init();
     await cards.init();
     final prefs = await SharedPreferences.getInstance();
+    // Known server epoch in this fixture, independent of displayed XP caches.
+    for (final owner in ['guest_$idA', 'guest_$idB', 'registered_$idA']) {
+      await ProgressEpoch.acknowledge(prefs, owner, 0);
+    }
 
     Future<void> writeData(int xp, String word) async {
-      progress.addXp(xp);
+      // Seed acknowledged progress; activities cannot award client-only XP.
+      await ProgressSnapshot(totalXp: xp, streak: 0, lessonIds: {}, activity: [])
+          .save(prefs, auth.localStorageNamespace, 'en');
+      await progress.reloadProgress();
       await cards.createFlashcard(word, 'translation');
       // The services' local write helpers finish asynchronously.
       await Future<void>.delayed(Duration.zero);
@@ -121,10 +129,11 @@ void main() {
     await prefs.setInt('progress_guest_${idB}_en_streak', 7);
     await auth.setGuestSession(
         id: idA, email: 'guest-a@guest.lingua.local', token: 'token-a');
-    progress.addXp(0);
+    final reloadingA = progress.reloadProgress();
     await auth.setGuestSession(
         id: idB, email: 'guest-b@guest.lingua.local', token: 'token-b');
-    await Future<void>.delayed(Duration.zero);
+    await reloadingA;
+    await progress.reloadProgress();
     expect(progress.streak, 7);
     expect(prefs.getInt('progress_guest_${idB}_en_streak'), 7);
     await auth.setGuestSession(

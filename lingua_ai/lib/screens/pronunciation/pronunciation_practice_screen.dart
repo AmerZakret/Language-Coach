@@ -8,7 +8,6 @@ import 'package:permission_handler/permission_handler.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/localization/language_service.dart';
 import '../../core/localization/target_language_service.dart';
-import '../../services/progress_service.dart';
 import '../../services/flashcard_service.dart';
 import '../../services/pronunciation_service.dart';
 import '../../services/theme_service.dart';
@@ -188,11 +187,6 @@ class _PronunciationPracticeScreenState extends State<PronunciationPracticeScree
         _result = assessment;
         _isAssessing = false;
       });
-
-      // Award XP on success
-      if (assessment.pronunciationScore >= 70) {
-        ProgressService().addXp(10);
-      }
     } catch (e) {
       setState(() {
         _errorMessage = e.toString().replaceAll('Exception: ', '');
@@ -785,35 +779,6 @@ class _PronunciationPracticeScreenState extends State<PronunciationPracticeScree
               ],
             ),
           ),
-
-          if (_result!.pronunciationScore >= 70) ...[
-            const SizedBox(height: 20),
-            Container(
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              decoration: BoxDecoration(
-                color: ThemeService().isDarkMode ? Colors.amber.shade900.withValues(alpha: 0.2) : Colors.amber.shade50,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(
-                  color: ThemeService().isDarkMode ? Colors.amber.shade700.withValues(alpha: 0.4) : Colors.amber.shade200,
-                ),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.bolt_rounded, color: Colors.amber, size: 20),
-                  const SizedBox(width: 6),
-                  Text(
-                    'Earned +10 Learning XP!',
-                    style: TextStyle(
-                      color: ThemeService().isDarkMode ? Colors.amber.shade200 : Colors.amber.shade900,
-                      fontWeight: FontWeight.w900,
-                      fontSize: 13,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
         ],
       ),
     );

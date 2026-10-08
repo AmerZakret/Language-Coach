@@ -6,6 +6,7 @@ import '../core/localization/target_language_service.dart';
 import 'connectivity_service.dart';
 import 'offline_queue_service.dart';
 import 'progress_cache.dart';
+import 'xp_level.dart';
 
 class ProgressService extends ChangeNotifier {
   static final ProgressService _instance = ProgressService._internal();
@@ -42,14 +43,7 @@ class ProgressService extends ChangeNotifier {
 
   String get currentLevel => getLevelFromXp(_totalXp);
 
-  static String getLevelFromXp(int xp) {
-    if (xp >= 2200) return 'Advanced';
-    if (xp >= 1400) return 'Upper-Intermediate';
-    if (xp >= 900) return 'Intermediate';
-    if (xp >= 500) return 'Pre-Intermediate';
-    if (xp >= 200) return 'Elementary';
-    return 'Beginner';
-  }
+  static String getLevelFromXp(int xp) => XpLevels.levelFromXp(xp);
 
   // Scopes keys by authenticated identity (or local guest) and target language.
   String _getScopedKey(String suffix) {
@@ -235,24 +229,6 @@ class ProgressService extends ChangeNotifier {
 
   bool isLessonCompleted(String lessonId) {
     return _completedLessonIds.contains(lessonId);
-  }
-
-  void addXp(int amount) {
-    final isCurrent = _captureContext();
-    final owner = AuthService().localStorageNamespace;
-    final language = TargetLanguageService().currentLanguage;
-    OfflineQueueService()
-        .modifyLocalProgress(
-            owner,
-            language,
-            (base) => ProgressSnapshot(
-                totalXp: base.totalXp + amount,
-                streak: base.streak,
-                lessonIds: base.lessonIds,
-                activity: base.activity))
-        .then((_) {
-      if (isCurrent()) _refreshDisplay(isCurrent);
-    });
   }
 
   Future<void> resetProgress() async {

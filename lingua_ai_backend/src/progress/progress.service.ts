@@ -6,6 +6,7 @@ import { Progress } from './schemas/progress.schema';
 import { User } from '../users/schemas/user.schema';
 import { Lesson } from '../lessons/schemas/lesson.schema';
 import { ProgressReset } from './schemas/progress-reset.schema';
+import { deriveLevel, validXp } from '../common/xp-level';
 
 @Injectable()
 export class ProgressService implements OnModuleInit {
@@ -73,18 +74,17 @@ export class ProgressService implements OnModuleInit {
     const completedLessons = completedProgressList.map((p) => ({
       lessonId: p.lessonId,
       score: p.score,
+      ...(p.awardedXp !== undefined ? { awardedXp: p.awardedXp } : {}),
+      ...(p.progressEpoch !== undefined ? { progressEpoch: p.progressEpoch } : {}),
       completedAt: (p as any).createdAt || new Date().toISOString(),
     }));
 
-    // Extract language-scoped XP and Levels from User schemas maps
-    let totalXp = user.totalXp;
-    let level = user.level || 'Beginner';
+    // Preserve the existing language-scoped response fields. Unfiltered stats
+    // are global; filtered stats/level describe that language. Reads never repair.
+    let totalXp = validXp(user.totalXp);
     if (targetLanguage !== undefined) {
       const code = targetLanguageCode(targetLanguage);
       totalXp = this.languageXp(user, code);
-      level = user.levelPerLanguage?.get(code)
-        ?? [...(user.levelPerLanguage ?? [])].find(([key]) => tryTargetLanguage(key) === code)?.[1]
-        ?? 'Beginner';
     }
 
     return {
@@ -96,7 +96,7 @@ export class ProgressService implements OnModuleInit {
         completedLessonsCount: completedLessons.length,
       },
       completedLessons,
-      level,
+      level: deriveLevel(totalXp),
     };
   }
 
@@ -115,16 +115,20 @@ export class ProgressService implements OnModuleInit {
       const run = () => session.withTransaction(async () => {
         let user = await this.findUser(userId, session);
         this.assertEpoch(progressEpoch, user.progressEpoch ?? 0);
-        const lesson = await this.lessonModel.findOne({ id: lessonId }).session(session);
+        const lesson = await this.lessonModel.findOne({ id: lessonId }).session(session).lean();
         if (!lesson) throw new NotFoundException(`Lesson with ID ${lessonId} not found`);
         const lang = targetLanguageCode(lesson.targetLanguage);
         const existing = await this.progressModel.findOne({ userId: user._id.toString(), lessonId }).session(session);
         let xpEarned = 0;
         if (!existing) {
+          xpEarned = validXp(lesson.xpReward);
+          // Check existing authoritative totals and overflow before any award.
+          validXp(validXp(user.totalXp) + xpEarned);
+          validXp(this.languageXp(user, lang) + xpEarned);
           await this.progressModel.create([{
             userId: user._id.toString(), lessonId, score, status: 'completed', targetLanguage: lang,
+            awardedXp: xpEarned, progressEpoch,
           }], { session });
-          xpEarned = lesson.xpReward;
           if (!user.xpPerLanguage || !user.levelPerLanguage) {
             await this.userModel.updateOne({ _id: user._id }, { $set: {
               ...(!user.xpPerLanguage ? { xpPerLanguage: {} } : {}),
@@ -135,11 +139,8 @@ export class ProgressService implements OnModuleInit {
             $inc: { totalXp: xpEarned, [`xpPerLanguage.${lang}`]: xpEarned },
           }, { returnDocument: 'after', session }))!;
           const xp = this.languageXp(user, lang);
-          const level = xp >= 2200 ? 'Advanced' : xp >= 1400 ? 'Upper-Intermediate'
-            : xp >= 900 ? 'Intermediate' : xp >= 500 ? 'Pre-Intermediate'
-            : xp >= 200 ? 'Elementary' : 'Beginner';
           await this.userModel.updateOne({ _id: user._id }, {
-            $set: { level, [`levelPerLanguage.${lang}`]: level },
+            $set: { level: deriveLevel(user.totalXp), [`levelPerLanguage.${lang}`]: deriveLevel(xp) },
           }, { session });
         } else if (score > existing.score) {
           await this.progressModel.updateOne({ _id: existing._id }, { $max: { score } }, { session });
@@ -164,8 +165,11 @@ export class ProgressService implements OnModuleInit {
   }
 
   private languageXp(user: User, code: string): number {
+    // Keep Phase 5D's additive alias compatibility. Historical overlap cannot
+    // be inferred from bucket values, so never merge/dedupe/rewrite those keys.
+    // Every new award increments only the canonical bucket, exactly once.
     return [...(user.xpPerLanguage ?? [])].reduce((total, [key, xp]) =>
-      total + (tryTargetLanguage(key) === code ? xp : 0), 0);
+      tryTargetLanguage(key) === code ? validXp(total + validXp(xp)) : total, 0);
   }
 
   async resetProgress(userId: string, expectedEpoch: number, operationId: string) {

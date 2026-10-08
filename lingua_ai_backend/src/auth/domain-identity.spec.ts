@@ -306,6 +306,21 @@ describe('Phase 5A JWT domain identity', () => {
     expect(result.body.map(item => item.message)).toEqual(Array.from({ length: 50 }, (_, i) => String(i + 10)));
   });
 
+  it('6B: completion rejects client-selected awards and stores only authoritative lesson XP', async () => {
+    const id = existing._id.toString();
+    const token = jwt.sign({ sub: id });
+    const complete = (body: any) => request(app.getHttpServer()).post('/progress/ignored-owner/complete-lesson')
+      .auth(token, { type: 'bearer' }).send(body);
+    for (const field of ['xpReward', 'awardedXp', 'totalXp']) {
+      await complete({ lessonId: 'identity-lesson', score: 73, progressEpoch: 0, [field]: 10000 }).expect(400);
+    }
+    expect(await progress.countDocuments()).toBe(0);
+    const result = await complete({ lessonId: 'identity-lesson', score: 73, progressEpoch: 0 }).expect(201);
+    expect(result.body.data.xpEarned).toBe(25);
+    expect((await users.findById(id))?.totalXp).toBe(25);
+    expect((await progress.findOne())?.awardedXp).toBe(25);
+  });
+
   it('6A: HTTP validates epoch/reset key and rejects stale/future work under JWT ownership', async () => {
     const id = existing._id.toString();
     const token = jwt.sign({ sub: id, email: existing.email });

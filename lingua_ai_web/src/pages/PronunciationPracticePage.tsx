@@ -1,10 +1,9 @@
 import { targetLanguageCode, targetLanguageTtsLocale } from '../utils/targetLanguage';
 import { useState, useEffect, useRef } from "react";
-import { Mic, Square, Sparkles, AlertCircle, Volume2, Loader, Zap, CheckCircle2, WifiOff } from "lucide-react";
+import { Mic, Square, Sparkles, AlertCircle, Volume2, Loader, CheckCircle2, WifiOff } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useLanguage } from "../context/LanguageContext";
 import { useTargetLanguage } from "../context/TargetLanguageContext";
-import { useProgress } from "../context/ProgressContext";
 import { useNetwork } from "../context/NetworkContext";
 import { assessPronunciation } from "../api/pronunciationApi";
 import type { PronunciationAssessmentResult } from "../api/pronunciationApi";
@@ -40,7 +39,6 @@ export function PronunciationPracticePage() {
   const { user } = useAuth();
   const { t } = useLanguage();
   const { targetLanguage } = useTargetLanguage();
-  const { addXp } = useProgress();
   const { isOffline } = useNetwork();
 
   // Mode/Source State
@@ -210,11 +208,6 @@ export function PronunciationPracticePage() {
       });
 
       setResult(assessment);
-
-      // Award XP on success (only if score is decent!)
-      if (assessment.pronunciationScore >= 70) {
-        addXp(10);
-      }
     } catch (e: any) {
       console.error(e);
       setError(e.response?.data?.message || t('failed_pronunciation'));
@@ -474,13 +467,7 @@ export function PronunciationPracticePage() {
                 <p className="text-xs leading-relaxed font-semibold" style={{ color: "var(--l-text2)" }}>{result.aiFeedback}</p>
               </div>
 
-              {/* XP Award badge */}
-              {result.pronunciationScore >= 70 && (
-                <div className="flex items-center justify-center gap-2 p-3 rounded-xl text-xs font-bold" style={{ background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.25)", color: "#B45309" }}>
-                  <Zap size={14} />
-                  <span>{t('xp_earned_badge')}</span>
-                </div>
-              )}
+
             </div>
           )}
 

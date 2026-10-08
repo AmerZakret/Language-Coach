@@ -4,7 +4,6 @@ import { useState, useEffect } from "react";
 import { AlertCircle, CheckCircle2, Sparkles, WifiOff } from "lucide-react";
 import { useLanguage } from "../context/LanguageContext";
 import { useTargetLanguage } from "../context/TargetLanguageContext";
-import { useProgress } from "../context/ProgressContext";
 import { useNetwork } from "../context/NetworkContext";
 import { useAuth } from "../context/AuthContext";
 import { checkWriting } from "../api/aiCoachApi";
@@ -43,7 +42,6 @@ function ScoreRing({ value, color, label }: { value: number; color: string; labe
 export function WritingPracticePage() {
   const { language, t } = useLanguage();
   const { targetLanguage } = useTargetLanguage();
-  const { addXp } = useProgress();
   const { isOffline } = useNetwork();
   useAuth(); // Session changes must also clear pending writing UI state.
   const sessionRevision = getOfflineQueueSession().revision;
@@ -114,7 +112,6 @@ export function WritingPracticePage() {
       };
 
       setFeedback(finalResult);
-      addXp(10);
     } catch (e) {
       if (!isSessionCurrent(session)) return;
       const failure = e as { response?: { status?: number; data?: { message?: unknown } }; message?: string };

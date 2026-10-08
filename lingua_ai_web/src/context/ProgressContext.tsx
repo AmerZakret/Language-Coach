@@ -13,7 +13,6 @@ import { useSessionGuard } from '../utils/useSessionGuard';
 
 interface ProgressContextType {
   progress: ProgressState;
-  addXp: (amount: number) => void;
   completeLesson: (lessonId: string, xpReward: number, score: number) => void;
   reloadProgress: () => void;
   resetProgress: () => Promise<void>;
@@ -67,14 +66,6 @@ export const ProgressProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   useEffect(() => { void loadCurrentProgress(); }, [loadCurrentProgress, syncRevision]);
 
-  const addXp = (amount: number) => {
-    const isCurrent = captureContext();
-    if (!isCurrent()) return;
-    const base = loadProgress(userKey, targetLanguage);
-    saveProgress(userKey, targetLanguage, { ...base, totalXp: base.totalXp + amount });
-    setProgress(previous => isCurrent() ? currentDisplay() : previous);
-  };
-
   const completeLesson = async (lessonId: string, xpReward: number, score = 100) => {
     const isCurrent = captureContext();
     if (!isCurrent() || currentDisplay().completedLessonIds.includes(lessonId)) return;
@@ -104,7 +95,7 @@ export const ProgressProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   return (
-    <ProgressContext.Provider value={{ progress, addXp, completeLesson, reloadProgress: loadCurrentProgress, resetProgress: handleResetProgress }}>
+    <ProgressContext.Provider value={{ progress, completeLesson, reloadProgress: loadCurrentProgress, resetProgress: handleResetProgress }}>
       {children}
     </ProgressContext.Provider>
   );
