@@ -151,6 +151,7 @@ export class ProgressService implements OnModuleInit {
         return { message: 'Lesson marked as completed', data: {
           userId: user._id.toString(), lessonId, score: Math.max(score, existing?.score ?? score),
           progressEpoch,
+          targetLanguage: lang,
           xpEarned, newTotalXp: this.languageXp(user, lang),
         } };
       }, { readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' } });

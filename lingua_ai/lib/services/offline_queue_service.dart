@@ -8,6 +8,7 @@ import 'auth_service.dart';
 import 'api_response.dart';
 import 'progress_cache.dart';
 import 'progress_epoch.dart';
+import '../core/localization/target_language.dart';
 import 'sync_retry_policy.dart';
 import 'package:http/http.dart' as http;
 
@@ -255,7 +256,7 @@ class OfflineQueueService {
     final owner = AuthService().localStorageNamespace;
     return _locked(owner, () async {
       final state = await _read(owner);
-      return [...state.actions, ...state.failedActions];
+      return state.actions;
     });
   }
 
@@ -284,8 +285,6 @@ class OfflineQueueService {
       {String? operationId, bool dispatched = false}) {
     if (type == 'reset-progress') {
       state.actions.removeWhere(
-          (a) => a.type == 'complete-lesson' || a.type == 'reset-progress');
-      state.failedActions.removeWhere(
           (a) => a.type == 'complete-lesson' || a.type == 'reset-progress');
     }
     final originalId = _cardId(payload);
@@ -366,15 +365,6 @@ class OfflineQueueService {
         _append(state, ownerNamespace, type, payload,
             operationId: operationId, dispatched: dispatched);
         await _write(ownerNamespace, state);
-        if (type == 'reset-progress') {
-          await ProgressSnapshot.resetOwner(
-              await SharedPreferences.getInstance(), ownerNamespace);
-          final legacyOwner = payload['legacyOwnerNamespace'] as String?;
-          if (legacyOwner != null) {
-            await ProgressSnapshot.resetOwner(
-                await SharedPreferences.getInstance(), legacyOwner);
-          }
-        }
       });
 
   Future<void> preparePendingProgress(String owner) => _locked(owner, () async {
@@ -384,7 +374,7 @@ class OfflineQueueService {
         state.actions = state.actions.map((action) {
           if (action.ownerNamespace != owner ||
               action.type != 'complete-lesson' ||
-              action.payload['targetLanguage'] != null) {
+              action.payload['_lessonLanguageBound'] == true) {
             return action;
           }
           final matches = <Map<String, dynamic>>[];
@@ -403,7 +393,11 @@ class OfflineQueueService {
                     prefs.getString('lessons_cache_$language') ?? '[]');
                 if (rows is List) {
                   for (final row in rows) {
-                    if (row is Map && row['id'] == action.payload['lessonId']) {
+                    if (row is Map &&
+                        row['id'] == action.payload['lessonId'] &&
+                        (row['targetLanguage'] == null ||
+                            TargetLanguage.tryCode(row['targetLanguage']) ==
+                                entry.key)) {
                       lesson = Map<String, dynamic>.from(row);
                     }
                   }
@@ -416,11 +410,16 @@ class OfflineQueueService {
                     .contains(action.payload['lessonId'])) {
               matches.add({
                 'targetLanguage': entry.key,
+                '_lessonLanguageBound': true,
                 if (lesson?['xpReward'] is int) 'xpReward': lesson!['xpReward']
               });
             }
           }
           if (matches.length != 1) return action;
+          if (matches.single.entries
+              .every((entry) => action.payload[entry.key] == entry.value)) {
+            return action;
+          }
           changed = true;
           return action.withPayload({...action.payload, ...matches.single});
         }).toList();
@@ -433,14 +432,18 @@ class OfflineQueueService {
   Future<int> epochForNewProgress(String owner, {bool forReset = false}) =>
       _locked(owner, () async {
         final state = await _read(owner);
+        final epoch =
+            ProgressEpoch.read(await SharedPreferences.getInstance(), owner);
         if (!forReset &&
-            [...state.actions, ...state.failedActions]
-                .any((a) => a.type == 'reset-progress')) {
+            (state.actions.any((a) => a.type == 'reset-progress') ||
+                state.failedActions.any((a) =>
+                    a.type == 'reset-progress' &&
+                    (!ProgressEpoch.valid(a.payload['expectedEpoch']) ||
+                        epoch == null ||
+                        a.payload['expectedEpoch'] >= epoch)))) {
           throw StateError(
               'Wait for progress reset acknowledgement before submitting new progress');
         }
-        final epoch =
-            ProgressEpoch.read(await SharedPreferences.getInstance(), owner);
         if (epoch == null) {
           throw StateError(
               'Connect to acknowledge server progress before submitting progress');
@@ -457,7 +460,8 @@ class OfflineQueueService {
       _locked(owner, () async {
         if ((await _read(owner)).progressRevision != revision) return false;
         final prefs = await SharedPreferences.getInstance();
-        if (!ProgressEpoch.valid(progress.progressEpoch) ||
+        if (!progress.valid ||
+            !ProgressEpoch.valid(progress.progressEpoch) ||
             !await ProgressEpoch.acknowledge(
                 prefs, owner, progress.progressEpoch!,
                 isCurrent: isCurrent)) {
@@ -573,8 +577,11 @@ class OfflineQueueService {
           final payload = action.payload;
           final cardId = _cardId(payload);
           if (action.type == 'complete-lesson' &&
-              (await getFailedActions())
-                  .any((a) => a.type == 'reset-progress')) {
+              (await getFailedActions()).any((a) =>
+                  a.type == 'reset-progress' &&
+                  (!ProgressEpoch.valid(a.payload['expectedEpoch']) ||
+                      a.payload['expectedEpoch'] >=
+                          action.payload['progressEpoch']))) {
             throw const InvalidQueuedPayload();
           }
           if (_dependent(action.type) &&
@@ -609,6 +616,14 @@ class OfflineQueueService {
                     if (completion?['data']?['progressEpoch'] !=
                         payload['progressEpoch']) {
                       throw const InvalidQueuedPayload();
+                    }
+                    final data = completion?['data'];
+                    if ((data?['newTotalXp'] != null &&
+                            !ProgressEpoch.valid(data['newTotalXp'])) ||
+                        (data?['score'] != null &&
+                            !ProgressSnapshot.validScore(data['score']))) {
+                      throw const FormatException(
+                          'Invalid completion acknowledgement');
                     }
                     break;
                   case 'create-flashcard':
@@ -731,8 +746,11 @@ class OfflineQueueService {
           if (!session.isCurrent) return false;
           if (state.actions.any((a) => a.id == action.id) &&
               action.type == 'complete-lesson') {
-            final language = action.payload['targetLanguage'] as String?;
             final result = completion?['data'];
+            final language = TargetLanguage.tryCode(result?['targetLanguage'] ??
+                (action.payload['_lessonLanguageBound'] == true
+                    ? action.payload['targetLanguage']
+                    : null));
             if (language != null &&
                 result?['newTotalXp'] is int &&
                 await ProgressEpoch.acknowledge(
@@ -742,6 +760,13 @@ class OfflineQueueService {
               final base = ProgressSnapshot.read(prefs, owner, language);
               await ProgressSnapshot(
                       totalXp: result['newTotalXp'] as int,
+                      progressEpoch: result['progressEpoch'] as int,
+                      lessonScores: {
+                        ...base.lessonScores,
+                        if (ProgressSnapshot.validScore(result['score']))
+                          action.payload['lessonId'].toString():
+                              result['score'] as int
+                      },
                       streak: base.streak,
                       lessonIds: {
                         ...base.lessonIds,

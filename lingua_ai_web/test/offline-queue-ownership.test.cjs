@@ -382,8 +382,7 @@ for (const operation of ['profile-fetch', 'profile-update', 'progress-fetch', 'l
       'card-fetch': () => h.client.get(`/flashcards/all?userId=${A}`, h.session.getSessionRequestConfig()),
     }[operation];
     const pending = send(); h.auth().logout(); h.auth().login(user(B), `test-${B}`);
-    if (operation === 'progress-fetch') assert.equal(await pending, null);
-    else await assert.rejects(pending, /Session changed before dispatch/);
+    await assert.rejects(pending, /Session changed before dispatch/);
     assert.equal(h.requests.length, 0);
   });
 }
@@ -663,7 +662,7 @@ test('Phase 4F: failed reset quarantines successor/future completions until an e
   assert.equal(h.queue.getFailedOfflineActions().length, 2);
   h.enqueue('complete-lesson', { lessonId: 'future', score: 73 });
   assert.equal(await h.queue.processOfflineQueue(A), false); assert.equal(h.requests.length, 1);
-  h.enqueue('reset-progress', {}); assert.equal(h.queue.getFailedOfflineActions().length, 0);
+  h.enqueue('reset-progress', {}); assert.equal(h.queue.getFailedOfflineActions().length, 3);
   h.control.dispatch = async () => ({ data: {} }); assert.equal(await h.queue.processOfflineQueue(A), true);
 });
 

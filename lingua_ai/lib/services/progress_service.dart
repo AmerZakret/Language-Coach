@@ -7,6 +7,8 @@ import 'connectivity_service.dart';
 import 'offline_queue_service.dart';
 import 'progress_cache.dart';
 import 'xp_level.dart';
+import 'progress_epoch.dart';
+import '../core/localization/target_language.dart';
 
 class ProgressService extends ChangeNotifier {
   static final ProgressService _instance = ProgressService._internal();
@@ -22,6 +24,10 @@ class ProgressService extends ChangeNotifier {
   int _streak = 0;
   Set<String> _completedLessonIds = {};
   List<double> _weeklyActivity = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+  Map<String, int> _lessonScores = {};
+  bool _cacheAvailable = false;
+  Map<String, int> get lessonScores => Map.unmodifiable(_lessonScores);
+  bool get hasAcknowledgedProgress => _cacheAvailable;
 
   int get totalXp => _totalXp;
   int get streak => _streak;
@@ -98,6 +104,8 @@ class ProgressService extends ChangeNotifier {
     _totalXp = 0;
     _streak = 0;
     _completedLessonIds = {};
+    _lessonScores = {};
+    _cacheAvailable = false;
     _weeklyActivity = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
 
     // 2. Load from scoped keys
@@ -141,19 +149,29 @@ class ProgressService extends ChangeNotifier {
     final actions = await OfflineQueueService().getProgressActions();
     if (!isCurrent()) return;
     final base = ProgressSnapshot.read(_prefs, owner, language);
+    final epoch = ProgressEpoch.read(_prefs, owner);
     final current = base.overlay(
         actions
             .where((a) =>
                 a.ownerNamespace == owner &&
                 a.type == 'complete-lesson' &&
-                a.payload['targetLanguage'] == language)
+                a.payload['_lessonLanguageBound'] == true &&
+                TargetLanguage.tryCode(a.payload['targetLanguage']) ==
+                    language &&
+                ProgressEpoch.valid(epoch) &&
+                a.payload['progressEpoch'] == epoch)
             .map((a) => a.payload),
-        reset: actions.any(
-            (a) => a.ownerNamespace == owner && a.type == 'reset-progress'));
+        reset: actions.any((a) =>
+            a.ownerNamespace == owner &&
+            a.type == 'reset-progress' &&
+            ProgressEpoch.valid(epoch) &&
+            a.payload['expectedEpoch'] == epoch));
     _totalXp = current.totalXp;
     _streak = current.streak;
     _completedLessonIds = current.lessonIds;
     _weeklyActivity = current.activity;
+    _lessonScores = current.lessonScores;
+    _cacheAvailable = base.available;
     notifyListeners();
   }
 
@@ -188,13 +206,27 @@ class ProgressService extends ChangeNotifier {
   }
 
   Future<void> completeLesson(String lessonId, int xpReward,
-      {int score = 100}) async {
+      {required String lessonLanguage, int score = 100}) async {
     final auth = AuthService();
-    final isCurrent = _captureContext();
+    final session = auth.captureSession();
+    final reset = _resetRevision;
+    bool isCurrent() => session.isCurrent && reset == _resetRevision;
     final owner = auth.localStorageNamespace;
-    final language = TargetLanguageService().currentLanguage;
+    final language = TargetLanguage.code(lessonLanguage);
     final queue = OfflineQueueService();
-    if (_completedLessonIds.contains(lessonId)) return;
+    if (!ProgressSnapshot.validScore(score)) {
+      throw ArgumentError.value(score, 'score');
+    }
+    final base = ProgressSnapshot.read(_prefs, owner, language);
+    final knownScore = base.lessonScores[lessonId];
+    // Persisted backend state may be stale (including a remote reset). Let the
+    // authoritative max-score/deduplication path decide all backend retakes.
+    if (auth.token.isEmpty &&
+        base.available &&
+        knownScore != null &&
+        score <= knownScore) {
+      return;
+    }
     if (auth.token.isNotEmpty) {
       final epoch = await queue.epochForNewProgress(owner);
       if (!isCurrent()) return;
@@ -208,6 +240,7 @@ class ProgressService extends ChangeNotifier {
             'progressEpoch': epoch,
             'xpReward': xpReward,
             'targetLanguage': language,
+            '_lessonLanguageBound': true,
           },
           ownerNamespace: owner);
     } else {
@@ -215,11 +248,11 @@ class ProgressService extends ChangeNotifier {
           owner,
           language,
           (base) => base.overlay([
-                {'lessonId': lessonId, 'xpReward': xpReward}
-              ]));
+                {'lessonId': lessonId, 'xpReward': xpReward, 'score': score}
+              ], local: true));
     }
     if (!isCurrent()) return;
-    await _refreshDisplay(isCurrent);
+    await _refreshDisplay(_captureContext());
     if (isCurrent() &&
         auth.token.isNotEmpty &&
         ConnectivityService().isOnline) {

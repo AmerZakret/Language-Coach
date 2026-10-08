@@ -144,6 +144,7 @@ describe('Completion and XP consistency (real disposable transactions)', () => {
     expect(saved.xpPerLanguage.get('de')).toBe(730);
     const row = (await progress.findOne({ lessonId: 'one' }))!;
     expect(row.toObject()).toMatchObject({ awardedXp: 50, targetLanguage: 'en', progressEpoch: 0 });
+    expect((await complete('one', 91))?.data).toMatchObject({ targetLanguage: 'en', score: 91, xpEarned: 0 });
     expect((await service.getUserProgress(user._id.toString())).level).toBe('Intermediate');
     expect((await service.getUserProgress(user._id.toString(), 'en')).level).toBe('Elementary');
     await lessons.updateOne({ id: 'one' }, { $set: { xpReward: 999 } });

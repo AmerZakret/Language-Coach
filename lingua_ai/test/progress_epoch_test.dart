@@ -36,6 +36,7 @@ void main() {
         'lessonId': 'one',
         'score': 73,
         'targetLanguage': 'en',
+        '_lessonLanguageBound': true,
         'xpReward': 50,
         if (epoch != null) 'progressEpoch': epoch,
       },
@@ -58,6 +59,20 @@ void main() {
     expect(ProgressEpoch.read(prefs, 'local_guest'), isNull);
     await prefs.setString(ProgressEpoch.key('registered_$b'), '');
     expect(ProgressEpoch.read(prefs, 'registered_$b'), isNull);
+  });
+  test('6C: invalid newer snapshot cannot advance epoch or delete valid cache',
+      () async {
+    final owner = getOwner();
+    await ProgressEpoch.acknowledge(prefs, owner, 0);
+    await ProgressSnapshot(totalXp: 50, progressEpoch: 0, lessonIds: {'one'})
+        .save(prefs, owner, 'en');
+    final revision = await queue.progressRevision(owner);
+    expect(
+        await queue.saveServerProgress(owner, 'en', revision,
+            ProgressSnapshot(totalXp: -1, progressEpoch: 1)),
+        false);
+    expect(ProgressEpoch.read(prefs, owner), 0);
+    expect(ProgressSnapshot.read(prefs, owner, 'en').totalXp, 50);
   });
   test(
       'old epoch progress/ack responses cannot overwrite new cache; stale session writes are rejected',

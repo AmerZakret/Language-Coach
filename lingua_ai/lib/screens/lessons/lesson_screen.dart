@@ -89,6 +89,7 @@ class _LessonScreenState extends State<LessonScreen> {
         isChecked = false;
       } else {
         ProgressService().completeLesson(lesson!.id, lesson!.xpReward,
+            lessonLanguage: lesson!.targetLanguage,
             score: ((score / lesson!.questions.length) * 100).round());
         Navigator.pushReplacementNamed(
           context, 

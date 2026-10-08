@@ -197,7 +197,7 @@ void main() {
         'stale lesson completion blocks refetch and local fallback (failure: $failure)',
         () => race(
               match: (r) => r.url.path.endsWith('/complete-lesson'),
-              operation: () => progress.completeLesson('new-lesson', 999),
+              operation: () => progress.completeLesson('new-lesson', 999, lessonLanguage: 'en'),
               response: {},
               failure: failure,
             ));

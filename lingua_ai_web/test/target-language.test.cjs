@@ -9,7 +9,7 @@ function harness() {
   const calls = [], modules = new Map();
   const client = Object.fromEntries(['post', 'get', 'patch', 'delete'].map(method => [method,
     async (...args) => { calls.push({ method, args }); return { data: args[0].includes('/community/')
-      ? (method === 'get' ? { items: [{ learningLanguage: 'de' }] } : { learningLanguage: 'de' }) : args[0].includes('writing-check') ? { grammarScore: 85.5, vocabularyScore: 80, clarityScore: 75, overallScore: 80.5, corrections: [], feedback: 'Good', improvedVersion: 'Hello' } : args[0].includes('/users/profile') ? { id: '507f1f77bcf86cd799439011', name: 'Test', email: 'test@example.com', isGuest: false, targetLanguage: args[1].targetLanguage } : [] }; }]));
+      ? (method === 'get' ? { items: [{ learningLanguage: 'de' }] } : { learningLanguage: 'de' }) : args[0].includes('/progress/') ? { progressEpoch: 0, stats: { totalXp: 0, streak: 0 }, completedLessons: [] } : args[0].includes('writing-check') ? { grammarScore: 85.5, vocabularyScore: 80, clarityScore: 75, overallScore: 80.5, corrections: [], feedback: 'Good', improvedVersion: 'Hello' } : args[0].includes('/users/profile') ? { id: '507f1f77bcf86cd799439011', name: 'Test', email: 'test@example.com', isGuest: false, targetLanguage: args[1].targetLanguage } : [] }; }]));
   function load(file) {
     file = resolve(__dirname, '../src', file);
     if (modules.has(file)) return modules.get(file).exports;

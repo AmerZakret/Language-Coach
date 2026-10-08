@@ -266,8 +266,9 @@ void main() {
       expect(await queue.processQueue(a), false);
       expect(calls, 1);
       await push('reset-progress', {'expectedEpoch': 0});
-      expect(await queue.getFailedActions(), isEmpty);
+      expect(await queue.getFailedActions(), hasLength(3));
       expect(await queue.processQueue(a), true);
+      expect(await queue.getFailedActions(), hasLength(3));
     },
         () => MockClient((request) async {
               calls++;

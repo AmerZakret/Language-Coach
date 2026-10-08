@@ -6,14 +6,17 @@ import { useSync } from './SyncContext';
 import { useNetwork } from './NetworkContext';
 import { useTargetLanguage } from './TargetLanguageContext';
 import { getUserProgressKey, getLegacyRegisteredProgressKey } from '../utils/userKey';
-import { loadProgress, saveProgress, resetOwnerProgress, overlayPendingProgress } from '../utils/progressStorage';
+import { loadProgress, saveProgress, resetOwnerProgress, overlayPendingProgress, getOwnerProgressEpoch, validProgressEpoch, validLessonScore } from '../utils/progressStorage';
+import { targetLanguageCode, tryTargetLanguageCode } from '../utils/targetLanguage';
+import { classifySyncFailure } from '../utils/syncRetryPolicy';
 import { fetchProgress } from '../api/progressApi';
 import { epochForNewProgress, getProgressQueueActions, preparePendingProgress, getProgressQueueRevision, saveServerProgress, pushToOfflineQueue, processOfflineQueue } from '../utils/offlineQueue';
 import { useSessionGuard } from '../utils/useSessionGuard';
 
 interface ProgressContextType {
   progress: ProgressState;
-  completeLesson: (lessonId: string, xpReward: number, score: number) => void;
+  completeLesson: (lessonId: string, xpReward: number, score: number, lessonLanguage: string) => Promise<void>;
+  progressError: { category: string; terminal: boolean } | null;
   reloadProgress: () => void;
   resetProgress: () => Promise<void>;
 }
@@ -25,10 +28,12 @@ export const ProgressProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   const { isOffline } = useNetwork();
   const { syncRevision } = useSync();
   const [progress, setProgress] = useState<ProgressState>(DEFAULT_PROGRESS);
+  const [progressError, setProgressError] = useState<{ category: string; terminal: boolean } | null>(null);
   const requestRevision = useRef(0);
   const userKey = getUserProgressKey(user, isGuest, token);
   const legacyUserKey = getLegacyRegisteredProgressKey(user?.email, isGuest);
   const captureContext = useSessionGuard(userKey, targetLanguage);
+  const captureOwner = useSessionGuard(userKey);
   const identifier = user?.id || user?.email;
   const backendSession = !!user && !!identifier && (!isGuest || !!token);
 
@@ -36,9 +41,12 @@ export const ProgressProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const base = loadProgress(userKey, targetLanguage, legacyUserKey);
     preparePendingProgress(userKey);
     const actions = getProgressQueueActions().filter(a => a.ownerNamespace === userKey);
+    const epoch = getOwnerProgressEpoch(userKey);
     return overlayPendingProgress(base, actions.filter(a => a.type === 'complete-lesson'
-      && a.payload.targetLanguage === targetLanguage).map(a => a.payload),
-      actions.some(a => a.type === 'reset-progress'));
+      && a.payload._lessonLanguageBound === true
+      && tryTargetLanguageCode(a.payload.targetLanguage) === targetLanguageCode(targetLanguage)
+      && validProgressEpoch(epoch) && a.payload.progressEpoch === epoch).map(a => a.payload),
+      actions.some(a => a.type === 'reset-progress' && validProgressEpoch(epoch) && a.payload.expectedEpoch === epoch));
   }, [userKey, targetLanguage, legacyUserKey]);
 
   const loadCurrentProgress = useCallback(async () => {
@@ -46,6 +54,7 @@ export const ProgressProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     const request = ++requestRevision.current;
     const isCurrent = () => isSessionCurrent() && request === requestRevision.current;
     if (!isCurrent()) return;
+    setProgressError(null);
     setProgress(previous => isCurrent() ? currentDisplay() : previous);
     if (backendSession && !isOffline) {
       try {
@@ -58,6 +67,7 @@ export const ProgressProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         if (backend) saveServerProgress(userKey, targetLanguage, revision, backend);
       } catch (error) {
         if (!isCurrent()) return;
+        setProgressError(classifySyncFailure(error));
         console.error('Progress sync failed', error);
       }
     }
@@ -66,20 +76,24 @@ export const ProgressProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   useEffect(() => { void loadCurrentProgress(); }, [loadCurrentProgress, syncRevision]);
 
-  const completeLesson = async (lessonId: string, xpReward: number, score = 100) => {
-    const isCurrent = captureContext();
-    if (!isCurrent() || currentDisplay().completedLessonIds.includes(lessonId)) return;
+  const completeLesson = async (lessonId: string, xpReward: number, score: number, lessonLanguage: string) => {
+    const isCurrent = captureOwner();
+    if (!isCurrent()) return;
+    const language = targetLanguageCode(lessonLanguage);
+    if (!validLessonScore(score)) throw new Error('Invalid completion score');
     if (backendSession) {
       // Persist before any HTTP, including ordinary online completion. A retry
       // carries this exact score/action ID; no reconstruction from cached IDs.
-      pushToOfflineQueue('complete-lesson', { lessonId, score, xpReward, targetLanguage,
+      pushToOfflineQueue('complete-lesson', { lessonId, score, xpReward, targetLanguage: language,
+        _lessonLanguageBound: true,
         progressEpoch: epochForNewProgress(userKey) }, userKey);
     } else {
-      const base = loadProgress(userKey, targetLanguage);
-      saveProgress(userKey, targetLanguage, { ...base, totalXp: base.totalXp + xpReward,
-        completedLessonIds: [...base.completedLessonIds, lessonId] });
+      const base = loadProgress(userKey, language);
+      if (base.available && base.lessonScores?.[lessonId] !== undefined && score <= base.lessonScores[lessonId]) return;
+      saveProgress(userKey, language, { ...overlayPendingProgress(base, [{ lessonId, score, xpReward }], false), available: true });
     }
-    setProgress(previous => isCurrent() ? currentDisplay() : previous);
+    const displayCurrent = captureContext();
+    setProgress(previous => displayCurrent() ? currentDisplay() : previous);
     if (backendSession && !isOffline && isCurrent()) await loadCurrentProgress();
   };
 
@@ -95,7 +109,7 @@ export const ProgressProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   return (
-    <ProgressContext.Provider value={{ progress, completeLesson, reloadProgress: loadCurrentProgress, resetProgress: handleResetProgress }}>
+    <ProgressContext.Provider value={{ progress, progressError, completeLesson, reloadProgress: loadCurrentProgress, resetProgress: handleResetProgress }}>
       {children}
     </ProgressContext.Provider>
   );

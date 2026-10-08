@@ -130,7 +130,7 @@ export function LessonQuizPage() {
       // score is current correct count; +1 if the final answer was also correct
       // but score state is already updated by handleSelect before handleNext is called
       const pct = Math.round((score / totalQuestions) * 100);
-      completeLesson(lesson.id, lesson.xpReward, pct);
+      completeLesson(lesson.id, lesson.xpReward, pct, lesson.targetLanguage);
     } else {
       setCurrent((c) => c + 1);
       setSelected(null);

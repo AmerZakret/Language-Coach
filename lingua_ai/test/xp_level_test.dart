@@ -38,8 +38,9 @@ void main() {
       for (final xp in [threshold, threshold + 1]) {
         expect(ProgressService.getLevelFromXp(xp), XpLevels.names[i]);
       }
-      if (i > 0)
+      if (i > 0) {
         expect(XpLevels.levelFromXp(threshold - 1), XpLevels.names[i - 1]);
+      }
     }
     for (final xp in [2200, 2201, 10000]) {
       expect(XpLevels.info(xp),
