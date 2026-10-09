@@ -7,6 +7,21 @@ import 'api_response.dart';
 import 'sync_retry_policy.dart';
 
 class ProgressApiService {
+  Future<Map<String, dynamic>> getResetReceipt(String userId,
+      {required int expectedEpoch, required String operationId}) async {
+    final session = AuthService().captureSession();
+    final response = await apiRequest(
+        () => http.get(
+                Uri.parse(
+                        '${ApiConfig.baseUrl}${ApiConfig.progress}/$userId/reset-receipts/${Uri.encodeComponent(operationId)}')
+                    .replace(queryParameters: {'expectedEpoch': '$expectedEpoch'}),
+                headers: {
+                  'Authorization': 'Bearer ${AuthService().token}'
+                }).timeout(replayTimeout),
+        session);
+    return json.decode(response.body);
+  }
+
   Future<Map<String, dynamic>> getProgress(
       String userId, String targetLanguage) async {
     try {

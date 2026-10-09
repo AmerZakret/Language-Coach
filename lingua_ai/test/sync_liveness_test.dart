@@ -254,21 +254,21 @@ void main() {
     });
   }
   test(
-      'failed reset blocks successor and future completions until a new explicit reset',
+      '6E: terminal reset stays diagnostic while valid successor and future completions execute',
       () async {
     await push('reset-progress', {'expectedEpoch': 0});
     await push();
     var calls = 0;
     await http.runWithClient(() async {
       expect(await queue.processQueue(a), false);
-      expect(await queue.getFailedActions(), hasLength(2));
+      expect(await queue.getFailedActions(), hasLength(1));
       await push();
-      expect(await queue.processQueue(a), false);
-      expect(calls, 1);
-      await push('reset-progress', {'expectedEpoch': 0});
-      expect(await queue.getFailedActions(), hasLength(3));
       expect(await queue.processQueue(a), true);
-      expect(await queue.getFailedActions(), hasLength(3));
+      expect(calls, 3);
+      await push('reset-progress', {'expectedEpoch': 0});
+      expect(await queue.getFailedActions(), hasLength(1));
+      expect(await queue.processQueue(a), true);
+      expect(await queue.getFailedActions(), hasLength(1));
     },
         () => MockClient((request) async {
               calls++;

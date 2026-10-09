@@ -8,6 +8,9 @@ import { Progress } from './schemas/progress.schema';
 import { User } from '../users/schemas/user.schema';
 import { Lesson } from '../lessons/schemas/lesson.schema';
 import { serializeUser } from '../users/user-response';
+import { ProgressController } from './progress.controller';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { ValidationPipe } from '@nestjs/common';
 
 describe('Completion and XP consistency (real disposable transactions)', () => {
   jest.setTimeout(120000);
@@ -273,5 +276,107 @@ describe('Completion and XP consistency (real disposable transactions)', () => {
     expect(outcomes[1].status).toBe('fulfilled');
     expect(await progress.countDocuments()).toBe(0);
     expect((await users.findById(user._id))?.totalXp).toBe(0);
+  });
+  it('6E: stale/future completion and reset errors expose terminal epoch codes', async () => {
+    await service.resetProgress(user._id.toString(), 0, 'remote-reset');
+    for (const [epoch, code] of [[0, 'STALE_PROGRESS_EPOCH'], [2, 'FUTURE_PROGRESS_EPOCH']] as const) {
+      await expect(service.completeLesson(user._id.toString(), 'two', 73, epoch))
+        .rejects.toMatchObject({ response: { code } });
+      await expect(service.resetProgress(user._id.toString(), epoch, `invalid-${epoch}`))
+        .rejects.toMatchObject({ response: { code: epoch === 0 ? 'STALE_RESET_EPOCH' : 'FUTURE_RESET_EPOCH' } });
+    }
+    expect(await progress.countDocuments()).toBe(0);
+    expect((await users.findById(user._id))?.progressEpoch).toBe(1);
+  });
+
+  it('6E: malformed/missing epochs and reused reset keys have explicit diagnostic codes', async () => {
+    await expect(service.completeLesson(user._id.toString(), 'one', 73, undefined as any))
+      .rejects.toMatchObject({ response: { code: 'MISSING_PROGRESS_EPOCH' } });
+    await expect(service.resetProgress(user._id.toString(), -1, 'invalid'))
+      .rejects.toMatchObject({ response: { code: 'INVALID_PROGRESS_EPOCH' } });
+    await service.resetProgress(user._id.toString(), 0, 'original');
+    await service.completeLesson(user._id.toString(), 'two', 73, 1);
+    await expect(service.resetProgress(user._id.toString(), 1, 'original'))
+      .rejects.toMatchObject({ response: { code: 'RESET_IDEMPOTENCY_CONFLICT' } });
+    expect((await users.findById(user._id))?.totalXp).toBe(80);
+  });
+
+  it('6E: read-only receipt recovery proves a lost acknowledgement without deleting newer work', async () => {
+    const result = await service.resetProgress(user._id.toString(), 0, 'lost-result');
+    await service.completeLesson(user._id.toString(), 'two', 91, 1);
+    const before = (await users.findById(user._id))!.toObject();
+    const rows = await progress.find().lean();
+    const writes = jest.spyOn(users, 'updateOne');
+    const deletes = jest.spyOn(progress, 'deleteMany');
+    expect(await service.getResetReceipt(user._id.toString(), 0, 'lost-result')).toEqual(result);
+    await expect(service.resetProgress(user._id.toString(), 0, 'stale-recovery'))
+      .rejects.toMatchObject({ response: { code: 'STALE_RESET_EPOCH' } });
+    expect(writes).not.toHaveBeenCalled(); expect(deletes).not.toHaveBeenCalled();
+    expect((await users.findById(user._id))!.toObject()).toEqual(before);
+    expect(await progress.find().lean()).toEqual(rows);
+    // A normal same-key retry is also success-equivalent, never a second reset.
+    expect(await service.resetProgress(user._id.toString(), 0, 'lost-result')).toEqual(result);
+    expect(writes).not.toHaveBeenCalled(); expect(deletes).not.toHaveBeenCalled();
+    expect((await users.findById(user._id))?.totalXp).toBe(80);
+  });
+
+  it('6E: absent/conflicting receipts cannot execute an uncommitted reset', async () => {
+    await complete();
+    await expect(service.getResetReceipt(user._id.toString(), 0, 'never-sent'))
+      .rejects.toMatchObject({ response: { code: 'RESET_NOT_COMMITTED' } });
+    expect((await users.findById(user._id))?.progressEpoch).toBe(0);
+    expect((await users.findById(user._id))?.totalXp).toBe(50);
+    await service.resetProgress(user._id.toString(), 0, 'committed');
+    await expect(service.getResetReceipt(user._id.toString(), 1, 'committed'))
+      .rejects.toMatchObject({ response: { code: 'RESET_IDEMPOTENCY_CONFLICT' } });
+    await expect(service.getResetReceipt(user._id.toString(), Number.MAX_SAFE_INTEGER, 'committed'))
+      .rejects.toMatchObject({ status: 400 });
+  });
+
+  it('6E: HTTP receipt lookup uses authenticated ownership and validates query epochs', async () => {
+    await service.resetProgress(user._id.toString(), 0, 'owner-only');
+    const b = await users.create({ name: 'B', email: 'receipt-b@example.com', passwordHash: 'fixture' });
+    const fixture = await Test.createTestingModule({ controllers: [ProgressController],
+      providers: [{ provide: ProgressService, useValue: service }] })
+      .overrideGuard(JwtAuthGuard).useValue({ canActivate(context: any) {
+        const req = context.switchToHttp().getRequest();
+        req.user = { _id: req.headers.authorization === 'owner-a' ? user._id : b._id };
+        return true;
+      } }).compile();
+    const app = fixture.createNestApplication();
+    app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
+    await app.init();
+    const request = require('supertest');
+    try {
+      const path = `/progress/${b._id}/reset-receipts/owner-only`;
+      const response = await request(app.getHttpServer()).get(`${path}?expectedEpoch=0`).set('Authorization', 'owner-a').expect(200);
+      expect(response.body).toMatchObject({ userId: user._id.toString(), operationId: 'owner-only', expectedEpoch: 0, progressEpoch: 1 });
+      await request(app.getHttpServer()).get(`${path}?expectedEpoch=0`).set('Authorization', 'owner-b').expect(404);
+      for (const value of ['', '-1', '0x0', '0.5', '9007199254740991']) {
+        await request(app.getHttpServer()).get(`${path}?expectedEpoch=${value}`).set('Authorization', 'owner-a').expect(400);
+      }
+      const missingQuery = await request(app.getHttpServer()).get(path).set('Authorization', 'owner-a').expect(400);
+      expect(missingQuery.body.code).toBe('MISSING_PROGRESS_EPOCH');
+      // Exercise the actual global validation boundary, not just service calls.
+      for (const epoch of [undefined, null, -1, 1.5, '1', Number.MAX_SAFE_INTEGER + 1]) {
+        const code = epoch === undefined ? 'MISSING_PROGRESS_EPOCH' : 'INVALID_PROGRESS_EPOCH';
+        const completion = await request(app.getHttpServer()).post(`/progress/${user._id}/complete-lesson`)
+          .set('Authorization', 'owner-a').send({ lessonId: 'one', score: 73, progressEpoch: epoch }).expect(400);
+        expect(completion.body.code).toBe(code);
+        const reset = await request(app.getHttpServer()).delete(`/progress/${user._id}`)
+          .set('Authorization', 'owner-a').set('X-Idempotency-Key', 'invalid-http')
+          .send({ expectedEpoch: epoch }).expect(400);
+        expect(reset.body.code).toBe(code);
+      }
+      const staleReset = await request(app.getHttpServer()).delete(`/progress/${user._id}`)
+        .set('Authorization', 'owner-a').set('X-Idempotency-Key', 'stale-http').send({ expectedEpoch: 0 }).expect(409);
+      expect(staleReset.body.code).toBe('STALE_RESET_EPOCH');
+      const badScore = await request(app.getHttpServer()).post(`/progress/${user._id}/complete-lesson`)
+        .set('Authorization', 'owner-a').send({ lessonId: 'one', score: 101, progressEpoch: 1 }).expect(400);
+      expect(badScore.body.code).toBeUndefined();
+      expect((await users.findById(user._id))?.progressEpoch).toBe(1);
+      expect(await progress.countDocuments()).toBe(0);
+      expect((await users.findById(b._id))?.progressEpoch).toBe(0);
+    } finally { await app.close(); }
   });
 });

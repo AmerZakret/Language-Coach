@@ -23,7 +23,11 @@ class OfflineQueueAction {
   final DateTime? lastAttemptAt;
   final DateTime? nextAttemptAt;
   final String? lastErrorCategory;
+  final String? lastErrorCode;
+  final int? lastErrorStatus;
   final DateTime? failedAt;
+  final DateTime? reconciledAt;
+  final int? acknowledgedEpoch;
   OfflineQueueAction(
       {required this.id,
       required this.type,
@@ -35,7 +39,11 @@ class OfflineQueueAction {
       this.lastAttemptAt,
       this.nextAttemptAt,
       this.lastErrorCategory,
-      this.failedAt});
+      this.lastErrorCode,
+      this.lastErrorStatus,
+      this.failedAt,
+      this.reconciledAt,
+      this.acknowledgedEpoch});
   Map<String, dynamic> toJson() => {
         'id': id,
         'type': type,
@@ -48,7 +56,12 @@ class OfflineQueueAction {
         if (nextAttemptAt != null)
           'nextAttemptAt': nextAttemptAt!.toUtc().toIso8601String(),
         if (lastErrorCategory != null) 'lastErrorCategory': lastErrorCategory,
+        if (lastErrorCode != null) 'lastErrorCode': lastErrorCode,
+        if (lastErrorStatus != null) 'lastErrorStatus': lastErrorStatus,
         if (failedAt != null) 'failedAt': failedAt!.toUtc().toIso8601String(),
+        if (reconciledAt != null)
+          'reconciledAt': reconciledAt!.toUtc().toIso8601String(),
+        if (acknowledgedEpoch != null) 'acknowledgedEpoch': acknowledgedEpoch,
         'schemaVersion': schemaVersion
       };
   factory OfflineQueueAction.fromJson(Map<String, dynamic> json) {
@@ -70,7 +83,11 @@ class OfflineQueueAction {
         nextAttemptAt:
             DateTime.tryParse(json['nextAttemptAt'] as String? ?? ''),
         lastErrorCategory: json['lastErrorCategory'] as String?,
-        failedAt: DateTime.tryParse(json['failedAt'] as String? ?? ''));
+        lastErrorCode: json['lastErrorCode'] as String?,
+        lastErrorStatus: json['lastErrorStatus'] as int?,
+        failedAt: DateTime.tryParse(json['failedAt'] as String? ?? ''),
+        reconciledAt: DateTime.tryParse(json['reconciledAt'] as String? ?? ''),
+        acknowledgedEpoch: json['acknowledgedEpoch'] as int?);
   }
   OfflineQueueAction withPayload(Map<String, dynamic> value) =>
       OfflineQueueAction(
@@ -84,12 +101,18 @@ class OfflineQueueAction {
           lastAttemptAt: lastAttemptAt,
           nextAttemptAt: nextAttemptAt,
           lastErrorCategory: lastErrorCategory,
-          failedAt: failedAt);
+          lastErrorCode: lastErrorCode,
+          lastErrorStatus: lastErrorStatus,
+          failedAt: failedAt,
+          reconciledAt: reconciledAt,
+          acknowledgedEpoch: acknowledgedEpoch);
   OfflineQueueAction withRetry(
           {required int attempts,
           required DateTime attemptedAt,
           DateTime? nextAt,
           String? category,
+          String? code,
+          int? status,
           DateTime? failed}) =>
       OfflineQueueAction(
           id: id,
@@ -102,7 +125,28 @@ class OfflineQueueAction {
           lastAttemptAt: attemptedAt,
           nextAttemptAt: nextAt,
           lastErrorCategory: category,
-          failedAt: failed);
+          lastErrorCode: code,
+          lastErrorStatus: status,
+          failedAt: failed,
+          reconciledAt: reconciledAt,
+          acknowledgedEpoch: acknowledgedEpoch);
+
+  OfflineQueueAction withReceipt(DateTime at, int epoch) => OfflineQueueAction(
+      id: id,
+      type: type,
+      ownerNamespace: ownerNamespace,
+      payload: payload,
+      createdAt: createdAt,
+      schemaVersion: schemaVersion,
+      attemptCount: attemptCount,
+      lastAttemptAt: lastAttemptAt,
+      nextAttemptAt: nextAttemptAt,
+      lastErrorCategory: lastErrorCategory,
+      lastErrorCode: lastErrorCode,
+      lastErrorStatus: lastErrorStatus,
+      failedAt: failedAt,
+      reconciledAt: at,
+      acknowledgedEpoch: epoch);
 }
 
 class _QueueState {
@@ -204,7 +248,7 @@ class OfflineQueueService {
     if (data['schemaVersion'] != 2 || data['ownerNamespace'] != owner) {
       throw const FormatException('Unsupported queue state');
     }
-    return _QueueState(
+    final state = _QueueState(
         (data['actions'] as List)
             .map((a) =>
                 OfflineQueueAction.fromJson(Map<String, dynamic>.from(a)))
@@ -216,6 +260,11 @@ class OfflineQueueService {
             .map((a) =>
                 OfflineQueueAction.fromJson(Map<String, dynamic>.from(a)))
             .toList());
+    if ([...state.actions, ...state.failedActions]
+        .any((a) => a.ownerNamespace != owner)) {
+      throw const FormatException('Queue owner mismatch');
+    }
+    return state;
   }
 
   Future<bool> _write(String owner, _QueueState state,
@@ -252,6 +301,67 @@ class OfflineQueueService {
     return _locked(owner, () async => (await _read(owner)).failedActions);
   }
 
+  // No resend or reactivation: only an owner-scoped durable reset receipt can
+  // reconcile quarantine. Original action and failure evidence remain stored.
+  Future<bool> reconcileFailedReset(String actionId) async {
+    final session = AuthService().captureSession();
+    final owner = session.ownerNamespace;
+    if (!session.isCurrent ||
+        owner == 'local_guest' ||
+        AuthService().token.trim().isEmpty) {
+      return false;
+    }
+    final action = await _locked(owner, () async {
+      final state = await _read(owner);
+      if (!session.isCurrent) return null;
+      final matches = state.failedActions.where((a) => a.id == actionId);
+      return matches.length == 1 ? matches.single : null;
+    });
+    if (action == null ||
+        action.ownerNamespace != owner ||
+        action.type != 'reset-progress' ||
+        !ProgressEpoch.valid(action.payload['expectedEpoch']) ||
+        action.payload['expectedEpoch'] >= 9007199254740991) {
+      return false;
+    }
+    final identity = jsonEncode(action.toJson());
+    try {
+      final result = await _progressApi.getResetReceipt(session.userId,
+          expectedEpoch: action.payload['expectedEpoch'] as int,
+          operationId: action.id);
+      if (!session.isCurrent ||
+          result['userId'] != session.userId ||
+          result['operationId'] != action.id ||
+          result['expectedEpoch'] != action.payload['expectedEpoch'] ||
+          result['progressEpoch'] != action.payload['expectedEpoch'] + 1) {
+        return false;
+      }
+      return await _locked(owner, () async {
+        final state = await _read(owner);
+        if (!session.isCurrent) return false;
+        final current = state.failedActions.where((a) => a.id == action.id);
+        if (current.length != 1 ||
+            jsonEncode(current.single.toJson()) != identity) {
+          return false;
+        }
+        final prefs = await SharedPreferences.getInstance();
+        await ProgressEpoch.acknowledge(
+            prefs, owner, result['progressEpoch'] as int,
+            isCurrent: () => session.isCurrent);
+        if (!session.isCurrent) return false;
+        state.failedActions = state.failedActions
+            .map((a) => a.id == action.id
+                ? a.withReceipt(_now().toUtc(), result['progressEpoch'] as int)
+                : a)
+            .toList();
+        state.progressRevision = 'receipt_${action.id}';
+        return _write(owner, state, session: session);
+      });
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<List<OfflineQueueAction>> getProgressActions() {
     final owner = AuthService().localStorageNamespace;
     return _locked(owner, () async {
@@ -283,6 +393,12 @@ class OfflineQueueService {
   void _append(_QueueState state, String owner, String type,
       Map<String, dynamic> payload,
       {String? operationId, bool dispatched = false}) {
+    if ((type == 'reset-progress' || type == 'complete-lesson') &&
+        operationId != null &&
+        state.failedActions.any((a) => a.id == operationId)) {
+      throw StateError(
+          'A quarantined progress operation cannot be reactivated');
+    }
     if (type == 'reset-progress') {
       state.actions.removeWhere(
           (a) => a.type == 'complete-lesson' || a.type == 'reset-progress');
@@ -434,13 +550,7 @@ class OfflineQueueService {
         final state = await _read(owner);
         final epoch =
             ProgressEpoch.read(await SharedPreferences.getInstance(), owner);
-        if (!forReset &&
-            (state.actions.any((a) => a.type == 'reset-progress') ||
-                state.failedActions.any((a) =>
-                    a.type == 'reset-progress' &&
-                    (!ProgressEpoch.valid(a.payload['expectedEpoch']) ||
-                        epoch == null ||
-                        a.payload['expectedEpoch'] >= epoch)))) {
+        if (!forReset && state.actions.any((a) => a.type == 'reset-progress')) {
           throw StateError(
               'Wait for progress reset acknowledgement before submitting new progress');
         }
@@ -576,14 +686,6 @@ class OfflineQueueService {
         try {
           final payload = action.payload;
           final cardId = _cardId(payload);
-          if (action.type == 'complete-lesson' &&
-              (await getFailedActions()).any((a) =>
-                  a.type == 'reset-progress' &&
-                  (!ProgressEpoch.valid(a.payload['expectedEpoch']) ||
-                      a.payload['expectedEpoch'] >=
-                          action.payload['progressEpoch']))) {
-            throw const InvalidQueuedPayload();
-          }
           if (_dependent(action.type) &&
               (cardId == null || cardId.startsWith('local_'))) {
             throw const InvalidQueuedPayload();
@@ -593,8 +695,12 @@ class OfflineQueueService {
               http.runWithClient(() async {
                 switch (action.type) {
                   case 'reset-progress':
-                    if (!ProgressEpoch.valid(payload['expectedEpoch'])) {
-                      throw const InvalidQueuedPayload();
+                    if (!ProgressEpoch.valid(payload['expectedEpoch']) ||
+                        payload['expectedEpoch'] >= 9007199254740991) {
+                      throw InvalidQueuedPayload(
+                          payload.containsKey('expectedEpoch')
+                              ? 'INVALID_PROGRESS_EPOCH'
+                              : 'MISSING_PROGRESS_EPOCH');
                     }
                     resetResult = await _progressApi.resetProgress(userId,
                         expectedEpoch: payload['expectedEpoch'] as int,
@@ -605,9 +711,14 @@ class OfflineQueueService {
                     }
                     break;
                   case 'complete-lesson':
-                    if (payload['score'] is! int ||
-                        !ProgressEpoch.valid(payload['progressEpoch'])) {
+                    if (payload['score'] is! int) {
                       throw const InvalidQueuedPayload();
+                    }
+                    if (!ProgressEpoch.valid(payload['progressEpoch'])) {
+                      throw InvalidQueuedPayload(
+                          payload.containsKey('progressEpoch')
+                              ? 'INVALID_PROGRESS_EPOCH'
+                              : 'MISSING_PROGRESS_EPOCH');
                     }
                     completion = await _progressApi.completeLesson(userId,
                         payload['lessonId'].toString(), payload['score'] as int,
@@ -694,6 +805,8 @@ class OfflineQueueService {
                 attempts: current.attemptCount,
                 attemptedAt: current.lastAttemptAt!,
                 category: failure.category,
+                code: failure.code,
+                status: failure.statusCode,
                 failed: failure.terminal ? _now().toUtc() : null,
                 nextAt: failure.terminal
                     ? null
@@ -704,9 +817,7 @@ class OfflineQueueService {
                   (action.type == 'create-flashcard' &&
                       action.payload['tempId'] != null &&
                       _dependent(a.type) &&
-                      _cardId(a.payload) == action.payload['tempId']) ||
-                  (action.type == 'reset-progress' &&
-                      a.type == 'complete-lesson');
+                      _cardId(a.payload) == action.payload['tempId']);
               state.failedActions.addAll(state.actions.where(blocked).map((a) =>
                   a.id == action.id
                       ? failed

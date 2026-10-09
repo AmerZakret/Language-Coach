@@ -18,8 +18,9 @@ class ApiException implements Exception {
   final String message;
   final int? statusCode;
   final bool sessionInvalidated;
+  final String? code;
   const ApiException(this.kind, this.message,
-      [this.statusCode, this.sessionInvalidated = false]);
+      [this.statusCode, this.sessionInvalidated = false, this.code]);
   @override
   String toString() => message;
 }
@@ -55,8 +56,14 @@ Future<http.Response> apiRequest(
       : status >= 500
           ? 'The server could not complete the request. Please try again.'
           : 'The request was rejected. Check your input.';
+  String? code;
   try {
     final data = jsonDecode(response.body);
+    final rawCode = data is Map ? data['code'] : null;
+    if (rawCode is String &&
+        RegExp(r'^[A-Z][A-Z0-9_]{0,63}$').hasMatch(rawCode)) {
+      code = rawCode;
+    }
     final value = data is Map ? data['message'] : null;
     final text = value is String
         ? value
@@ -70,7 +77,8 @@ Future<http.Response> apiRequest(
         (status != 401 &&
             (status < 500 ||
                 text == 'Writing evaluation is not configured yet.' ||
-                text == 'Writing evaluation is temporarily unavailable. Please try again.' ||
+                text ==
+                    'Writing evaluation is temporarily unavailable. Please try again.' ||
                 text == 'Writing provider returned an invalid evaluation.' ||
                 text ==
                     'An error occurred while communicating with the AI Coach. Please try again.'))) {
@@ -82,7 +90,7 @@ Future<http.Response> apiRequest(
   final invalidated = status == 401 &&
       Zone.current[_deferUnauthorizedInvalidation] != true &&
       AuthService().invalidateSession(session);
-  throw ApiException(kind, message, status, invalidated);
+  throw ApiException(kind, message, status, invalidated, code);
 }
 
 Map<String, dynamic> parsePublicUser(dynamic value) {

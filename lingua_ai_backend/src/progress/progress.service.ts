@@ -20,12 +20,14 @@ export class ProgressService implements OnModuleInit {
 
   async onModuleInit() { await this.resetModel.createIndexes(); }
 
-  private assertEpoch(expected: number, current: number) {
+  private assertEpoch(expected: number, current: number, reset = false) {
     if (!Number.isSafeInteger(expected) || expected < 0) {
-      throw new BadRequestException('A valid progress epoch is required');
+      throw new BadRequestException({ code: expected === undefined ? 'MISSING_PROGRESS_EPOCH' : 'INVALID_PROGRESS_EPOCH', message: 'A valid progress epoch is required' });
     }
     if (expected !== current) throw new ConflictException({
-      code: expected < current ? 'STALE_PROGRESS_EPOCH' : 'FUTURE_PROGRESS_EPOCH',
+      code: reset
+        ? (expected < current ? 'STALE_RESET_EPOCH' : 'FUTURE_RESET_EPOCH')
+        : (expected < current ? 'STALE_PROGRESS_EPOCH' : 'FUTURE_PROGRESS_EPOCH'),
       message: expected < current ? 'Progress was reset; this work is obsolete' : 'Progress epoch is ahead of the server',
     });
   }
@@ -173,24 +175,42 @@ export class ProgressService implements OnModuleInit {
       tryTargetLanguage(key) === code ? validXp(total + validXp(xp)) : total, 0);
   }
 
-  async resetProgress(userId: string, expectedEpoch: number, operationId: string) {
+  private validateResetRequest(expectedEpoch: number, operationId: string) {
     if (typeof operationId !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(operationId)) {
-      throw new BadRequestException('A valid X-Idempotency-Key is required');
+      throw new BadRequestException({ code: 'INVALID_OPERATION_ID', message: 'A valid X-Idempotency-Key is required' });
     }
     if (!Number.isSafeInteger(expectedEpoch) || expectedEpoch < 0 || expectedEpoch >= Number.MAX_SAFE_INTEGER) {
-      throw new BadRequestException('A valid expected epoch is required');
+      throw new BadRequestException({ code: expectedEpoch === undefined ? 'MISSING_PROGRESS_EPOCH' : 'INVALID_PROGRESS_EPOCH', message: 'A valid expected epoch is required' });
     }
-    const result = (receipt: ProgressReset) => {
-      if (receipt.expectedEpoch !== expectedEpoch) throw new ConflictException('Idempotency key was used for a different request');
-      return { message: 'Progress successfully reset', userId, progressEpoch: receipt.progressEpoch };
-    };
+  }
+
+  private resetResult(userId: string, expectedEpoch: number, receipt: ProgressReset) {
+    if (receipt.expectedEpoch !== expectedEpoch) throw new ConflictException({
+      code: 'RESET_IDEMPOTENCY_CONFLICT', message: 'Idempotency key was used for a different request',
+    });
+    return { message: 'Progress successfully reset', userId, progressEpoch: receipt.progressEpoch,
+      operationId: receipt.operationId, expectedEpoch: receipt.expectedEpoch };
+  }
+
+  // Read a durable result only. Recovery must never execute a quarantined reset.
+  async getResetReceipt(userId: string, expectedEpoch: number, operationId: string) {
+    this.validateResetRequest(expectedEpoch, operationId);
+    const user = await this.findUser(userId);
+    const receipt = await this.resetModel.findOne({ userId: user._id.toString(), operationId });
+    if (!receipt) throw new NotFoundException({ code: 'RESET_NOT_COMMITTED', message: 'No committed reset receipt found' });
+    return this.resetResult(userId, expectedEpoch, receipt);
+  }
+
+  async resetProgress(userId: string, expectedEpoch: number, operationId: string) {
+    this.validateResetRequest(expectedEpoch, operationId);
+    const result = (receipt: ProgressReset) => this.resetResult(userId, expectedEpoch, receipt);
     const session = await this.connection.startSession();
     try {
       return await session.withTransaction(async () => {
         const user = await this.findUser(userId, session);
         const receipt = await this.resetModel.findOne({ userId: user._id.toString(), operationId }).session(session);
         if (receipt) return result(receipt);
-        this.assertEpoch(expectedEpoch, user.progressEpoch ?? 0);
+        this.assertEpoch(expectedEpoch, user.progressEpoch ?? 0, true);
         const [saved] = await this.resetModel.create([{
           userId: user._id.toString(), operationId, expectedEpoch, progressEpoch: expectedEpoch + 1,
         }], { session });
