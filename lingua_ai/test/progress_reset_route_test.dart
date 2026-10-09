@@ -44,10 +44,11 @@ void main() {
         try {
           await http.runWithClient(() async {
             final api = ProgressApiService();
-            await api.resetProgress(owner, operationId: 'direct-reset');
+            await api.resetProgress(owner,
+                expectedEpoch: 0, operationId: 'direct-reset');
             final queue = OfflineQueueService.forTesting(
                 progressApi: api, flashcardApi: FlashcardApiService());
-            await queue.pushAction('reset-progress', {},
+            await queue.pushAction('reset-progress', {'expectedEpoch': 1},
                 ownerNamespace: auth.localStorageNamespace);
             final id = (await queue.getQueue()).single.id;
             expect(await queue.processQueue(owner), true);
@@ -64,6 +65,7 @@ void main() {
                     final forwarded = http.Request(
                         request.method, base.resolve(request.url.path));
                     forwarded.headers.addAll(request.headers);
+                    forwarded.body = request.body;
                     final response = await http.Response.fromStream(
                         await wire.send(forwarded));
                     expect(response.statusCode, 200);

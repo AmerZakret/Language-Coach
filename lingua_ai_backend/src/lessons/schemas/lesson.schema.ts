@@ -48,7 +48,7 @@ export class Lesson extends Document {
   @Prop({ required: true })
   duration: number;
 
-  @Prop({ required: true })
+  @Prop({ required: true, min: 0, validate: Number.isSafeInteger })
   xpReward: number;
 
   @Prop({ type: [Question], default: [] })

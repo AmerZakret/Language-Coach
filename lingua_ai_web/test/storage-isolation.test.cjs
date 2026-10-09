@@ -36,6 +36,7 @@ function storageFixture() {
   };
   return { localStorage, ...loadModule('utils/progressStorage.ts', {
     '../types/progress': { DEFAULT_PROGRESS },
+    './targetLanguage': loadModule('utils/targetLanguage.ts'),
   }, { localStorage }) };
 }
 
@@ -46,9 +47,9 @@ test('Guest A and B store progress separately and a restored guest reads the sam
   assert.equal(keyA, `guest_${guestA.id}`);
   assert.equal(keyB, `guest_${guestB.id}`);
   assert.notEqual(getProgressStorageKey(keyA, 'English'), getProgressStorageKey(keyB, 'English'));
-  saveProgress(keyA, 'English', { ...DEFAULT_PROGRESS, totalXp: 10, completedLessonIds: ['a'] });
+  saveProgress(keyA, 'English', { ...DEFAULT_PROGRESS, available: true, totalXp: 10, completedLessonIds: ['a'] });
   assert.equal(loadProgress(keyB, 'English').totalXp, 0);
-  saveProgress(keyB, 'English', { ...DEFAULT_PROGRESS, totalXp: 20, completedLessonIds: ['b'] });
+  saveProgress(keyB, 'English', { ...DEFAULT_PROGRESS, available: true, totalXp: 20, completedLessonIds: ['b'] });
 
   localStorage.setItem('linguaai_user', JSON.stringify(guestA));
   const restoredA = JSON.parse(localStorage.getItem('linguaai_user'));
@@ -69,11 +70,11 @@ test('registered keys survive refresh and email changes; legacy member caches mi
   assert.equal(getUserProgressKey({ ...member, email: 'updated@example.com' }, false, 'member-token'), key);
   assert.notEqual(key, getUserProgressKey(guestA, true, 'token-a'));
   const legacyKey = getLegacyRegisteredProgressKey(member.email, false);
-  saveProgress(legacyKey, 'English', { ...DEFAULT_PROGRESS, totalXp: 42 });
+  saveProgress(legacyKey, 'English', { ...DEFAULT_PROGRESS, available: true, totalXp: 42 });
   assert.equal(loadProgress(key, 'English', legacyKey).totalXp, 42);
   assert.ok(localStorage.getItem(`progress_${key}_English`));
   assert.equal(localStorage.getItem(`progress_${legacyKey}_English`), null);
-  saveProgress(legacyKey, 'English', { ...DEFAULT_PROGRESS, totalXp: 999 });
+  saveProgress(legacyKey, 'English', { ...DEFAULT_PROGRESS, available: true, totalXp: 999 });
   assert.equal(loadProgress(key, 'English', legacyKey).totalXp, 42);
   resetProgress(key, 'English');
   assert.equal(loadProgress(key, 'English', legacyKey).totalXp, 0);
@@ -90,8 +91,8 @@ test('offline-only guests have a separate namespace and never inherit shared leg
     const key = getUserProgressKey(guest, true, 'guest-token');
     assert.notEqual(key, localKey);
     assert.equal(getLegacyRegisteredProgressKey(guest.email, true), undefined);
-    saveProgress(key, 'English', { ...DEFAULT_PROGRESS, totalXp: 10 });
+    saveProgress(key, 'English', { ...DEFAULT_PROGRESS, available: true, totalXp: 10 });
   }
-  saveProgress('guest', 'English', { ...DEFAULT_PROGRESS, totalXp: 999 });
+  saveProgress('guest', 'English', { ...DEFAULT_PROGRESS, available: true, totalXp: 999 });
   assert.equal(loadProgress(localKey, 'English').totalXp, 0);
 });

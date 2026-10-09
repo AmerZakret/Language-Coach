@@ -9,6 +9,7 @@ import 'package:lingua_ai/services/auth_service.dart';
 import 'package:lingua_ai/services/connectivity_service.dart';
 import 'package:lingua_ai/services/offline_queue_service.dart';
 import 'package:lingua_ai/services/progress_service.dart';
+import 'package:lingua_ai/services/progress_cache.dart';
 import 'package:lingua_ai/core/localization/target_language_service.dart';
 
 void main() {
@@ -21,7 +22,9 @@ void main() {
   final language = TargetLanguageService();
   late SharedPreferences prefs;
   final serverIds = <String>{};
+  final serverScores = <String, int>{};
   var serverXp = 0;
+  var serverEpoch = 0;
   var uploadFails = false;
   var fetchFails = false;
   var resetFails = false;
@@ -55,13 +58,20 @@ void main() {
       if (serverIds.add(payload['lessonId'] as String)) {
         serverXp += payload['lessonId'] == 'two' ? 80 : 50;
       }
+      final lessonId = payload['lessonId'] as String;
+      final score = payload['score'] as int;
+      if (score > (serverScores[lessonId] ?? -1)) {
+        serverScores[lessonId] = score;
+      }
       events.add('complete');
       return http.Response(
           jsonEncode({
             'data': {
               'lessonId': payload['lessonId'],
-              'score': payload['score'],
+              'score': serverScores[lessonId],
+              'targetLanguage': 'en',
               'xpEarned': 50,
+              'progressEpoch': serverEpoch,
               'newTotalXp': serverXp
             }
           }),
@@ -71,14 +81,19 @@ void main() {
       events.add('reset');
       if (resetFails) return http.Response('{}', 503);
       serverIds.clear();
+      serverScores.clear();
       serverXp = 0;
-      return http.Response('{}', 200);
+      serverEpoch = 0;
+      serverEpoch++;
+      return http.Response(jsonEncode({'progressEpoch': serverEpoch}), 200);
     }
     // Capture the snapshot before the GET await, to reproduce stale snapshots.
     final body = {
+      'progressEpoch': serverEpoch,
       'stats': {'totalXp': serverXp, 'streak': 0},
-      'completedLessons':
-          serverIds.map((id) => {'lessonId': id, 'score': 73}).toList()
+      'completedLessons': serverIds
+          .map((id) => {'lessonId': id, 'score': serverScores[id] ?? 73})
+          .toList()
     };
     getStarted?.complete();
     getStarted = null;
@@ -109,7 +124,10 @@ void main() {
         const MethodChannel('dev.fluttercommunity.plus/connectivity_status'),
         (call) async => null);
     await ConnectivityService().init();
-    SharedPreferences.setMockInitialValues({});
+    SharedPreferences.setMockInitialValues({
+      for (final prefix in ['registered', 'guest'])
+        for (final id in [a, b]) 'progress_epoch_${prefix}_$id': 0
+    });
     await auth.init();
     await language.init();
     await progress.init();
@@ -118,8 +136,15 @@ void main() {
   tearDownAll(() => ConnectivityService().dispose());
   setUp(() async {
     await prefs.clear();
+    for (final prefix in ['registered', 'guest']) {
+      for (final id in [a, b]) {
+        await prefs.setInt('progress_epoch_${prefix}_$id', 0);
+      }
+    }
     serverIds.clear();
+    serverScores.clear();
     serverXp = 0;
+    serverEpoch = 0;
     uploadFails = false;
     fetchFails = false;
     resetFails = false;
@@ -137,7 +162,7 @@ void main() {
   test(
       'offline original 73 and operation ID survive restart; acknowledgement retains server state',
       () async {
-    await progress.completeLesson('one', 50, score: 73);
+    await progress.completeLesson('one', 50, score: 73, lessonLanguage: 'en');
     final action = (await queue.getQueue()).single;
     expect(action.payload['score'], 73);
     expect(action.payload['targetLanguage'], 'en');
@@ -158,7 +183,7 @@ void main() {
   test(
       'failed completion remains pending over refreshed server and avoids duplicate local XP',
       () async {
-    await progress.completeLesson('one', 50, score: 73);
+    await progress.completeLesson('one', 50, score: 73, lessonLanguage: 'en');
     uploadFails = true;
     await sync();
     await sync();
@@ -174,7 +199,7 @@ void main() {
   });
   test('acknowledged completion survives failed GET and restart without replay',
       () async {
-    await progress.completeLesson('one', 50, score: 73);
+    await progress.completeLesson('one', 50, score: 73, lessonLanguage: 'en');
     fetchFails = true;
     await sync();
     expect(await queue.getQueue(), isEmpty);
@@ -187,8 +212,8 @@ void main() {
   test('overlapping offline completions both persist with original scores',
       () async {
     await Future.wait([
-      progress.completeLesson('one', 50, score: 73),
-      progress.completeLesson('two', 80, score: 42)
+      progress.completeLesson('one', 50, score: 73, lessonLanguage: 'en'),
+      progress.completeLesson('two', 80, score: 42, lessonLanguage: 'en')
     ]);
     await settle();
     expect(progress.totalXp, 130);
@@ -206,7 +231,7 @@ void main() {
     final started = getStarted!;
     final refresh = sync();
     await started.future;
-    await progress.completeLesson('one', 50, score: 73);
+    await progress.completeLesson('one', 50, score: 73, lessonLanguage: 'en');
     getRelease!.complete();
     await refresh;
     expect(progress.totalXp, 50);
@@ -214,7 +239,7 @@ void main() {
     expect(await queue.getQueue(), hasLength(1));
   });
   test('pending completion never crosses language or owner boundary', () async {
-    await progress.completeLesson('one', 50, score: 73);
+    await progress.completeLesson('one', 50, score: 73, lessonLanguage: 'en');
     await language.setLanguage('de', syncToBackend: false);
     await progress.reloadProgress();
     expect(progress.totalXp, 0);
@@ -229,21 +254,30 @@ void main() {
     expect(progress.isLessonCompleted('one'), true);
   });
   test(
-      'offline reset cancels obsolete completion across restart and retains later work',
+      'offline reset cancels obsolete completion; later work waits for acknowledged epoch',
       () async {
-    await progress.completeLesson('obsolete', 50, score: 73);
+    await progress.completeLesson('obsolete', 50,
+        score: 73, lessonLanguage: 'en');
     await progress.resetProgress();
     expect(progress.totalXp, 0);
-    await progress.completeLesson('after-reset', 50, score: 42);
+    await expectLater(
+        progress.completeLesson('after-reset', 50,
+            score: 42, lessonLanguage: 'en'),
+        throwsStateError);
     await restart();
     await sync();
+    await progress.completeLesson('after-reset', 50,
+        score: 42, lessonLanguage: 'en');
+    await sync();
     expect(sent.single['lessonId'], 'after-reset');
+    expect(sent.single['progressEpoch'], 1);
     expect(events, ['reset', 'complete']);
     expect(progress.totalXp, 50);
     expect(await queue.getQueue(), isEmpty);
   });
   test('failed reset masks old server state and stays queued', () async {
-    await progress.completeLesson('obsolete', 50, score: 73);
+    await progress.completeLesson('obsolete', 50,
+        score: 73, lessonLanguage: 'en');
     await progress.resetProgress();
     serverIds.add('obsolete');
     serverXp = 500;
@@ -256,7 +290,8 @@ void main() {
   test(
       'reset runs after in-flight completion and stale response cannot restore progress',
       () async {
-    await progress.completeLesson('obsolete', 50, score: 73);
+    await progress.completeLesson('obsolete', 50,
+        score: 73, lessonLanguage: 'en');
     postStarted = Completer<void>();
     postRelease = Completer<void>();
     final started = postStarted!;
@@ -289,8 +324,8 @@ void main() {
         jsonEncode([
           {'id': 'legacy', 'targetLanguage': 'English', 'xpReward': 50}
         ]));
-    await queue.pushAction(
-        'complete-lesson', {'lessonId': 'legacy', 'score': 73},
+    await queue.pushAction('complete-lesson',
+        {'lessonId': 'legacy', 'score': 73, 'progressEpoch': 0},
         ownerNamespace: auth.localStorageNamespace);
     final id = (await queue.getQueue()).single.id;
     await progress.reloadProgress();
@@ -311,7 +346,7 @@ void main() {
     await prefs.setStringList(
         'progress_guest_${a}_en_completedLessonIds', ['unscored']);
     await progress.reloadProgress();
-    await progress.completeLesson('zero', 50, score: 0);
+    await progress.completeLesson('zero', 50, score: 0, lessonLanguage: 'en');
     await sync();
     expect(sent, hasLength(1));
     expect(sent.single['score'], 0);
@@ -325,9 +360,228 @@ void main() {
     await prefs.setStringList(
         'progress_${legacy}_de_completedLessonIds', ['old-german']);
     await progress.resetProgress();
+    await sync();
     await language.setLanguage('de', syncToBackend: false);
     await progress.reloadProgress();
     expect(progress.totalXp, 0);
     expect(prefs.containsKey('progress_${legacy}_de_totalXp'), false);
+  });
+
+  test(
+      '6C: terminal completion is retained but contributes no optimistic completion or XP',
+      () async {
+    await progress.completeLesson('one', 50, score: 73, lessonLanguage: 'en');
+    expect(progress.totalXp, 50);
+    await http.runWithClient(
+        progress.syncWithBackend,
+        () => MockClient((request) async => request.method == 'POST'
+            ? http.Response('{}', 403)
+            : await transport(request)));
+    expect(await queue.getQueue(), isEmpty);
+    expect(await queue.getFailedActions(), hasLength(1));
+    expect(progress.completedLessonIds, isEmpty);
+    expect(progress.totalXp, 0);
+    await progress.reloadProgress();
+    expect(progress.completedLessonIds, isEmpty);
+  });
+  test(
+      '6C: failed reset restores acknowledged progress and never advances epoch; new reset preserves diagnosis',
+      () async {
+    serverIds.add('one');
+    serverScores['one'] = 73;
+    serverXp = 50;
+    await sync();
+    await progress.resetProgress();
+    expect(progress.totalXp, 0);
+    expect(progress.completedLessonIds, isEmpty);
+    expect(
+        ProgressSnapshot.read(prefs, auth.localStorageNamespace, 'en').totalXp,
+        50);
+    fetchFails = true;
+    await http.runWithClient(
+        progress.syncWithBackend,
+        () => MockClient((request) async => request.method == 'DELETE'
+            ? http.Response('{}', 403)
+            : await transport(request)));
+    expect(progress.totalXp, 50);
+    expect(progress.completedLessonIds, {'one'});
+    expect(await queue.getFailedActions(), hasLength(1));
+    expect(prefs.getInt('progress_epoch_${auth.localStorageNamespace}'), 0);
+    fetchFails = false;
+    await progress.resetProgress();
+    await sync();
+    expect(await queue.getFailedActions(), hasLength(1));
+    expect(prefs.getInt('progress_epoch_${auth.localStorageNamespace}'), 1);
+    await progress.completeLesson('two', 80, score: 90, lessonLanguage: 'en');
+    await sync();
+    expect(serverXp, 80);
+    expect(progress.totalXp, 80);
+  });
+  test(
+      '6C: lesson metadata binds English completion and acknowledgement even while German is selected',
+      () async {
+    await ProgressSnapshot(
+            totalXp: 200,
+            progressEpoch: 0,
+            lessonIds: {'de-owned'},
+            lessonScores: {'de-owned': 80})
+        .save(prefs, auth.localStorageNamespace, 'de');
+    await language.setLanguage('de', syncToBackend: false);
+    await progress.completeLesson('one', 50, score: 73, lessonLanguage: 'en');
+    expect((await queue.getQueue()).single.payload['targetLanguage'], 'en');
+    expect(progress.totalXp, 200);
+    await http.runWithClient(
+        progress.syncWithBackend,
+        () => MockClient((request) async => request.method == 'GET'
+            ? http.Response(
+                jsonEncode({
+                  'progressEpoch': 0,
+                  'stats': {'totalXp': 200, 'streak': 0},
+                  'completedLessons': [
+                    {'lessonId': 'de-owned', 'score': 80}
+                  ]
+                }),
+                200)
+            : await transport(request)));
+    final owner = auth.localStorageNamespace;
+    expect(ProgressSnapshot.read(prefs, owner, 'en').totalXp, 50);
+    expect(ProgressSnapshot.read(prefs, owner, 'en').lessonScores['one'], 73);
+    expect(ProgressSnapshot.read(prefs, owner, 'de').totalXp, 200);
+  });
+  test(
+      '6C: higher, equal and lower retakes reach max-score backend without duplicated count or XP',
+      () async {
+    await progress.completeLesson('one', 50, score: 73, lessonLanguage: 'en');
+    await sync();
+    await progress.completeLesson('one', 50, score: 91, lessonLanguage: 'en');
+    expect(progress.totalXp, 50);
+    expect(progress.lessonScores['one'], 91);
+    expect(progress.completedLessonsCount, 1);
+    await sync();
+    expect(sent.last['score'], 91);
+    expect(serverScores['one'], 91);
+    expect(serverXp, 50);
+    for (final score in [91, 20]) {
+      await progress.completeLesson('one', 50,
+          score: score, lessonLanguage: 'en');
+      await sync();
+      expect(progress.totalXp, 50);
+      expect(progress.lessonScores['one'], 91);
+      expect(progress.completedLessonsCount, 1);
+    }
+  });
+  test(
+      '6C: corrupt cache is unavailable, preserves pending work and reconciles against server',
+      () async {
+    await prefs.setString(
+        ProgressSnapshot.key(auth.localStorageNamespace, 'en'), 'bad JSON');
+    await progress.reloadProgress();
+    expect(progress.hasAcknowledgedProgress, false);
+    await progress.completeLesson('one', 50, score: 73, lessonLanguage: 'en');
+    expect(progress.totalXp, 50);
+    expect(
+        prefs.getString(ProgressSnapshot.key(auth.localStorageNamespace, 'en')),
+        'bad JSON');
+    serverIds.add('two');
+    serverScores['two'] = 80;
+    serverXp = 80;
+    uploadFails = true;
+    await sync();
+    expect(progress.hasAcknowledgedProgress, true);
+    expect(progress.totalXp, 130);
+    expect(progress.completedLessonIds, {'one', 'two'});
+    expect(await queue.getQueue(), hasLength(1));
+    expect(
+        ProgressSnapshot.read(prefs, auth.localStorageNamespace, 'en').totalXp,
+        80);
+  });
+  test(
+      '6C: older-epoch queued work is not displayed over a newer acknowledged snapshot',
+      () async {
+    await progress.completeLesson('one', 50, score: 73, lessonLanguage: 'en');
+    await prefs.setInt('progress_epoch_${auth.localStorageNamespace}', 1);
+    await ProgressSnapshot(
+            totalXp: 80,
+            progressEpoch: 1,
+            lessonIds: {'two'},
+            lessonScores: {'two': 90})
+        .save(prefs, auth.localStorageNamespace, 'en');
+    await progress.reloadProgress();
+    expect(progress.totalXp, 80);
+    expect(progress.completedLessonIds, {'two'});
+    expect((await queue.getQueue()).single.payload['progressEpoch'], 0);
+  });
+  test(
+      '6C: malformed completion acknowledgement cannot write acknowledged progress or remove pending work',
+      () async {
+    await progress.completeLesson('one', 50, score: 73, lessonLanguage: 'en');
+    await http.runWithClient(
+        progress.syncWithBackend,
+        () => MockClient((request) async => request.method == 'POST'
+            ? http.Response(
+                '{"data":{"progressEpoch":0,"newTotalXp":-1,"score":73}}', 201)
+            : http.Response('{}', 503)));
+    expect(await queue.getQueue(), hasLength(1));
+    expect(
+        ProgressSnapshot.read(prefs, auth.localStorageNamespace, 'en')
+            .available,
+        false);
+  });
+  test(
+      '6C: trusted catalog corrects old UI-language metadata without changing operation ID or epoch',
+      () async {
+    await prefs.setString(
+        'lessons_cache_en',
+        jsonEncode([
+          {'id': 'one', 'targetLanguage': 'en', 'xpReward': 50}
+        ]));
+    await queue.pushAction(
+        'complete-lesson',
+        {
+          'lessonId': 'one',
+          'score': 73,
+          'xpReward': 50,
+          'targetLanguage': 'de',
+          'progressEpoch': 0
+        },
+        ownerNamespace: auth.localStorageNamespace);
+    final id = (await queue.getQueue()).single.id;
+    await language.setLanguage('de', syncToBackend: false);
+    await progress.reloadProgress();
+    expect(progress.totalXp, 0);
+    final rebound = (await queue.getQueue()).single;
+    expect(rebound.id, id);
+    expect(rebound.payload['progressEpoch'], 0);
+    expect(rebound.payload['targetLanguage'], 'en');
+  });
+  test(
+      '6C: unverified legacy language cannot appear optimistic; server acknowledgement supplies binding',
+      () async {
+    await queue.pushAction(
+        'complete-lesson',
+        {
+          'lessonId': 'one',
+          'score': 73,
+          'xpReward': 50,
+          'targetLanguage': 'de',
+          'progressEpoch': 0
+        },
+        ownerNamespace: auth.localStorageNamespace);
+    await language.setLanguage('de', syncToBackend: false);
+    await progress.reloadProgress();
+    expect(progress.completedLessonIds, isEmpty);
+    await http.runWithClient(
+        progress.syncWithBackend,
+        () => MockClient((request) async => request.method == 'GET'
+            ? http.Response(
+                '{"progressEpoch":0,"stats":{"totalXp":0,"streak":0},"completedLessons":[]}',
+                200)
+            : await transport(request)));
+    expect(
+        ProgressSnapshot.read(prefs, auth.localStorageNamespace, 'en').totalXp,
+        50);
+    expect(
+        ProgressSnapshot.read(prefs, auth.localStorageNamespace, 'de').totalXp,
+        0);
   });
 }

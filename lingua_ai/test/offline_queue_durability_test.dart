@@ -14,13 +14,14 @@ class DurableCardsApi extends FlashcardApiService {
   Completer<void>? started;
   Completer<void>? release;
   @override
-  Future<FlashcardMutationResult> createFlashcard(String targetWord,
-      String turkishTranslation, String targetLanguage,
+  Future<FlashcardMutationResult> createFlashcard(
+      String targetWord, String turkishTranslation, String targetLanguage,
       {String? nativeLanguage,
       String? nativeTranslation,
       String? exampleSentence,
       String? note,
-      String? operationId, bool preserveLegacyLanguage = false}) async {
+      String? operationId,
+      bool preserveLegacyLanguage = false}) async {
     calls.add({'type': 'create', 'word': targetWord, 'note': note});
     started?.complete();
     if (release != null) await release!.future;
@@ -35,7 +36,8 @@ class DurableCardsApi extends FlashcardApiService {
       String? nativeTranslation,
       String? exampleSentence,
       String? note,
-      String? operationId, bool preserveLegacyLanguage = false}) async {
+      String? operationId,
+      bool preserveLegacyLanguage = false}) async {
     calls.add({'type': 'update', 'id': cardId});
     if (failUpdate) throw StateError('Update unavailable');
     return FlashcardMutationResult.fromJson({'_id': cardId});
@@ -102,8 +104,10 @@ void main() {
   test(
       'acknowledged first action does not replay after successor interruption and restart',
       () async {
-    await push('complete-lesson', {'lessonId': 'first', 'score': 73});
-    await push('complete-lesson', {'lessonId': 'second', 'score': 73});
+    await push('complete-lesson',
+        {'lessonId': 'first', 'progressEpoch': 0, 'score': 73});
+    await push('complete-lesson',
+        {'lessonId': 'second', 'progressEpoch': 0, 'score': 73});
     // Gate the first response, then arm a separate gate for its successor.
     final firstStarted = Completer<void>();
     final firstRelease = Completer<void>();
@@ -226,7 +230,8 @@ void main() {
 
   test('overlapping owner drains do not dispatch or acknowledge twice',
       () async {
-    await push('complete-lesson', {'lessonId': 'first', 'score': 73});
+    await push('complete-lesson',
+        {'lessonId': 'first', 'progressEpoch': 0, 'score': 73});
     progress.started = Completer<void>();
     progress.release = Completer<void>();
     final drain = queue.processQueue(a);
@@ -265,7 +270,8 @@ void main() {
 
   test('another instance append during drain is retained in current record',
       () async {
-    await push('complete-lesson', {'lessonId': 'first', 'score': 73});
+    await push('complete-lesson',
+        {'lessonId': 'first', 'progressEpoch': 0, 'score': 73});
     final started = Completer<void>();
     progress.started = started;
     progress.release = Completer<void>();
@@ -274,7 +280,7 @@ void main() {
     final another = OfflineQueueService.forTesting(
         progressApi: progress, flashcardApi: cards, now: () => now);
     await another.pushAction(
-        'complete-lesson', {'lessonId': 'new', 'score': 73},
+        'complete-lesson', {'lessonId': 'new', 'progressEpoch': 0, 'score': 73},
         ownerNamespace: owner);
     progress.release!.complete();
     expect(await drain, true);
@@ -311,7 +317,9 @@ void main() {
 
   test('concurrent appends serialize without dropping actions', () async {
     await Future.wait(List.generate(
-        20, (i) => push('complete-lesson', {'lessonId': '$i', 'score': 73})));
+        20,
+        (i) => push('complete-lesson',
+            {'lessonId': '$i', 'progressEpoch': 0, 'score': 73})));
     final actions = await queue.getQueue();
     expect(actions, hasLength(20));
     expect(actions.map((a) => a.id).toSet(), hasLength(20));

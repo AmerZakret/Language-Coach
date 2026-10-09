@@ -1,3 +1,4 @@
+import '../../services/xp_level.dart';
 import 'package:flutter/material.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/routes/app_routes.dart';
@@ -73,14 +74,7 @@ class _HomeScreenState extends State<HomeScreen> {
     return false;
   }
 
-  Map<String, dynamic> _getLevelInfo(int xp) {
-    if (xp >= 2200) return {'level': 'Advanced', 'progress': 1.0, 'nextXp': 2200};
-    if (xp >= 1400) return {'level': 'Upper-Intermediate', 'progress': (xp - 1400) / (2200 - 1400), 'nextXp': 2200};
-    if (xp >= 900) return {'level': 'Intermediate', 'progress': (xp - 900) / (1400 - 900), 'nextXp': 1400};
-    if (xp >= 500) return {'level': 'Pre-Intermediate', 'progress': (xp - 500) / (900 - 500), 'nextXp': 900};
-    if (xp >= 200) return {'level': 'Elementary', 'progress': (xp - 200) / (500 - 200), 'nextXp': 500};
-    return {'level': 'Beginner', 'progress': xp / 200, 'nextXp': 200};
-  }
+  Map<String, dynamic> _getLevelInfo(int xp) => XpLevels.info(xp);
 
   @override
   Widget build(BuildContext context) {

@@ -13,7 +13,7 @@ const deferred = () => {
   return { promise, resolve, reject };
 };
 const user = id => ({ id, name: id === A ? 'A' : 'B', email: `${id}@example.com`, targetLanguage: 'en', isGuest: false });
-const progress = (xp = 20) => ({ totalXp: xp, streak: 2, completedLessonIds: [], weeklyActivity: [] });
+const progress = (xp = 20) => ({ progressEpoch: 0, totalXp: xp, streak: 2, completedLessonIds: [], weeklyActivity: [] });
 const card = id => ({ _id: `card-${id}`, userId: id, targetWord: id,
   turkishTranslation: 'translation', interval: 0, easinessFactor: 2.5,
   nextReviewDate: new Date().toISOString(), reviewCount: 0 });
@@ -21,6 +21,7 @@ const copy = value => JSON.parse(JSON.stringify(value));
 
 function harness(initial = {}) {
   const values = new Map(Object.entries(initial));
+  for (const prefix of ['registered', 'guest']) for (const id of [A,B]) { const key = `progress_epoch_${prefix}_${id}`; if (!values.has(key)) values.set(key, '0'); }
   const localStorage = { getItem: k => values.get(k) ?? null,
     setItem: (k, v) => values.set(k, String(v)), removeItem: k => values.delete(k) };
   let activeRunner;
@@ -89,12 +90,13 @@ function harness(initial = {}) {
     storage: 'utils/progressStorage.ts', types: 'types/progress.ts',
     progress: 'context/ProgressContext.tsx', target: 'context/TargetLanguageContext.tsx',
     cards: 'pages/FlashcardsPage.tsx', queue: 'utils/offlineQueue.ts', authPage: 'components/auth/AuthPage.tsx',
-    profile: 'pages/ProfilePage.tsx', writing: 'pages/WritingPracticePage.tsx', language: 'utils/targetLanguage.ts', mutation: 'utils/flashcardMutation.ts', community: 'pages/CommunityPage.tsx', coach: 'pages/AiCoachPage.tsx' };
+    profile: 'pages/ProfilePage.tsx', writing: 'pages/WritingPracticePage.tsx', pronunciation: 'pages/PronunciationPracticePage.tsx', language: 'utils/targetLanguage.ts', mutation: 'utils/flashcardMutation.ts', community: 'pages/CommunityPage.tsx', coach: 'pages/AiCoachPage.tsx' };
   const exposed = {
     cards: 'fetchCards, handleSaveCard, handleDeleteCard, handleStudyScore, handleOpenAdd, handleOpenEdit, setFormData, allCards, dueCards, loading, error, successMsg, modal, studyResults',
     authPage: 'handleSubmit, setEmail, setPassword, loading, error',
     profile: 'handleSave, setName, saved, resetConfirm, setResetConfirm',
     writing: 'handleSubmit, setTopic, setText, feedback, error, loading',
+    pronunciation: 'handleSubmitAssessment, setAudioBlob, setTargetText, result, error',
     community: 'startEditing, setEditingText, handleUpdatePost',
     coach: 'messages, historyLoading',
   };
@@ -106,7 +108,7 @@ function harness(initial = {}) {
       .replaceAll('import.meta.env.VITE_API_URL', 'undefined');
     // Expose closed-over handlers/state at the existing render return, without
     // replacing their implementation or adding production test exports.
-    if (name === 'writing' || name === 'coach') {
+    if (name === 'writing' || name === 'coach' || name === 'pronunciation') {
       const position = source.lastIndexOf('\n  return (');
       source = source.slice(0, position) + `\n  globalThis.__capture({${exposed[name]}});` + source.slice(position);
     } else if (exposed[name]) source = source.replace(/\n  return \(\r?\n/, `\n  globalThis.__capture({${exposed[name]}});\n  return (\n`);
@@ -135,6 +137,7 @@ function harness(initial = {}) {
           checkWriting: (...args) => h.checkWriting(...args),
           getChatHistory: (...args) => h.getChatHistory(...args),
         };
+        if (path.endsWith('/pronunciationApi')) return { assessPronunciation: (...args) => h.assessPronunciation(...args) };
         if (path.endsWith('/communityApi')) return {
           getCommunityPosts: async () => ({ items: h.communityPosts || [] }),
           updateCommunityPost: async (id, body) => { h.calls.push(['community-update', id, body]); },
@@ -169,9 +172,9 @@ function harness(initial = {}) {
             calls.push([method, url]);
             if (url.includes('/progress/') && method === 'post') {
               const id = url.split('/')[2]; calls.push(['complete', id, data.lessonId, data.score]);
-              return Promise.resolve(h.saveProgress(id, data.lessonId, data.score, config)).then(result => ({ data: result }));
+              return Promise.resolve(h.saveProgress(id, data.lessonId, data.score, config)).then(result => ({ data: { ...result, data: { ...result?.data, progressEpoch: result?.data?.progressEpoch ?? data.progressEpoch } } }));
             }
-            if (url.includes('/progress/') && method === 'delete') return h.resetProgress(url.split('/')[2], url, data);
+            if (url.includes('/progress/') && method === 'delete') return Promise.resolve(h.resetProgress(url.split('/')[2], url, data)).then(result => { const epoch = data.data.expectedEpoch + 1; if (h.serverProgress) h.serverProgress.progressEpoch = epoch; return { data: { ...result?.data, progressEpoch: epoch } }; });
             return h.transport(method, url, data, config);
           }]));
         throw new Error(`Unexpected import: ${path}`);
@@ -316,12 +319,13 @@ test('reset contract: web queued reset reaches the real Nest route and acknowled
       const response = await fetch(`${server.url}${url}`, { method: 'DELETE', headers: {
         Authorization: `Bearer ${config.offlineQueueSession.token}`,
         'X-Idempotency-Key': config.headers['X-Idempotency-Key'],
-      } });
+        'Content-Type': 'application/json',
+      }, body: JSON.stringify(config.data) });
       if (!response.ok) throw { response: { status: response.status } };
       return { data: await response.json() };
     };
     const queue = h.load('queue');
-    queue.pushToOfflineQueue('reset-progress', {}, `registered_${server.owner}`);
+    queue.pushToOfflineQueue('reset-progress', { expectedEpoch: 0 }, `registered_${server.owner}`);
     assert.equal(await queue.processOfflineQueue(server.owner), true);
     assert.equal(queue.getOfflineQueue().length, 0);
     assert.equal(queue.getFailedOfflineActions().length, 0);
@@ -510,7 +514,7 @@ for (const kind of ['fetch', 'completion-success', 'completion-failure', 'reset'
     let operation;
     if (kind.startsWith('completion')) {
       h.saveProgress = () => pending.promise;
-      operation = h.child.result.props.value.completeLesson('new', 100, 4);
+      operation = h.child.result.props.value.completeLesson('new', 100, 4, 'en');
     } else if (kind === 'reset') {
       h.resetProgress = () => pending.promise;
       operation = h.child.result.props.value.resetProgress();
@@ -625,10 +629,13 @@ async function offlineProgressHarness(initial) {
   h.serverProgress = progress(0); h.sent = [];
   h.fetchProgress = async () => h.serverProgress;
   h.saveProgress = async (id, lessonId, score, config) => {
-    h.sent.push({ id, lessonId, score, operationId: config.headers['X-Idempotency-Key'] });
-    h.serverProgress = { ...h.serverProgress, totalXp: h.serverProgress.totalXp + 50,
-      completedLessonIds: [...h.serverProgress.completedLessonIds, lessonId] };
-    return { data: { newTotalXp: h.serverProgress.totalXp, lessonId, score, xpEarned: 50 } };
+    h.sent.push({ id, lessonId, score, progressEpoch: h.serverProgress.progressEpoch, operationId: config.headers['X-Idempotency-Key'] });
+    const xpEarned = h.serverProgress.completedLessonIds.includes(lessonId) ? 0 : lessonId === 'two' ? 80 : 50;
+    const bestScore = Math.max(h.serverProgress.lessonScores?.[lessonId] ?? -1, score);
+    h.serverProgress = { ...h.serverProgress, totalXp: h.serverProgress.totalXp + xpEarned,
+      lessonScores: { ...h.serverProgress.lessonScores, [lessonId]: bestScore },
+      completedLessonIds: [...new Set([...h.serverProgress.completedLessonIds, lessonId])] };
+    return { data: { newTotalXp: h.serverProgress.totalXp, lessonId, score: bestScore, xpEarned, targetLanguage: 'en' } };
   };
   h.mount('progress', 'ProgressProvider'); await h.settle();
   h.value = () => h.child.result.props.value;
@@ -638,9 +645,9 @@ async function offlineProgressHarness(initial) {
 
 test('Phase 4E: offline 73 survives restart with owner, language, time and stable action ID', async () => {
   const h = await offlineProgressHarness();
-  await h.value().completeLesson('one', 50, 73); await h.settle();
+  await h.value().completeLesson('one', 50, 73, 'en'); await h.settle();
   const action = h.load('queue').getOfflineQueue()[0];
-  assert.equal(action.payload.score, 73); assert.equal(action.payload.targetLanguage, 'English');
+  assert.equal(action.payload.score, 73); assert.equal(action.payload.targetLanguage, 'en');
   assert.equal(action.ownerNamespace, `registered_${A}`); assert.ok(Date.parse(action.createdAt));
   const restarted = await offlineProgressHarness(h.snapshot());
   assert.equal(restarted.value().progress.totalXp, 50);
@@ -652,7 +659,7 @@ test('Phase 4E: offline 73 survives restart with owner, language, time and stabl
 });
 
 test('Phase 4E: failed completion remains over fresh server progress and never doubles XP', async () => {
-  const h = await offlineProgressHarness(); await h.value().completeLesson('one', 50, 73);
+  const h = await offlineProgressHarness(); await h.value().completeLesson('one', 50, 73, 'en');
   h.saveProgress = async () => { throw new Error('Upload failed'); };
   await h.online(); await h.value().reloadProgress(); await h.settle();
   assert.equal(h.load('queue').getOfflineQueue().length, 1);
@@ -665,7 +672,7 @@ test('Phase 4E: failed completion remains over fresh server progress and never d
 });
 
 test('Phase 4E: acknowledgement retains server state even if subsequent GET fails', async () => {
-  const h = await offlineProgressHarness(); await h.value().completeLesson('one', 50, 73);
+  const h = await offlineProgressHarness(); await h.value().completeLesson('one', 50, 73, 'en');
   h.fetchProgress = async () => { throw new Error('GET failed'); }; await h.online();
   assert.equal(h.load('queue').getOfflineQueue().length, 0);
   assert.equal(h.value().progress.totalXp, 50); assert.deepEqual(copy(h.value().progress.completedLessonIds), ['one']);
@@ -675,7 +682,7 @@ test('Phase 4E: acknowledgement retains server state even if subsequent GET fail
 
 test('Phase 4E: overlapping offline completions from the same render both survive', async () => {
   const h = await offlineProgressHarness(); const complete = h.value().completeLesson;
-  await Promise.all([complete('one', 50, 73), complete('two', 80, 42)]); await h.settle();
+  await Promise.all([complete('one', 50, 73, 'en'), complete('two', 80, 42, 'en')]); await h.settle();
   assert.equal(h.value().progress.totalXp, 130);
   assert.deepEqual(copy(h.value().progress.completedLessonIds), ['one', 'two']);
   assert.deepEqual(copy(h.load('queue').getOfflineQueue().map(a => a.payload.score)), [73, 42]);
@@ -687,13 +694,13 @@ test('Phase 4E: append during GET wins over server snapshot, without lost pendin
   const pending = deferred(); h.fetchProgress = () => pending.promise;
   const refresh = h.value().reloadProgress(); await tick();
   h.load('queue').pushToOfflineQueue('complete-lesson', { lessonId: 'new', score: 73,
-    xpReward: 50, targetLanguage: 'English' }, `registered_${A}`);
+    xpReward: 50, targetLanguage: 'English', progressEpoch: 0, _lessonLanguageBound: true }, `registered_${A}`);
   pending.resolve(progress(0)); await refresh; await h.settle();
   assert.equal(h.value().progress.totalXp, 50); assert.deepEqual(copy(h.value().progress.completedLessonIds), ['new']);
 });
 
 test('Phase 4E: pending completions cannot cross account or language boundaries', async () => {
-  const h = await offlineProgressHarness(); await h.value().completeLesson('english-one', 50, 73); await h.settle();
+  const h = await offlineProgressHarness(); await h.value().completeLesson('english-one', 50, 73, 'en'); await h.settle();
   h.language = 'German'; h.localStorage.setItem('linguaai_target_language', 'German'); h.child.render(); await h.settle();
   assert.equal(h.value().progress.totalXp, 0);
   await h.switchToB(); assert.equal(h.value().progress.totalXp, 0);
@@ -701,20 +708,22 @@ test('Phase 4E: pending completions cannot cross account or language boundaries'
   h.child.render(); await h.settle(); assert.equal(h.value().progress.totalXp, 50);
 });
 
-test('Phase 4E: offline reset cancels obsolete completions, survives restart, keeps later work', async () => {
-  const h = await offlineProgressHarness(); await h.value().completeLesson('obsolete', 50, 73);
+test('Phase 4E: offline reset cancels obsolete work and resumes after epoch acknowledgement', async () => {
+  const h = await offlineProgressHarness(); await h.value().completeLesson('obsolete', 50, 73, 'en');
   await h.value().resetProgress(); await h.settle();
   assert.equal(h.value().progress.totalXp, 0);
-  await h.value().completeLesson('after-reset', 50, 42); await h.settle();
+  await assert.rejects(h.value().completeLesson('after-reset', 50, 42, 'en'), /reset acknowledgement/); await h.settle();
   const restarted = await offlineProgressHarness(h.snapshot()); let resets = 0;
   restarted.resetProgress = async () => { resets++; restarted.serverProgress = progress(0); };
   await restarted.online();
+  await restarted.value().completeLesson('after-reset', 50, 42, 'en'); await restarted.settle();
   assert.equal(resets, 1); assert.deepEqual(restarted.sent.map(a => a.lessonId), ['after-reset']);
+  assert.equal(restarted.sent[0].progressEpoch, 1);
   assert.equal(restarted.value().progress.totalXp, 50);
 });
 
 test('Phase 4E: pending reset masks old server GET when reset upload fails', async () => {
-  const h = await offlineProgressHarness(); await h.value().completeLesson('obsolete', 50, 73);
+  const h = await offlineProgressHarness(); await h.value().completeLesson('obsolete', 50, 73, 'en');
   await h.value().resetProgress(); h.serverProgress = { ...progress(500), completedLessonIds: ['obsolete'] };
   h.resetProgress = async () => { throw new Error('Reset unavailable'); }; await h.online();
   assert.equal(h.value().progress.totalXp, 0); assert.deepEqual(copy(h.value().progress.completedLessonIds), []);
@@ -728,7 +737,7 @@ test('Phase 4E: reset waits behind active completion and cannot be undone by its
     h.serverProgress = { ...progress(50), completedLessonIds: ['obsolete'] };
     return { data: { newTotalXp: 50 } }; };
   h.resetProgress = async () => { events.push('reset'); h.serverProgress = progress(0); };
-  const complete = h.value().completeLesson('obsolete', 50, 73); await started.promise;
+  const complete = h.value().completeLesson('obsolete', 50, 73, 'en'); await started.promise;
   const reset = h.value().resetProgress(); await tick();
   assert.equal(h.load('queue').getOfflineQueue()[0].type, 'reset-progress');
   release.resolve(); await Promise.all([complete, reset]); await h.settle();
@@ -746,7 +755,7 @@ test('Phase 4E: owner-scoped legacy action lacking a score is retained without i
 test('Phase 4E: valid legacy owned score gains cached lesson context without ID replacement', async () => {
   const h = await offlineProgressHarness();
   h.localStorage.setItem('linguaai_lessons_English', JSON.stringify([{ id: 'legacy', xpReward: 50, targetLanguage: 'English' }]));
-  h.load('queue').pushToOfflineQueue('complete-lesson', { lessonId: 'legacy', score: 73 }, `registered_${A}`);
+  h.load('queue').pushToOfflineQueue('complete-lesson', { lessonId: 'legacy', score: 73, progressEpoch: 0 }, `registered_${A}`);
   const id = h.load('queue').getOfflineQueue()[0].id;
   await h.value().reloadProgress(); await h.settle();
   assert.equal(h.value().progress.totalXp, 50);
@@ -761,7 +770,7 @@ test('Phase 4E: valid legacy owned score gains cached lesson context without ID 
 test('Phase 4E: score zero stays zero and cached unscored IDs never generate uploads', async () => {
   const h = await offlineProgressHarness();
   h.localStorage.setItem(`progress_registered_${A}_English`, JSON.stringify({ ...progress(0), completedLessonIds: ['unscored'] }));
-  await h.value().completeLesson('zero', 50, 0); await h.online();
+  await h.value().completeLesson('zero', 50, 0, 'en'); await h.online();
   assert.equal(h.sent.length, 1); assert.equal(h.sent[0].score, 0);
 });
 
@@ -786,7 +795,7 @@ test('Phase 4E: older same-session refresh cannot replace newer acknowledged sta
 
 test('Phase 4E: deferred React updater checks session again before applying pending overlay', async () => {
   const h = await offlineProgressHarness(); h.deferChildState = true;
-  await h.value().completeLesson('a-pending', 50, 73);
+  await h.value().completeLesson('a-pending', 50, 73, 'en');
   await h.switchToB();
   for (const update of h.deferredState.splice(0)) update();
   h.deferChildState = false; await h.settle();
@@ -945,7 +954,8 @@ test('Phase 5E: web displays the actual zero score and retains valid feedback', 
     }
   }
   assert.equal(findScore(h.child.result), 0);
-  assert.deepEqual(h.calls.filter(call => call[0] === 'xp'), [['xp', 10]]);
+  assert.deepEqual(h.calls.filter(call => call[0] === 'xp'), [],
+    'Writing feedback is not an authoritative XP award');
 });
 
 test('Phase 5E: stale writing failure cannot change the replacement session UI', async () => {
@@ -958,4 +968,194 @@ test('Phase 5E: stale writing failure cannot change the replacement session UI',
   assert.equal(h.child.exposed.error, ''); assert.equal(h.child.exposed.loading, false);
   assert.equal(h.child.exposed.feedback, null);
   assert.equal(h.calls.some(call => call[0] === 'xp'), false);
+});
+
+test('Phase 6B: successful pronunciation is feedback only, with no persistent XP or reward badge', async () => {
+  const h = harness(); h.mountAuth(); h.login(A); h.isOffline = false;
+  h.mount('pronunciation', 'PronunciationPracticePage'); await h.settle();
+  h.child.exposed.setTargetText('Hello world'); h.child.render(); await h.settle();
+  h.child.exposed.setAudioBlob({ recorded: true }); h.child.render();
+  const before = h.snapshot();
+  h.assessPronunciation = async () => ({ targetText: 'Hello world', recognizedText: 'Hello world',
+    targetLanguage: 'en', pronunciationScore: 95, result: 'correct', aiFeedback: 'Useful feedback', provider: 'test' });
+  await h.child.exposed.handleSubmitAssessment(); await h.settle();
+  assert.equal(h.child.exposed.result.pronunciationScore, 95);
+  assert.deepEqual(h.calls.filter(call => call[0] === 'xp'), []);
+  assert.deepEqual(h.snapshot(), before);
+  assert.equal(JSON.stringify(h.child.result).includes('xp_earned_badge'), false);
+});
+
+
+test('Phase 6A: acknowledged owner epochs survive restart, isolate owners and exclude local_guest', async () => {
+  const h = harness(); const store = h.load('storage');
+  assert.equal(store.acknowledgeProgressEpoch(`registered_${A}`, 3), true);
+  const restarted = harness(h.snapshot()).load('storage');
+  assert.equal(restarted.getOwnerProgressEpoch(`registered_${A}`), 3);
+  assert.equal(restarted.getOwnerProgressEpoch(`registered_${B}`), 0);
+  assert.equal(restarted.getOwnerProgressEpoch(`guest_${A}`), 0);
+  assert.equal(restarted.acknowledgeProgressEpoch('local_guest', 5), false);
+  assert.equal(restarted.getOwnerProgressEpoch('local_guest'), undefined);
+  h.localStorage.setItem(`progress_epoch_registered_${B}`, '');
+  assert.equal(store.getOwnerProgressEpoch(`registered_${B}`), undefined);
+});
+test('Phase 6A: stale epoch GET cannot replace newer owner cache; current epoch still applies', async () => {
+  const h = await offlineProgressHarness(); await h.online();
+  const pending = deferred(); h.fetchProgress = () => pending.promise;
+  const refresh = h.value().reloadProgress(); await tick();
+  const store = h.load('storage'); const owner = `registered_${A}`;
+  store.acknowledgeProgressEpoch(owner, 1);
+  store.saveProgress(owner, 'English', { ...progress(80), progressEpoch: 1, completedLessonIds: ['new'] });
+  pending.resolve(progress(999)); await refresh; await h.settle();
+  assert.equal(h.value().progress.totalXp, 80);
+  assert.equal(store.getOwnerProgressEpoch(owner), 1);
+  h.fetchProgress = async () => ({ ...progress(100), progressEpoch: 1 });
+  await h.value().reloadProgress(); await h.settle();
+  assert.equal(h.value().progress.totalXp, 100);
+});
+test('Phase 6A: retry and quarantine preserve original epoch; legacy work never acquires an epoch', async () => {
+  const h = await offlineProgressHarness(); await h.value().completeLesson('one', 50, 73, 'en');
+  const owner = `registered_${A}`; const queue = h.load('queue'); const action = queue.getOfflineQueue()[0];
+  h.saveProgress = async () => { throw { response: { status: 409 } }; };
+  await h.online();
+  const failed = queue.getFailedOfflineActions()[0];
+  assert.equal(failed.id, action.id); assert.equal(failed.payload.progressEpoch, 0);
+  queue.pushToOfflineQueue('complete-lesson', { lessonId: 'legacy', score: 73 }, owner);
+  h.saveProgress = async () => { throw new Error('legacy must not dispatch'); };
+  await h.value().reloadProgress(); await h.settle();
+  assert.equal(queue.getFailedOfflineActions()[1].payload.progressEpoch, undefined);
+  const restarted = await offlineProgressHarness(h.snapshot());
+  assert.equal(restarted.load('queue').getFailedOfflineActions()[0].payload.progressEpoch, 0);
+});
+test('Phase 6A: reset ack advances once locally and old receipt/ack cannot clear new progress', async () => {
+  const h = await offlineProgressHarness(); const owner = `registered_${A}`;
+  const queue = h.load('queue'), store = h.load('storage');
+  await h.value().resetProgress(); await h.settle();
+  assert.equal(store.getOwnerProgressEpoch(owner), 0);
+  assert.throws(() => queue.epochForNewProgress(owner), /reset acknowledgement/);
+  const reset = copy(queue.getOfflineQueue()[0]);
+  await h.online();
+  assert.equal(store.getOwnerProgressEpoch(owner), 1);
+  await h.value().completeLesson('new', 50, 73, 'en'); await h.settle();
+  assert.equal(h.value().progress.totalXp, 50);
+  const key = `linguaai_offline_queue_${encodeURIComponent(owner)}`;
+  const state = JSON.parse(h.localStorage.getItem(key)); state.actions = [reset];
+  h.localStorage.setItem(key, JSON.stringify(state));
+  await queue.processOfflineQueue(A);
+  assert.equal(store.loadProgress(owner, 'English').totalXp, 50);
+  store.acknowledgeCompletion(owner, { lessonId: 'old', targetLanguage: 'English', _lessonLanguageBound: true }, { newTotalXp: 999, progressEpoch: 0 });
+  assert.equal(store.loadProgress(owner, 'English').totalXp, 50);
+  assert.equal(store.getOwnerProgressEpoch(owner), 1);
+});
+
+test('Phase 6C: terminal completion is retained and never appears as completed progress', async () => {
+  const h = await offlineProgressHarness(); await h.value().completeLesson('one', 50, 73, 'en');
+  await h.settle();
+  assert.equal(h.value().progress.totalXp, 50);
+  h.saveProgress = async () => { throw { response: { status: 400 } }; }; await h.online();
+  assert.equal(h.load('queue').getOfflineQueue().length, 0);
+  assert.equal(h.load('queue').getFailedOfflineActions().length, 1);
+  assert.equal(h.value().progress.totalXp, 0); assert.equal(h.value().progress.completedLessonIds.length, 0);
+});
+test('Phase 6C: pending reset hides cache only optimistically; terminal failure restores it without advancing epoch', async () => {
+  const h = await offlineProgressHarness(), owner = `registered_${A}`, store = h.load('storage');
+  h.serverProgress = { ...progress(50), completedLessonIds: ['one'], lessonScores: { one: 73 } };
+  await h.online(); h.isOffline = true; h.child.render(); await h.settle();
+  await h.value().resetProgress(); await h.settle();
+  assert.equal(h.value().progress.totalXp, 0); assert.equal(store.loadProgress(owner, 'en').totalXp, 50);
+  h.resetProgress = async () => { throw { response: { status: 403 } }; }; await h.online();
+  assert.equal(h.value().progress.totalXp, 50);
+  assert.deepEqual(copy(h.value().progress.completedLessonIds), ['one']);
+  assert.equal(store.getOwnerProgressEpoch(owner), 0);
+  assert.equal(h.load('queue').getFailedOfflineActions().length, 1);
+  h.resetProgress = async () => { h.serverProgress = progress(0); };
+  await h.value().resetProgress(); await h.settle();
+  assert.equal(store.getOwnerProgressEpoch(owner), 1);
+  assert.equal(h.load('queue').getFailedOfflineActions().length, 1);
+  await h.value().completeLesson('two', 80, 90, 'en'); await h.settle();
+  assert.equal(h.value().progress.totalXp, 80);
+});
+test('Phase 6C: held English lesson completion remains English after selection changes to German', async () => {
+  const h = await offlineProgressHarness(), owner = `registered_${A}`, store = h.load('storage');
+  const finishingLesson = h.value().completeLesson;
+  store.saveProgress(owner, 'de', { ...progress(200), completedLessonIds: ['german'], lessonScores: { german: 80 } });
+  h.language = 'German'; h.localStorage.setItem('linguaai_target_language', 'German'); h.child.render(); await h.settle();
+  await finishingLesson('one', 50, 73, 'en'); await h.settle();
+  assert.equal(h.load('queue').getOfflineQueue()[0].payload.targetLanguage, 'en');
+  assert.equal(h.value().progress.totalXp, 200);
+  h.fetchProgress = async () => ({ ...progress(200), completedLessonIds: ['german'], lessonScores: { german: 80 } });
+  await h.online();
+  assert.equal(store.loadProgress(owner, 'en').totalXp, 50);
+  assert.equal(store.loadProgress(owner, 'en').lessonScores.one, 73);
+  assert.equal(store.loadProgress(owner, 'de').totalXp, 200);
+});
+test('Phase 6C: higher, equal and lower retakes submit safely with one XP award and max score', async () => {
+  const h = await offlineProgressHarness(); await h.value().completeLesson('one', 50, 73, 'en'); await h.online();
+  for (const score of [91, 91, 20]) {
+    await h.value().completeLesson('one', 50, score, 'en'); await h.settle();
+    assert.equal(h.value().progress.totalXp, 50);
+    assert.equal(h.value().progress.completedLessonIds.length, 1);
+    assert.equal(h.value().progress.lessonScores.one, 91);
+  }
+  assert.deepEqual(h.sent.map(request => request.score), [73, 91, 91, 20]);
+});
+test('Phase 6C: corrupt cache stays unavailable until server reconciliation while owner pending work survives', async () => {
+  const h = await offlineProgressHarness(), owner = `registered_${A}`;
+  h.localStorage.setItem(`progress_${owner}_English`, 'bad JSON');
+  await h.value().reloadProgress(); await h.settle(); assert.equal(h.value().progress.available, false);
+  await h.value().completeLesson('one', 50, 73, 'en'); await h.settle();
+  assert.equal(h.value().progress.totalXp, 50);
+  assert.equal(h.localStorage.getItem(`progress_${owner}_English`), 'bad JSON');
+  h.serverProgress = { ...progress(80), completedLessonIds: ['two'], lessonScores: { two: 90 } };
+  h.saveProgress = async () => { throw { response: { status: 503 } }; }; await h.online();
+  assert.equal(h.value().progress.available, true); assert.equal(h.value().progress.totalXp, 130);
+  assert.equal(h.load('queue').getOfflineQueue().length, 1);
+  assert.equal(h.load('storage').loadProgress(owner, 'en').totalXp, 80);
+});
+test('Phase 6C: obsolete queued epoch contributes neither XP nor completion over newer cache', async () => {
+  const h = await offlineProgressHarness(), owner = `registered_${A}`, store = h.load('storage');
+  await h.value().completeLesson('one', 50, 73, 'en'); await h.settle();
+  store.acknowledgeProgressEpoch(owner, 1);
+  store.saveProgress(owner, 'en', { ...progress(80), progressEpoch: 1, completedLessonIds: ['two'], lessonScores: { two: 90 } });
+  await h.value().reloadProgress(); await h.settle();
+  assert.equal(h.value().progress.totalXp, 80);
+  assert.deepEqual(copy(h.value().progress.completedLessonIds), ['two']);
+  assert.equal(h.load('queue').getOfflineQueue()[0].payload.progressEpoch, 0);
+});
+test('Phase 6C: GET failures preserve acknowledged progress and expose their existing retry category', async () => {
+  const h = await offlineProgressHarness(); h.serverProgress = { ...progress(50), completedLessonIds: ['one'] }; await h.online();
+  for (const [status, category] of [[503, 'backend'], [401, 'authentication'], [400, 'validation']]) {
+    h.fetchProgress = async () => { throw { response: { status } }; };
+    await h.value().reloadProgress(); await h.settle();
+    assert.equal(h.value().progress.totalXp, 50); assert.equal(h.value().progressError.category, category);
+  }
+});
+test('Phase 6C: trusted cached lesson repairs old UI-language metadata without changing epoch or operation ID', async () => {
+  const h = await offlineProgressHarness(), queue = h.load('queue');
+  h.localStorage.setItem('linguaai_lessons_English', JSON.stringify([{ id: 'one', targetLanguage: 'en', xpReward: 50 }]));
+  queue.pushToOfflineQueue('complete-lesson', { lessonId: 'one', score: 73, xpReward: 50,
+    targetLanguage: 'German', progressEpoch: 0 }, `registered_${A}`);
+  const id = queue.getOfflineQueue()[0].id;
+  h.language = 'German'; h.localStorage.setItem('linguaai_target_language', 'German'); h.child.render(); await h.settle();
+  assert.equal(h.value().progress.totalXp, 0);
+  assert.equal(queue.getOfflineQueue()[0].id, id);
+  assert.equal(queue.getOfflineQueue()[0].payload.progressEpoch, 0);
+  assert.equal(queue.getOfflineQueue()[0].payload.targetLanguage, 'en');
+});
+test('Phase 6C: invalid newer snapshot cannot advance epoch or erase valid cache', async () => {
+  const h = await offlineProgressHarness(), owner = `registered_${A}`, queue = h.load('queue'), store = h.load('storage');
+  store.saveProgress(owner, 'en', { ...progress(50), completedLessonIds: ['one'] });
+  assert.equal(queue.saveServerProgress(owner, 'English', queue.getProgressQueueRevision(owner),
+    { ...progress(-1), progressEpoch: 1 }), false);
+  assert.equal(store.getOwnerProgressEpoch(owner), 0);
+  assert.equal(store.loadProgress(owner, 'en').totalXp, 50);
+});
+test('Phase 6C: unverified legacy language is not optimistic and authoritative acknowledgement supplies binding', async () => {
+  const h = await offlineProgressHarness(), owner = `registered_${A}`;
+  h.load('queue').pushToOfflineQueue('complete-lesson', { lessonId: 'one', score: 73,
+    xpReward: 50, targetLanguage: 'German', progressEpoch: 0 }, owner);
+  h.language = 'German'; h.localStorage.setItem('linguaai_target_language', 'German'); h.child.render(); await h.settle();
+  assert.equal(h.value().progress.completedLessonIds.length, 0);
+  h.fetchProgress = async () => progress(0); await h.online();
+  assert.equal(h.load('storage').loadProgress(owner, 'en').totalXp, 50);
+  assert.equal(h.load('storage').loadProgress(owner, 'de').totalXp, 0);
 });

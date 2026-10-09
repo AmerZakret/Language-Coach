@@ -273,13 +273,13 @@ describe('Phase 5C validation and mutation contracts', () => {
     const old = await service.getUserProgress(owner._id.toString(), 'de');
     expect(old.stats.totalXp).toBe(180);
     expect(old.completedLessons.map(lesson => lesson.lessonId)).toEqual(expect.arrayContaining(['de_2', 'de_3']));
-    const completed = await service.completeLesson(owner._id.toString(), 'de_1', 73);
+    const completed = await service.completeLesson(owner._id.toString(), 'de_1', 73, 0);
     expect(completed?.data.newTotalXp).toBe(180 + completed!.data.xpEarned);
     expect((await progress.findOne({ lessonId: 'de_1' }))?.targetLanguage).toBe('de');
     const saved = (await users.findById(owner._id))!;
     expect(saved.xpPerLanguage.get('German')).toBe(170);
     expect(saved.xpPerLanguage.get('de')).toBe(10 + completed!.data.xpEarned);
-    expect((await service.completeLesson(owner._id.toString(), 'de_1', 90))?.data.xpEarned).toBe(0);
+    expect((await service.completeLesson(owner._id.toString(), 'de_1', 90, 0))?.data.xpEarned).toBe(0);
     expect((await service.getUserProgress(owner._id.toString(), 'German')).stats.totalXp).toBe(saved.totalXp);
     expect((await progress.collection.findOne({ lessonId: 'de_3' }))!.targetLanguage).toBeUndefined();
   });

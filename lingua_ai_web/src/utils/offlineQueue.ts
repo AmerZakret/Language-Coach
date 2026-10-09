@@ -1,7 +1,7 @@
-import { targetLanguageCode } from './targetLanguage';
+import { targetLanguageCode, tryTargetLanguageCode } from './targetLanguage';
 import { classifySyncFailure, retryDelay, withReplayTimeout, REPLAY_TIMEOUT_MS, InvalidQueuedPayload } from './syncRetryPolicy';
 import type { RetryState } from './syncRetryPolicy';
-import { acknowledgeCompletion, resetOwnerProgress, saveProgress, loadProgress } from './progressStorage';
+import { acknowledgeCompletion, acknowledgeProgressEpoch, getOwnerProgressEpoch, validProgressEpoch, resetOwnerProgress, saveProgress, loadProgress, parseProgress } from './progressStorage';
 import type { ProgressState } from '../types/progress';
 import type { TargetLanguage } from '../types/language';
 import apiClient from '../api/apiClient';
@@ -103,20 +103,24 @@ export function preparePendingProgress(owner: string): void {
   const state = readState(owner);
   let changed = false;
   state.actions = state.actions.map(action => {
-    if (action.ownerNamespace !== owner || action.type !== 'complete-lesson' || action.payload.targetLanguage) return action;
+    if (action.ownerNamespace !== owner || action.type !== 'complete-lesson' || action.payload._lessonLanguageBound === true) return action;
     const matches: { language: TargetLanguage; reward?: number }[] = [];
     for (const language of ['English', 'German', 'Spanish', 'French', 'Arabic'] as TargetLanguage[]) {
       let catalog: any[] = [];
       try { catalog = JSON.parse(localStorage.getItem(`linguaai_lessons_${language}`) || '[]'); } catch { /* Unusable catalog stays untouched. */ }
-      const lesson = Array.isArray(catalog) ? catalog.find(row => row.id === action.payload.lessonId) : undefined;
+      const lesson = Array.isArray(catalog) ? catalog.find(row => row && row.id === action.payload.lessonId &&
+        (row.targetLanguage === undefined || tryTargetLanguageCode(row.targetLanguage) === targetLanguageCode(language))) : undefined;
       if (lesson || loadProgress(owner, language).completedLessonIds.includes(action.payload.lessonId)) {
         matches.push({ language, reward: lesson?.xpReward });
       }
     }
     if (matches.length !== 1) return action; // Unknown/ambiguous context remains retained.
+    const fields = { targetLanguage: targetLanguageCode(matches[0].language),
+      _lessonLanguageBound: true,
+      ...(validProgressEpoch(matches[0].reward) ? { xpReward: matches[0].reward } : {}) };
+    if (Object.entries(fields).every(([key, value]) => action.payload[key] === value)) return action;
     changed = true;
-    return { ...action, payload: { ...action.payload, targetLanguage: matches[0].language,
-      ...(typeof matches[0].reward === 'number' ? { xpReward: matches[0].reward } : {}) } };
+    return { ...action, payload: { ...action.payload, ...fields } };
   });
   if (changed) { state.progressRevision = `migration_${Date.now()}_${Math.random()}`; writeState(state); }
 }
@@ -124,11 +128,50 @@ export function preparePendingProgress(owner: string): void {
 export const getProgressQueueRevision = (owner: string): string => readState(owner).progressRevision || '';
 export const saveServerProgress = (owner: string, language: TargetLanguage, revision: string, progress: ProgressState): boolean => {
   if (getProgressQueueRevision(owner) !== revision) return false;
-  saveProgress(owner, language, progress); return true;
+  const valid = parseProgress(progress);
+  if (!valid || !acknowledgeProgressEpoch(owner, valid.progressEpoch)) return false;
+  saveProgress(owner, language, valid); return true;
 };
 export const getFailedOfflineActions = (): OfflineAction[] => readState(getOfflineQueueSession().ownerNamespace).failedActions || [];
-export const getProgressQueueActions = (): OfflineAction[] => [...getOfflineQueue(), ...getFailedOfflineActions()];
+export const getProgressQueueActions = (): OfflineAction[] => getOfflineQueue();
+export function epochForNewProgress(owner: string, forReset = false): number {
+  const state = readState(owner);
+  const epoch = getOwnerProgressEpoch(owner);
+  if (!forReset && state.actions.some(a => a.type === 'reset-progress'))
+    throw new Error('Wait for progress reset acknowledgement before submitting new progress');
+  if (epoch === undefined) throw new Error('Connect to acknowledge server progress before submitting progress');
+  return epoch;
+}
 export const getOfflineQueue = (): OfflineAction[] => readState(getOfflineQueueSession().ownerNamespace).actions;
+
+// Quarantine stays diagnostic. Only a durable receipt can reconcile a failed
+// reset; this utility never resends a reset or reactivates a failed completion.
+export async function reconcileFailedReset(actionId: string): Promise<boolean> {
+  const session = getOfflineQueueSession();
+  if (!isOfflineQueueSessionActive(session)) return false;
+  const state = readState(session.ownerNamespace);
+  const action = state.failedActions?.find(a => a.id === actionId);
+  if (!action || action.ownerNamespace !== session.ownerNamespace || action.type !== 'reset-progress'
+    || !validProgressEpoch(action.payload.expectedEpoch) || action.payload.expectedEpoch >= Number.MAX_SAFE_INTEGER) return false;
+  const identity = JSON.stringify(action);
+  try {
+    const result = (await withReplayTimeout(signal => apiClient.get(
+      `/progress/${session.userId}/reset-receipts/${encodeURIComponent(action.id)}`,
+      { params: { expectedEpoch: action.payload.expectedEpoch }, offlineQueueSession: session, signal, timeout: REPLAY_TIMEOUT_MS } as AxiosRequestConfig))).data;
+    if (!isOfflineQueueSessionActive(session) || result?.userId !== session.userId || result?.operationId !== action.id
+      || result?.expectedEpoch !== action.payload.expectedEpoch || result?.progressEpoch !== action.payload.expectedEpoch + 1) return false;
+    const latest = readState(session.ownerNamespace);
+    const current = latest.failedActions?.find(a => a.id === action.id);
+    if (!current || JSON.stringify(current) !== identity) return false;
+    // Older or repeated receipts never clear newer cache or lower the epoch.
+    acknowledgeProgressEpoch(session.ownerNamespace, result.progressEpoch);
+    latest.failedActions = latest.failedActions!.map(a => a.id === action.id ? { ...a,
+      reconciledAt: new Date().toISOString(), acknowledgedEpoch: result.progressEpoch } : a);
+    latest.progressRevision = `receipt_${action.id}`;
+    writeState(latest);
+    return true;
+  } catch { return false; } // Missing receipt is not authorization to run a reset.
+}
 export const isPendingBackendCard = (id: string, owner: string): boolean => {
   if (owner === 'local_guest') return false;
   const state = readState(owner);
@@ -139,7 +182,6 @@ export const pushToOfflineQueue = (type: OfflineAction['type'], payload: any, ow
   const state = readState(ownerNamespace);
   if (type === 'reset-progress') {
     state.actions = state.actions.filter(a => a.type !== 'complete-lesson' && a.type !== 'reset-progress');
-    state.failedActions = state.failedActions?.filter(a => a.type !== 'complete-lesson' && a.type !== 'reset-progress');
     // A durable reset barrier is visible before the cache is cleared. An old
     // in-flight completion is cancelled locally; the barrier runs after HTTP.
   }
@@ -173,7 +215,6 @@ export const pushToOfflineQueue = (type: OfflineAction['type'], payload: any, ow
     ownerNamespace, payload: resolvePayload(state, type, payload), createdAt: new Date().toISOString(), schemaVersion: 1 });
   if (type === 'complete-lesson' || type === 'reset-progress') state.progressRevision = state.actions.at(-1)!.id;
   writeState(state);
-  if (type === 'reset-progress') resetOwnerProgress(ownerNamespace, payload.legacyOwnerNamespace);
 };
 export const clearOfflineQueue = (): void => {
   const state = readState(getOfflineQueueSession().ownerNamespace);
@@ -225,19 +266,25 @@ export const processOfflineQueue = async (userId: string, waitForActive = false)
       };
       let serverId: string | undefined;
       let completion: any;
+      let resetResult: any;
       try {
         const payload = action.payload;
         const id = cardId(payload);
-        if (action.type === 'complete-lesson' && state.failedActions?.some(a => a.type === 'reset-progress')) throw new InvalidQueuedPayload('Blocked by failed reset');
         if (dependent(action.type) && (!id || id.startsWith('local_'))) throw new InvalidQueuedPayload('Pending card has no durable server mapping');
         await withReplayTimeout(async signal => {
         config.signal = signal;
         switch (action.type) {
           case 'reset-progress':
-            await apiClient.delete(`/progress/${session.userId}`, config); break;
+            if (!validProgressEpoch(payload.expectedEpoch) || payload.expectedEpoch >= Number.MAX_SAFE_INTEGER)
+              throw new InvalidQueuedPayload('Reset has no acknowledged epoch', payload.expectedEpoch === undefined ? 'MISSING_PROGRESS_EPOCH' : 'INVALID_PROGRESS_EPOCH');
+            resetResult = (await apiClient.delete(`/progress/${session.userId}`, { ...config, data: { expectedEpoch: payload.expectedEpoch } })).data;
+            if (resetResult?.progressEpoch !== payload.expectedEpoch + 1) throw new InvalidQueuedPayload('Invalid reset acknowledgement');
+            break;
           case 'complete-lesson':
             if (!Number.isInteger(payload.score)) throw new InvalidQueuedPayload('Completion has no recorded score');
-            completion = (await apiClient.post(`/progress/${session.userId}/complete-lesson`, { lessonId: payload.lessonId, score: payload.score }, config)).data?.data;
+            if (!validProgressEpoch(payload.progressEpoch)) throw new InvalidQueuedPayload('Completion has no acknowledged epoch', payload.progressEpoch === undefined ? 'MISSING_PROGRESS_EPOCH' : 'INVALID_PROGRESS_EPOCH');
+            completion = (await apiClient.post(`/progress/${session.userId}/complete-lesson`, { lessonId: payload.lessonId, score: payload.score, progressEpoch: payload.progressEpoch }, config)).data?.data;
+            if (completion?.progressEpoch !== payload.progressEpoch) throw new InvalidQueuedPayload('Invalid completion acknowledgement');
             break;
           case 'create-flashcard': {
             const response = await apiClient.post('/flashcards', {
@@ -264,13 +311,12 @@ export const processOfflineQueue = async (userId: string, waitForActive = false)
         const latest = readState(owner);
         const current = latest.actions.find(a => a.id === action.id);
         if (!current) continue; // Reset/cancellation won while HTTP awaited.
-        const failed = { ...current, lastErrorCategory: failure.category,
+        const failed = { ...current, lastErrorCategory: failure.category, lastErrorCode: failure.code, lastErrorStatus: failure.status,
           ...(failure.terminal ? { failedAt: new Date().toISOString(), nextAttemptAt: undefined }
             : { nextAttemptAt: new Date(Date.now() + retryDelay(action.attemptCount)).toISOString() }) };
         if (failure.terminal) {
           const blocked = (a: OfflineAction) => a.id === action.id
-            || (action.type === 'create-flashcard' && action.payload.tempId && dependent(a.type) && cardId(a.payload) === action.payload.tempId)
-            || (action.type === 'reset-progress' && a.type === 'complete-lesson');
+            || (action.type === 'create-flashcard' && action.payload.tempId && dependent(a.type) && cardId(a.payload) === action.payload.tempId);
           latest.failedActions = [...(latest.failedActions || []), ...latest.actions.filter(blocked).map(a => a.id === action.id ? failed
             : { ...a, lastErrorCategory: 'dependency', failedAt: new Date().toISOString() })];
           latest.actions = latest.actions.filter(a => !blocked(a));
@@ -289,7 +335,8 @@ export const processOfflineQueue = async (userId: string, waitForActive = false)
         latest.progressRevision = `ack_${action.id}`;
       }
       if (action.type === 'reset-progress') {
-        resetOwnerProgress(owner, action.payload.legacyOwnerNamespace);
+        acknowledgeProgressEpoch(owner, resetResult.progressEpoch);
+        if (action.payload.legacyOwnerNamespace) resetOwnerProgress(action.payload.legacyOwnerNamespace);
         latest.progressRevision = `ack_${action.id}`;
       }
       if (action.type === 'create-flashcard' && action.payload.tempId) latest.tempIds[action.payload.tempId] = serverId!;

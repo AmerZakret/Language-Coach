@@ -265,7 +265,7 @@ describe('Queued flashcard idempotency', () => {
       difficulty: 'easy', level: 'Beginner', order: 1, duration: 5, xpReward: 50 });
     const complete = () => request(app.getHttpServer()).post(`/progress/${a._id}/complete-lesson`)
       .auth(a._id.toString(), { type: 'bearer' }).set('X-Idempotency-Key', 'complete-1')
-      .send({ lessonId: 'lesson-1', score: 90 });
+      .send({ lessonId: 'lesson-1', score: 90, progressEpoch: 0 });
     expect((await complete().expect(201)).body.data.xpEarned).toBe(50);
     expect((await complete().expect(201)).body.data.xpEarned).toBe(0);
     expect((await users.findById(a._id))?.totalXp).toBe(50);

@@ -20,13 +20,16 @@ class FakeProgressApi extends ProgressApiService {
   Completer<void>? release;
   @override
   Future<Map<String, dynamic>> completeLesson(
-      String userId, String lessonId, int score, {String? operationId}) async {
+      String userId, String lessonId, int score,
+      {required int progressEpoch, String? operationId}) async {
     calls.add(RecordedDispatch('complete-lesson'));
     expect(userId, AuthService().currentUserId);
     started?.complete();
     started = null;
     if (release != null) await release!.future;
-    return {};
+    return {
+      'data': {'progressEpoch': progressEpoch}
+    };
   }
 }
 
@@ -38,13 +41,14 @@ class FakeFlashcardApi extends FlashcardApiService {
   }
 
   @override
-  Future<FlashcardMutationResult> createFlashcard(String targetWord,
-          String turkishTranslation, String targetLanguage,
+  Future<FlashcardMutationResult> createFlashcard(
+          String targetWord, String turkishTranslation, String targetLanguage,
           {String? nativeLanguage,
           String? nativeTranslation,
           String? exampleSentence,
           String? note,
-          String? operationId, bool preserveLegacyLanguage = false}) async =>
+          String? operationId,
+          bool preserveLegacyLanguage = false}) async =>
       record('create-flashcard');
   @override
   Future<FlashcardMutationResult> updateFlashcard(
@@ -54,7 +58,8 @@ class FakeFlashcardApi extends FlashcardApiService {
           String? nativeTranslation,
           String? exampleSentence,
           String? note,
-          String? operationId, bool preserveLegacyLanguage = false}) async =>
+          String? operationId,
+          bool preserveLegacyLanguage = false}) async =>
       record('update-flashcard');
   @override
   Future<void> deleteFlashcard(String cardId, {String? operationId}) async {
@@ -62,7 +67,8 @@ class FakeFlashcardApi extends FlashcardApiService {
   }
 
   @override
-  Future<FlashcardMutationResult> reviewCard(String cardId, int score, {String? operationId}) async =>
+  Future<FlashcardMutationResult> reviewCard(String cardId, int score,
+          {String? operationId}) async =>
       record('review-flashcard');
 }
 
@@ -93,6 +99,7 @@ void main() {
       type,
       {
         'lessonId': 'lesson',
+        'progressEpoch': 0,
         'score': 4,
         'cardId': 'card',
         'targetWord': 'word',

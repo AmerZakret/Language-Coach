@@ -53,6 +53,7 @@ void main() {
       body = card(id);
     } else if (path.contains('/progress/') && request.method == 'GET') {
       body = {
+        'progressEpoch': 0,
         'stats': {'totalXp': id == a ? 10 : 20, 'streak': 2},
         'completedLessons': [
           {'lessonId': 'current-$id'}
@@ -196,7 +197,7 @@ void main() {
         'stale lesson completion blocks refetch and local fallback (failure: $failure)',
         () => race(
               match: (r) => r.url.path.endsWith('/complete-lesson'),
-              operation: () => progress.completeLesson('new-lesson', 999),
+              operation: () => progress.completeLesson('new-lesson', 999, lessonLanguage: 'en'),
               response: {},
               failure: failure,
             ));

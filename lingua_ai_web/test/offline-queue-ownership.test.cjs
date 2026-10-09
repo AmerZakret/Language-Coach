@@ -20,8 +20,11 @@ const user = id => ({ id, name: 'Test', email: `${id}@example.com`, isGuest: fal
 const guest = id => ({ access_token: `test-${id}`, user: {
   id, name: 'Guest User', email: `guest-${id}@guest.lingua.local`, isGuest: true,
 } });
-const payload = { lessonId: 'lesson', score: 4, cardId: 'card', targetWord: 'word',
+const payload = { progressEpoch: 0, lessonId: 'lesson', score: 4, cardId: 'card', targetWord: 'word',
   turkishTranslation: 'translation', targetLanguage: 'English' };
+
+// Phase 6E keeps quarantine out of execution. These tests use real client
+// storage/session code and disposable in-memory HTTP transports only.
 
 function storage() {
   const values = new Map();
@@ -99,7 +102,14 @@ function harness(saved = storage(), fakeTimers = false) {
     for (const interceptor of requestInterceptors) pending = pending.then(interceptor);
     return pending.then(prepared => {
       requests.push(prepared);
-      let result = Promise.resolve().then(() => control.dispatch(prepared))
+      let result = Promise.resolve().then(() => control.dispatch(prepared)).then(reply => {
+        // Success fixtures implement the current epoch acknowledgement contract.
+        if (prepared.url.includes('/progress/') && method === 'post') return { ...reply, data: { ...reply.data,
+          data: { ...reply.data?.data, progressEpoch: reply.data?.data?.progressEpoch ?? prepared.data.progressEpoch } } };
+        if (prepared.url.includes('/progress/') && method === 'delete') return { ...reply, data: { ...reply.data,
+          progressEpoch: reply.data?.progressEpoch ?? prepared.data.expectedEpoch + 1 } };
+        return reply;
+      })
         .catch(error => { error.config ??= prepared; throw error; });
       for (const interceptor of responseInterceptors) result = result.then(interceptor.success, interceptor.failure);
       return result;
@@ -109,7 +119,7 @@ function harness(saved = storage(), fakeTimers = false) {
   transport.get = (url, config) => request('get', url, undefined, config);
   transport.patch = (url, data, config) => request('patch', url, data, config);
   transport.put = (url, data, config) => request('put', url, data, config);
-  transport.delete = (url, config) => request('delete', url, undefined, config);
+  transport.delete = (url, config) => request('delete', url, config?.data, config);
 
   const sources = {
     reachability: 'utils/backendReachability.ts', coordinator: 'utils/syncCoordinator.ts',
@@ -167,7 +177,7 @@ function harness(saved = storage(), fakeTimers = false) {
     await tick();
   }
   const enqueue = (type = 'complete-lesson', data = payload) => {
-    queue.pushToOfflineQueue(type, data, session.getOfflineQueueSession().ownerNamespace);
+    queue.pushToOfflineQueue(type, { ...(type === 'complete-lesson' ? { progressEpoch: 0 } : type === 'reset-progress' ? { expectedEpoch: 0 } : {}), ...data }, session.getOfflineQueueSession().ownerNamespace);
   };
   return { advanceTimers, advance: ms => { clock.now += ms; }, load, saved, requests, control, queue, session, auth, mount, enqueue,
     authApi: load('authApi'), progressApi: load('progressApi'), client: load('apiClient').default };
@@ -370,13 +380,12 @@ for (const operation of ['profile-fetch', 'profile-update', 'progress-fetch', 'l
       'profile-fetch': () => h.authApi.fetchMe(),
       'profile-update': () => h.authApi.updateProfile({ name: 'A name' }),
       'progress-fetch': () => h.progressApi.fetchProgress(A, 'English'),
-      'lesson-complete': () => h.progressApi.saveProgressToBackend(A, 'lesson', 4),
-      'progress-reset': () => h.progressApi.resetProgressInBackend(A),
+      'lesson-complete': () => h.progressApi.saveProgressToBackend(A, 'lesson', 4, 0),
+      'progress-reset': () => h.progressApi.resetProgressInBackend(A, 0, 'reset-guard'),
       'card-fetch': () => h.client.get(`/flashcards/all?userId=${A}`, h.session.getSessionRequestConfig()),
     }[operation];
     const pending = send(); h.auth().logout(); h.auth().login(user(B), `test-${B}`);
-    if (operation === 'progress-fetch') assert.equal(await pending, null);
-    else await assert.rejects(pending, /Session changed before dispatch/);
+    await assert.rejects(pending, /Session changed before dispatch/);
     assert.equal(h.requests.length, 0);
   });
 }
@@ -649,14 +658,14 @@ for (const status of [400, 403, 404, 409, 422]) {
   });
 }
 
-test('Phase 4F: failed reset quarantines successor/future completions until an explicit new reset', async () => {
+test('Phase 6E: terminal reset is diagnostic; valid successor/future completions remain executable', async () => {
   const h = await durableHarness(); h.enqueue('reset-progress', {}); h.enqueue('complete-lesson', { lessonId: 'later', score: 73 });
-  h.control.dispatch = async () => { throw { response: { status: 403 } }; };
-  assert.equal(await h.queue.processOfflineQueue(A), false); assert.equal(h.requests.length, 1);
-  assert.equal(h.queue.getFailedOfflineActions().length, 2);
+  h.control.dispatch = async request => { if (request.method === 'delete') throw { response: { status: 403 } }; return { data: {} }; };
+  assert.equal(await h.queue.processOfflineQueue(A), false); assert.equal(h.requests.length, 2);
+  assert.equal(h.queue.getFailedOfflineActions().length, 1);
   h.enqueue('complete-lesson', { lessonId: 'future', score: 73 });
-  assert.equal(await h.queue.processOfflineQueue(A), false); assert.equal(h.requests.length, 1);
-  h.enqueue('reset-progress', {}); assert.equal(h.queue.getFailedOfflineActions().length, 0);
+  assert.equal(await h.queue.processOfflineQueue(A), true); assert.equal(h.requests.length, 3);
+  h.enqueue('reset-progress', {}); assert.equal(h.queue.getFailedOfflineActions().length, 1);
   h.control.dispatch = async () => ({ data: {} }); assert.equal(await h.queue.processOfflineQueue(A), true);
 });
 
@@ -834,4 +843,215 @@ test('Phase 5E: invalid login credentials do not revoke a separate current authe
   h.control.dispatch = async () => { throw { response: { status: 401 } }; };
   await assert.rejects(h.client.post('/auth/login', { email: 'other@example.com', password: 'wrong' }));
   assert.equal(h.auth().token, `test-${A}`);
+});
+
+
+test('Phase 6A: HTTP replay retains completion epoch across durable restart and backoff', async () => {
+  const h = await durableHarness(); h.enqueue('complete-lesson', { lessonId: 'one', score: 73, progressEpoch: 5 });
+  const original = h.queue.getOfflineQueue()[0];
+  h.control.dispatch = async () => { throw { response: { status: 503 } }; };
+  assert.equal(await h.queue.processOfflineQueue(A), false);
+  const restarted = await durableHarness(h.saved); restarted.advance(360000);
+  assert.equal(restarted.queue.getOfflineQueue()[0].payload.progressEpoch, 5);
+  assert.equal(await restarted.queue.processOfflineQueue(A), true);
+  assert.equal(h.requests[0].data.progressEpoch, 5);
+  assert.equal(restarted.requests[0].data.progressEpoch, 5);
+  assert.equal(restarted.requests[0].headers['X-Idempotency-Key'], original.id);
+});
+
+for (const [code, category] of [
+  ['STALE_PROGRESS_EPOCH', 'stale-epoch'], ['FUTURE_PROGRESS_EPOCH', 'future-epoch'],
+  ['STALE_RESET_EPOCH', 'stale-reset-epoch'], ['FUTURE_RESET_EPOCH', 'future-reset-epoch'],
+  ['RESET_IDEMPOTENCY_CONFLICT', 'reset-key-conflict'], ['INVALID_PROGRESS_EPOCH', 'invalid-epoch'],
+  ['MISSING_PROGRESS_EPOCH', 'missing-epoch'],
+]) {
+  test(`Phase 6E: ${code} is terminal and its code survives quarantine/restart`, async () => {
+    const h = await durableHarness();
+    h.enqueue(code === 'RESET_IDEMPOTENCY_CONFLICT' || code.endsWith('RESET_EPOCH') ? 'reset-progress' : 'complete-lesson');
+    const original = h.queue.getOfflineQueue()[0];
+    h.control.dispatch = async () => { throw { response: { status: 409, data: { code } } }; };
+    assert.equal(await h.queue.processOfflineQueue(A), false);
+    const failed = h.queue.getFailedOfflineActions()[0];
+    assert.equal(failed.lastErrorCategory, category); assert.equal(failed.lastErrorCode, code);
+    assert.equal(failed.lastErrorStatus, 409); assert.equal(failed.id, original.id);
+    assert.deepEqual(failed.payload, original.payload); assert.ok(failed.failedAt);
+    const restarted = await durableHarness(h.saved);
+    assert.equal(restarted.queue.getFailedOfflineActions()[0].lastErrorCode, code);
+    assert.equal(await restarted.queue.processOfflineQueue(A), true);
+    assert.equal(restarted.requests.length, 0);
+  });
+}
+
+test('Phase 6E: failed N completion remains immutable across reset and independent N+1 work', async () => {
+  const h = await durableHarness(), owner = `registered_${A}`, store = h.load('storage');
+  store.acknowledgeProgressEpoch(owner, 0);
+  h.enqueue('complete-lesson', { lessonId: 'old', score: 73, progressEpoch: 0 });
+  const original = h.queue.getOfflineQueue()[0];
+  h.control.dispatch = async () => { throw { response: { status: 409, data: { code: 'STALE_PROGRESS_EPOCH' } } }; };
+  assert.equal(await h.queue.processOfflineQueue(A), false);
+  const evidence = JSON.stringify(h.queue.getFailedOfflineActions()[0]);
+  const base = { available: true, progressEpoch: 0, totalXp: 80, streak: 0,
+    completedLessonIds: ['server'], lessonScores: { server: 73 }, weeklyActivity: [] };
+  const pending = h.queue.getProgressQueueActions();
+  const visible = store.overlayPendingProgress(base,
+    pending.filter(a => a.type === 'complete-lesson').map(a => a.payload),
+    pending.some(a => a.type === 'reset-progress'));
+  assert.equal(visible.totalXp, 80);
+  assert.deepEqual([...visible.completedLessonIds], ['server']);
+  h.enqueue('reset-progress', { expectedEpoch: 0 });
+  h.control.dispatch = async () => ({ data: {} });
+  assert.equal(await h.queue.processOfflineQueue(A), true);
+  assert.equal(store.getOwnerProgressEpoch(owner), 1);
+  assert.equal(await h.queue.reconcileFailedReset(original.id), false);
+  assert.equal(h.queue.getOfflineQueue().length, 0);
+  assert.equal(h.queue.epochForNewProgress(owner), 1);
+  h.enqueue('complete-lesson', { lessonId: 'new', score: 91, progressEpoch: 1 });
+  assert.notEqual(h.queue.getOfflineQueue()[0].id, original.id);
+  assert.equal(await h.queue.processOfflineQueue(A), true);
+  assert.deepEqual(h.requests.map(r => r.method), ['post', 'delete', 'post']);
+  assert.equal(h.requests.at(-1).data.progressEpoch, 1);
+  assert.equal(JSON.stringify(h.queue.getFailedOfflineActions()[0]), evidence);
+});
+
+test('Phase 6E: terminal reset cannot advance epoch or hide authoritative progress', async () => {
+  const h = await durableHarness(), owner = `registered_${A}`, store = h.load('storage');
+  store.acknowledgeProgressEpoch(owner, 0);
+  store.saveProgress(owner, 'English', { available: true, progressEpoch: 0, totalXp: 80, streak: 0,
+    completedLessonIds: ['server'], lessonScores: { server: 73 }, weeklyActivity: [] });
+  const before = JSON.stringify(store.loadProgress(owner, 'English'));
+  h.enqueue('reset-progress', { expectedEpoch: 0 });
+  h.control.dispatch = async () => { throw { response: { status: 403 } }; };
+  assert.equal(await h.queue.processOfflineQueue(A), false);
+  assert.equal(store.getOwnerProgressEpoch(owner), 0);
+  assert.equal(h.queue.epochForNewProgress(owner), 0);
+  assert.equal(JSON.stringify(store.loadProgress(owner, 'English')), before);
+  const evidence = h.saved.getItem(key(owner));
+  h.control.dispatch = async () => { throw { response: { status: 404, data: { code: 'RESET_NOT_COMMITTED' } } }; };
+  assert.equal(await h.queue.reconcileFailedReset(h.queue.getFailedOfflineActions()[0].id), false);
+  assert.equal(h.requests.at(-1).method, 'get'); assert.equal(h.saved.getItem(key(owner)), evidence);
+  assert.equal(store.getOwnerProgressEpoch(owner), 0);
+});
+
+test('Phase 6E: lost reset acknowledgement retries the same operation without a second reset', async () => {
+  const h = await durableHarness(), owner = `registered_${A}`, store = h.load('storage');
+  store.acknowledgeProgressEpoch(owner, 0); h.enqueue('reset-progress', { expectedEpoch: 0 });
+  const original = h.queue.getOfflineQueue()[0]; let committed = false, resets = 0;
+  h.control.dispatch = async request => {
+    assert.equal(request.headers['X-Idempotency-Key'], original.id);
+    assert.equal(request.data.expectedEpoch, 0);
+    if (!committed) { committed = true; resets++; throw { code: 'ETIMEDOUT' }; }
+    return { data: { progressEpoch: 1 } };
+  };
+  assert.equal(await h.queue.processOfflineQueue(A), false); assert.equal(store.getOwnerProgressEpoch(owner), 0);
+  h.advance(360000);
+  assert.equal(await h.queue.processOfflineQueue(A), true); assert.equal(resets, 1);
+  assert.equal(store.getOwnerProgressEpoch(owner), 1); assert.equal(h.queue.getFailedOfflineActions().length, 0);
+});
+
+async function failedResetHarness() {
+  const h = await durableHarness(), owner = `registered_${A}`;
+  h.load('storage').acknowledgeProgressEpoch(owner, 0);
+  h.enqueue('reset-progress', { expectedEpoch: 0 });
+  h.control.dispatch = async () => { throw { response: { status: 403 } }; };
+  assert.equal(await h.queue.processOfflineQueue(A), false);
+  return { h, owner, action: h.queue.getFailedOfflineActions()[0] };
+}
+const resetReceipt = action => ({ data: { userId: A, operationId: action.id,
+  expectedEpoch: action.payload.expectedEpoch, progressEpoch: action.payload.expectedEpoch + 1 } });
+
+test('Phase 6E: quarantine reconciles only a committed receipt and retains all failure evidence', async () => {
+  const { h, owner, action } = await failedResetHarness(), store = h.load('storage');
+  h.control.dispatch = async request => {
+    assert.equal(request.method, 'get');
+    assert.equal(request.url, `/progress/${A}/reset-receipts/${action.id}`);
+    assert.equal(request.params.expectedEpoch, 0);
+    return resetReceipt(action);
+  };
+  assert.equal(await h.queue.reconcileFailedReset(action.id), true);
+  assert.equal(store.getOwnerProgressEpoch(owner), 1);
+  const reconciled = h.queue.getFailedOfflineActions()[0];
+  for (const field of ['id', 'type', 'ownerNamespace', 'createdAt', 'failedAt', 'lastErrorCategory', 'lastErrorStatus'])
+    assert.equal(reconciled[field], action[field]);
+  assert.deepEqual(reconciled.payload, action.payload); assert.equal(reconciled.acknowledgedEpoch, 1);
+  assert.ok(reconciled.reconciledAt); assert.equal(h.queue.getOfflineQueue().length, 0);
+  store.saveProgress(owner, 'English', { available: true, progressEpoch: 1, totalXp: 80,
+    streak: 0, completedLessonIds: ['new'], lessonScores: { new: 91 }, weeklyActivity: [] });
+  const saved = JSON.stringify(store.loadProgress(owner, 'English'));
+  assert.equal(await h.queue.reconcileFailedReset(action.id), true);
+  assert.equal(JSON.stringify(store.loadProgress(owner, 'English')), saved);
+  store.acknowledgeProgressEpoch(owner, 2);
+  store.saveProgress(owner, 'English', { available: true, progressEpoch: 2, totalXp: 130,
+    streak: 0, completedLessonIds: ['newer'], lessonScores: { newer: 90 }, weeklyActivity: [] });
+  assert.equal(await h.queue.reconcileFailedReset(action.id), true);
+  assert.equal(store.getOwnerProgressEpoch(owner), 2); assert.equal(store.loadProgress(owner, 'English').totalXp, 130);
+});
+
+test('Phase 6E: stale reset and conflicting key leave newer progress intact', async () => {
+  const h = await durableHarness(), owner = `registered_${A}`, store = h.load('storage');
+  store.acknowledgeProgressEpoch(owner, 2);
+  store.saveProgress(owner, 'English', { available: true, progressEpoch: 2, totalXp: 80,
+    streak: 0, completedLessonIds: ['new'], lessonScores: { new: 91 }, weeklyActivity: [] });
+  h.enqueue('reset-progress', { expectedEpoch: 0 });
+  h.control.dispatch = async () => { throw { response: { status: 409, data: { code: 'STALE_RESET_EPOCH' } } }; };
+  assert.equal(await h.queue.processOfflineQueue(A), false);
+  assert.equal(store.getOwnerProgressEpoch(owner), 2); assert.equal(store.loadProgress(owner, 'English').totalXp, 80);
+  const action = h.queue.getFailedOfflineActions()[0], evidence = JSON.stringify(action);
+  assert.equal(action.lastErrorCategory, 'stale-reset-epoch');
+  h.control.dispatch = async () => { throw { response: { status: 409, data: { code: 'RESET_IDEMPOTENCY_CONFLICT' } } }; };
+  assert.equal(await h.queue.reconcileFailedReset(action.id), false);
+  assert.equal(JSON.stringify(h.queue.getFailedOfflineActions()[0]), evidence);
+  assert.equal(store.loadProgress(owner, 'English').totalXp, 80);
+});
+
+test('Phase 6E: another owner and a replaced session cannot recover a quarantined reset', async () => {
+  const { h, owner, action } = await failedResetHarness(), evidence = h.saved.getItem(key(owner));
+  h.auth().logout(); h.auth().login(user(B), `test-${B}`);
+  assert.equal(h.queue.getFailedOfflineActions().length, 0);
+  assert.equal(await h.queue.reconcileFailedReset(action.id), false); assert.equal(h.requests.length, 1);
+  h.auth().logout(); h.auth().login(user(A), `test-${A}`);
+  const started = deferred(), release = deferred();
+  h.control.dispatch = () => { started.resolve(); return release.promise; };
+  const pending = h.queue.reconcileFailedReset(action.id); await started.promise;
+  h.auth().logout(); h.auth().login(user(A), 'replacement-token');
+  release.resolve(resetReceipt(action)); assert.equal(await pending, false);
+  assert.equal(h.saved.getItem(key(owner)), evidence); assert.equal(h.load('storage').getOwnerProgressEpoch(owner), 0);
+});
+
+for (const field of ['userId', 'operationId', 'expectedEpoch', 'progressEpoch']) {
+  test(`Phase 6E: invalid receipt ${field} cannot acknowledge a reset`, async () => {
+    const { h, owner, action } = await failedResetHarness(), evidence = h.saved.getItem(key(owner));
+    h.control.dispatch = async () => { const reply = resetReceipt(action); reply.data[field] = 'wrong'; return reply; };
+    assert.equal(await h.queue.reconcileFailedReset(action.id), false);
+    assert.equal(h.saved.getItem(key(owner)), evidence); assert.equal(h.load('storage').getOwnerProgressEpoch(owner), 0);
+  });
+}
+
+test('Phase 6E: retryable network/server errors and unknown conflicts retain conservative classification', async () => {
+  const h = await durableHarness(), classify = h.load('policy').classifySyncFailure;
+  for (const status of [500, 503]) {
+    const failure = classify({ response: { status, data: { code: 'STALE_PROGRESS_EPOCH' } } });
+    assert.equal(failure.category, 'backend'); assert.equal(failure.terminal, false);
+  }
+  assert.equal(classify(new Error('offline')).terminal, false);
+  assert.equal(classify({ response: { status: 409, data: { code: 'UNKNOWN_CONFLICT' } } }).category, 'conflict');
+  h.enqueue(); h.control.dispatch = async () => { throw { response: { status: 503 } }; };
+  assert.equal(await h.queue.processOfflineQueue(A), false);
+  assert.equal(h.queue.getOfflineQueue()[0].lastErrorCategory, 'backend');
+  assert.ok(h.queue.getOfflineQueue()[0].nextAttemptAt); assert.equal(h.queue.getFailedOfflineActions().length, 0);
+});
+
+test('Phase 6E: missing/malformed legacy epochs stay quarantined without upgrade or resend', async () => {
+  const h = await durableHarness(), owner = `registered_${A}`;
+  h.load('storage').acknowledgeProgressEpoch(owner, 5);
+  for (const epoch of [undefined, -1, 1.5, '5']) {
+    h.enqueue('complete-lesson', { lessonId: `legacy-${epoch}`, score: 73, progressEpoch: epoch });
+    assert.equal(await h.queue.processOfflineQueue(A), false);
+  }
+  assert.equal(h.requests.length, 0);
+  const evidence = h.saved.getItem(key(owner));
+  assert.equal(h.queue.getFailedOfflineActions()[0].lastErrorCode, 'MISSING_PROGRESS_EPOCH');
+  for (const action of h.queue.getFailedOfflineActions()) assert.equal(await h.queue.reconcileFailedReset(action.id), false);
+  const restarted = await durableHarness(h.saved);
+  assert.equal(await restarted.queue.processOfflineQueue(A), true);
+  assert.equal(restarted.requests.length, 0); assert.equal(h.saved.getItem(key(owner)), evidence);
 });

@@ -53,6 +53,7 @@ void main() {
           payload ??
               {
                 'lessonId': 'one',
+                'progressEpoch': 0,
                 'score': 73,
                 'xpReward': 50,
                 'targetLanguage': 'en'
@@ -61,9 +62,17 @@ void main() {
   http.Response success(http.Request request) => http.Response(
       jsonEncode(request.url.path.endsWith('complete-lesson')
           ? {
-              'data': {'newTotalXp': 50, 'lessonId': 'one', 'score': 73}
+              'data': {
+                'newTotalXp': 50,
+                'lessonId': 'one',
+                'progressEpoch': 0,
+                'score': 73
+              }
             }
-          : {'_id': '507f1f77bcf86cd799439013'}),
+          : {
+              '_id': '507f1f77bcf86cd799439013',
+              if (request.method == 'DELETE') 'progressEpoch': 1
+            }),
       200);
   Future<void> until(bool Function() condition) async {
     for (var i = 0; i < 100 && !condition(); i++) {
@@ -159,8 +168,13 @@ void main() {
         () => MockClient((request) async {
               if (request.method == 'GET') {
                 return http.Response(
-                    jsonEncode(
-                        {'id': a, 'name': 'Test', 'email': '$a@example.com', 'isGuest': false, 'targetLanguage': 'en'}),
+                    jsonEncode({
+                      'id': a,
+                      'name': 'Test',
+                      'email': '$a@example.com',
+                      'isGuest': false,
+                      'targetLanguage': 'en'
+                    }),
                     200);
               }
               calls++;
@@ -240,24 +254,25 @@ void main() {
     });
   }
   test(
-      'failed reset blocks successor and future completions until a new explicit reset',
+      '6E: terminal reset stays diagnostic while valid successor and future completions execute',
       () async {
-    await push('reset-progress', {});
+    await push('reset-progress', {'expectedEpoch': 0});
     await push();
     var calls = 0;
     await http.runWithClient(() async {
       expect(await queue.processQueue(a), false);
-      expect(await queue.getFailedActions(), hasLength(2));
+      expect(await queue.getFailedActions(), hasLength(1));
       await push();
-      expect(await queue.processQueue(a), false);
-      expect(calls, 1);
-      await push('reset-progress', {});
-      expect(await queue.getFailedActions(), isEmpty);
       expect(await queue.processQueue(a), true);
+      expect(calls, 3);
+      await push('reset-progress', {'expectedEpoch': 0});
+      expect(await queue.getFailedActions(), hasLength(1));
+      expect(await queue.processQueue(a), true);
+      expect(await queue.getFailedActions(), hasLength(1));
     },
         () => MockClient((request) async {
               calls++;
-              return http.Response('{}', calls == 1 ? 403 : 200);
+              return calls == 1 ? http.Response('{}', 403) : success(request);
             }));
   });
   test(
@@ -284,7 +299,8 @@ void main() {
         await health.refresh();
         expect(await queue.processQueue(a), false);
         expect(calls, 1);
-        release.complete(http.Response('{"data":{"newTotalXp":50}}', 200));
+        release.complete(
+            http.Response('{"data":{"newTotalXp":50,"progressEpoch":0}}', 200));
         await Future<void>.delayed(const Duration(milliseconds: 20));
         expect(await queue.getQueue(), isEmpty);
         expect(calls, 1);
@@ -408,7 +424,8 @@ void main() {
         await login(b, guest: true);
         await push();
         coordinator.wake();
-        release.complete(http.Response('{"data":{"newTotalXp":50}}', 200));
+        release.complete(
+            http.Response('{"data":{"newTotalXp":50,"progressEpoch":0}}', 200));
         await until(() => requests.length == 2);
         await Future<void>.delayed(const Duration(milliseconds: 20));
         expect(requests.last.headers['Authorization'], 'Bearer token-$b');

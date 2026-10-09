@@ -16,7 +16,7 @@ async function startResetServer() {
   const module = await Test.createTestingModule({
     controllers: [ProgressController],
     providers: [{ provide: ProgressService, useValue: {
-      resetProgress: async userId => { resets.push(userId); return { userId }; },
+      resetProgress: async (userId, expectedEpoch) => { resets.push(userId); return { userId, progressEpoch: expectedEpoch + 1 }; },
       getUserProgress: async userId => ({ userId, resets }),
     } }],
   }).overrideGuard(JwtAuthGuard).useValue({ canActivate(context) {
