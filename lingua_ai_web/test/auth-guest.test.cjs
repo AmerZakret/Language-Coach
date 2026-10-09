@@ -4,6 +4,7 @@ const { join } = require('node:path');
 const { test } = require('node:test');
 const vm = require('node:vm');
 const ts = require('typescript');
+const { locks } = require('./helpers/webLocks.cjs');
 
 // Exercise the actual AuthProvider with in-memory hooks, storage, and API calls.
 // No browser, live backend, or additional test dependencies are required.
@@ -49,25 +50,31 @@ async function mount(localStorage, fetch, fetchMe = async () => {
       if (!(index in state)) state[index] = initial;
       return [state[index], value => { state[index] = value; }];
     },
+    useLayoutEffect: callback => { callback(); },
     useEffect: callback => { effects.push(callback); },
     createElement: (type, props) => ({ type, props }),
   };
   const module = { exports: {} };
-  const sessionModule = { exports: {} };
-  vm.runInNewContext(ts.transpileModule(
-    readFileSync(join(__dirname, '../src/utils/queueSession.ts'), 'utf8'),
-    { compilerOptions: { module: ts.ModuleKind.CommonJS } },
-  ).outputText, { module: sessionModule, exports: sessionModule.exports, localStorage,
-    require: name => {
-      if (name === './userKey') return keyModule.exports;
-      throw new Error(`Unexpected session import: ${name}`);
-    },
-  });
+  const moduleCache = new Map();
+  const lockManager = locks();
+  function loadUtility(name) {
+    if (moduleCache.has(name)) return moduleCache.get(name).exports;
+    const loaded = {exports:{}}; moduleCache.set(name, loaded);
+    vm.runInNewContext(ts.transpileModule(readFileSync(join(__dirname, '../src/utils', name + '.ts'), 'utf8'),
+      {compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText, {
+      module:loaded, exports:loaded.exports, localStorage, navigator:{locks:lockManager}, window:{addEventListener(){}},
+      require: path => path === './userKey' ? keyModule.exports : loadUtility(path.replace('./','')),
+    });
+    return loaded.exports;
+  }
+  const sessionModule = {exports:loadUtility('queueSession')};
   vm.runInNewContext(compiled, {
     module, exports: module.exports, localStorage, fetch,
     require: name => {
       if (name === 'react') return react;
       if (name === '../api/authApi') return { fetchMe };
+      if (name === '../utils/authSessionStorage') return loadUtility('authSessionStorage');
+      if (name === '../utils/browserCoordination') return loadUtility('browserCoordination');
       if (name === '../utils/queueSession') return sessionModule.exports;
       if (name === '../utils/userKey') return keyModule.exports;
       throw new Error(`Unexpected import: ${name}`);
@@ -102,8 +109,8 @@ test('guest login persists the full backend user, ID, and token across refresh',
   assert.equal(context().user.id, guest.user.id);
   assert.equal(context().user.email, guest.user.email);
   assert.equal(context().user.targetLanguage, 'English');
-  assert.deepEqual(JSON.parse(saved.getItem('linguaai_user')), guest.user);
-  assert.equal(saved.getItem('linguaai_token'), guest.access_token);
+  assert.deepEqual(JSON.parse(saved.getItem('linguaai_session_v1')).user, guest.user);
+  assert.equal(JSON.parse(saved.getItem('linguaai_session_v1')).token, guest.access_token);
   const keyBeforeRefresh = progressKey(context());
   assert.equal(keyBeforeRefresh, `guest_${guest.user.id}`);
   const refreshed = await mount(saved, fetch);
@@ -123,7 +130,7 @@ test('an explicit new guest session after logout receives a new identity', async
   await context().loginAsGuest();
   const firstId = context().user.id;
   const firstKey = progressKey(context());
-  context().logout();
+  await context().logout();
   assert.equal(saved.getItem('linguaai_token'), null);
   await context().loginAsGuest();
   assert.notEqual(context().user.id, firstId);
@@ -178,7 +185,7 @@ test('normal login and profile restoration preserve existing behavior', async ()
   const user = { id: '507f1f77bcf86cd799439013', name: 'Normal User',
     email: 'normal@example.com', isGuest: false };
   const context = await mount(saved, async () => { throw new Error('Unexpected guest call'); });
-  context().login(user, 'normal-test-token');
+  await context().login(user, 'normal-test-token');
   const keyBeforeRefresh = progressKey(context());
   const refreshed = await mount(saved, async () => { throw new Error('Unexpected guest call'); },
     async () => user);

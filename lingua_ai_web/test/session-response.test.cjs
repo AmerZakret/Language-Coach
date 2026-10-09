@@ -4,6 +4,7 @@ const { join } = require('node:path');
 const { test } = require('node:test');
 const vm = require('node:vm');
 const ts = require('typescript');
+const { locks } = require('./helpers/webLocks.cjs');
 const A = '507f1f77bcf86cd799439011';
 const B = '507f1f77bcf86cd799439012';
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -20,6 +21,7 @@ const card = id => ({ _id: `card-${id}`, userId: id, targetWord: id,
 const copy = value => JSON.parse(JSON.stringify(value));
 
 function harness(initial = {}) {
+  const lockManager = locks();
   const values = new Map(Object.entries(initial));
   for (const prefix of ['registered', 'guest']) for (const id of [A,B]) { const key = `progress_epoch_${prefix}_${id}`; if (!values.has(key)) values.set(key, '0'); }
   const localStorage = { getItem: k => values.get(k) ?? null,
@@ -75,6 +77,7 @@ function harness(initial = {}) {
       if (!r.slots[i] || !depsEqual(r.slots[i].deps, deps)) r.slots[i] = { fn, deps };
       return r.slots[i].fn;
     },
+    useLayoutEffect: callback => { callback(); },
     useEffect: (fn, deps) => {
       const r = activeRunner, i = r.cursor++;
       if (!r.slots[i] || !depsEqual(r.slots[i].deps, deps)) {
@@ -85,7 +88,7 @@ function harness(initial = {}) {
     },
   };
   const jsx = (type, props) => ({ type, props });
-  const sources = { userKey: 'utils/userKey.ts', queueSession: 'utils/queueSession.ts',
+  const sources = { userKey: 'utils/userKey.ts', queueSession: 'utils/queueSession.ts', authStorage: 'utils/authSessionStorage.ts', coordination: 'utils/browserCoordination.ts', localGuestCards: 'utils/localGuestCards.ts',
     policy: 'utils/syncRetryPolicy.ts', guard: 'utils/useSessionGuard.ts', auth: 'context/AuthContext.tsx',
     storage: 'utils/progressStorage.ts', types: 'types/progress.ts',
     progress: 'context/ProgressContext.tsx', target: 'context/TargetLanguageContext.tsx',
@@ -121,6 +124,7 @@ function harness(initial = {}) {
       fetch: (...args) => h.fetchGuest(...args), console: { log() {}, error() {} },
       setTimeout: fn => { timers.push(fn); return timers.length; }, clearTimeout() {},
       setInterval: () => 1, clearInterval() {},
+      navigator: { locks: lockManager },
       document: { addEventListener() {}, removeEventListener() {} }, window: {},
       require: path => {
         if (path === 'react') return react;
@@ -129,6 +133,9 @@ function harness(initial = {}) {
         if (path === 'react-router-dom') return { useNavigate: () => () => calls.push(['navigate']) };
         if (path.endsWith('.png')) return 'image';
         if (path.endsWith('/userKey')) return load('userKey');
+        if (path.endsWith('/authSessionStorage')) return load('authStorage');
+        if (path.endsWith('/localGuestCards')) return load('localGuestCards');
+        if (path.endsWith('/browserCoordination')) return load('coordination');
         if (path.endsWith('/queueSession')) return load('queueSession');
         if (path.endsWith('/targetLanguage')) return load('language');
         if (path.endsWith('/flashcardMutation')) return load('mutation');
@@ -165,7 +172,7 @@ function harness(initial = {}) {
           ...load('queue'),
           processOfflineQueue: (...args) => h.progressQueue ? load('queue').processOfflineQueue(...args) : h.drain(...args),
           isPendingBackendCard: (...args) => h.queue?.isPendingBackendCard(...args) ?? false,
-          pushToOfflineQueue: (...args) => load('queue').pushToOfflineQueue(...args),
+          pushToOfflineQueue: async (...args) => await load('queue').pushToOfflineQueue(...args),
         };
         if (path.endsWith('/apiClient')) return Object.fromEntries(['get', 'post', 'put', 'delete'].map(method => [method,
           (url, data, config) => {
@@ -198,7 +205,7 @@ function harness(initial = {}) {
   h.progressQueue = true;
   h.mountAuth = () => { h.authRunner = runner('auth', 'AuthProvider'); };
   h.auth = () => h.authRunner.result.props.value;
-  h.login = id => { h.auth().login(user(id), `test-${id}`); h.authRunner.render(); };
+  h.login = async id => { await h.settle(); await h.auth().login(user(id), `test-${id}`); h.authRunner.render(); };
   h.mount = (name, symbol) => { h.progressQueue = name === 'progress'; h.child = runner(name, symbol); };
   h.settle = async () => {
     for (let i = 0; i < 5; i++) {
@@ -206,13 +213,13 @@ function harness(initial = {}) {
       for (const r of [h.authRunner, h.child]) if (r?.mounted && r.dirty) r.render();
     }
   };
-  h.switchToB = async () => { h.auth().logout(); h.login(B); if (h.child) h.child.render(); await h.settle(); };
+  h.switchToB = async () => { await h.auth().logout(); await h.login(B); if (h.child) h.child.render(); await h.settle(); };
   h.load = load;
   return h;
 }
 
 async function pendingCardHarness() {
-  const h = harness(); h.mountAuth(); h.login(A); h.queue = h.load('queue');
+  const h = harness(); h.mountAuth(); await h.login(A); h.queue = h.load('queue');
   h.transport = async method => {
     if (method === 'get') throw new Error('Offline');
     return { data: card(A) };
@@ -228,7 +235,7 @@ async function pendingCardHarness() {
 for (const boundary of ['language', 'account', 'token refresh', 'language ABA']) {
   test(`AI history rejects a late response after ${boundary} switch`, async () => {
     const old = deferred(), current = deferred();
-    const h = harness(); h.mountAuth(); await h.settle(); h.login(A);
+    const h = harness(); h.mountAuth(); await h.settle(); await h.login(A);
     h.isOffline = false;
     const calls = [];
     h.getChatHistory = language => {
@@ -245,7 +252,7 @@ for (const boundary of ['language', 'account', 'token refresh', 'language ABA'])
       }
     } else if (boundary === 'account') await h.switchToB();
     else {
-      h.auth().login(user(A), 'replacement-token'); h.authRunner.render(); h.child.render();
+      await h.auth().login(user(A), 'replacement-token'); h.authRunner.render(); h.child.render();
     }
     await h.settle();
     assert.equal(h.child.exposed.historyLoading, true);
@@ -263,7 +270,7 @@ for (const boundary of ['language', 'account', 'token refresh', 'language ABA'])
 }
 
 test('AI same-language history applies normally', async () => {
-  const h = harness(); h.mountAuth(); await h.settle(); h.login(A); h.isOffline = false;
+  const h = harness(); h.mountAuth(); await h.settle(); await h.login(A); h.isOffline = false;
   const history = [{ role: 'user', message: 'Hello' }, { role: 'assistant', message: 'Hi' }];
   h.getChatHistory = async language => { assert.equal(language, 'English'); return history; };
   h.mount('coach', 'AiCoachPage'); await h.settle();
@@ -273,7 +280,7 @@ test('AI same-language history applies normally', async () => {
 
 test('AI stale history error cannot finish the new-language load', async () => {
   const old = deferred(), current = deferred();
-  const h = harness(); h.mountAuth(); await h.settle(); h.login(A); h.isOffline = false;
+  const h = harness(); h.mountAuth(); await h.settle(); await h.login(A); h.isOffline = false;
   h.getChatHistory = language => language === 'English' ? old.promise : current.promise;
   h.mount('coach', 'AiCoachPage'); await h.settle();
   h.language = 'German'; h.localStorage.setItem('linguaai_target_language', 'German'); h.child.render();
@@ -287,7 +294,7 @@ test('AI stale history error cannot finish the new-language load', async () => {
 
 test('AI history resolved before a deferred updater crosses language boundary is discarded', async () => {
   const old = deferred();
-  const h = harness(); h.mountAuth(); await h.settle(); h.login(A); h.isOffline = false;
+  const h = harness(); h.mountAuth(); await h.settle(); await h.login(A); h.isOffline = false;
   h.getChatHistory = () => old.promise;
   h.mount('coach', 'AiCoachPage'); await h.settle();
   h.deferChildState = true;
@@ -301,7 +308,7 @@ test('AI history resolved before a deferred updater crosses language boundary is
 
 test('AI history completion after unmount cannot update state', async () => {
   const pending = deferred();
-  const h = harness(); h.mountAuth(); await h.settle(); h.login(A); h.isOffline = false;
+  const h = harness(); h.mountAuth(); await h.settle(); await h.login(A); h.isOffline = false;
   h.getChatHistory = () => pending.promise;
   h.mount('coach', 'AiCoachPage'); await h.settle();
   h.child.unmount(); const writes = h.child.writes;
@@ -314,7 +321,7 @@ test('reset contract: web queued reset reaches the real Nest route and acknowled
   const server = await startResetServer();
   try {
     const h = harness(); h.mountAuth(); await h.settle();
-    h.auth().login(user(server.owner), server.token); h.authRunner.render();
+    await h.auth().login(user(server.owner), server.token); h.authRunner.render();
     h.resetProgress = async (_id, url, config) => {
       const response = await fetch(`${server.url}${url}`, { method: 'DELETE', headers: {
         Authorization: `Bearer ${config.offlineQueueSession.token}`,
@@ -325,7 +332,7 @@ test('reset contract: web queued reset reaches the real Nest route and acknowled
       return { data: await response.json() };
     };
     const queue = h.load('queue');
-    queue.pushToOfflineQueue('reset-progress', { expectedEpoch: 0 }, `registered_${server.owner}`);
+    await queue.pushToOfflineQueue('reset-progress', { expectedEpoch: 0 }, `registered_${server.owner}`);
     assert.equal(await queue.processOfflineQueue(server.owner), true);
     assert.equal(queue.getOfflineQueue().length, 0);
     assert.equal(queue.getFailedOfflineActions().length, 0);
@@ -360,7 +367,8 @@ for (const online of [true, false]) {
     assert.equal(h.child.exposed.allCards.length, 0);
     assert.equal(h.child.exposed.dueCards.length, 0);
     assert.deepEqual(JSON.parse(h.localStorage.getItem('flashcards_all_guest_English')), []);
-    assert.deepEqual(JSON.parse(h.localStorage.getItem('flashcards_due_guest_English')), []);
+    // Due state is derived from the one durable all-card snapshot.
+    assert.equal(h.localStorage.getItem('flashcards_due_guest_English'), null);
     assert.equal(h.load('queue').getOfflineQueue().length, 0);
     assert.equal(h.calls.length, 0);
   });
@@ -370,7 +378,7 @@ for (const backendGuest of [true, false]) {
   test(`online flashcard handlers keep backend identity (backend guest: ${backendGuest})`, async () => {
     const h = harness(); h.mountAuth(); await h.settle();
     if (backendGuest) { await h.auth().loginAsGuest(); await h.settle(); }
-    else h.login(A);
+    else await h.login(A);
     h.isOffline = false;
     let savedCard = card(A);
     const mutations = [];
@@ -408,7 +416,7 @@ function findResetButton(node) {
 }
 for (const switchAccount of [true, false]) {
   test(`profile reset callback respects the active session (switch account: ${switchAccount})`, async () => {
-    const h = harness(); h.mountAuth(); h.login(A); h.mount('profile', 'ProfilePage'); await h.settle();
+    const h = harness(); h.mountAuth(); await h.login(A); h.mount('profile', 'ProfilePage'); await h.settle();
     h.child.exposed.setResetConfirm(true); h.child.render();
     const pending = deferred(); let resets = 0;
     h.resetProgress = () => { resets++; return pending.promise; };
@@ -424,7 +432,7 @@ for (const switchAccount of [true, false]) {
   });
 }
 test('profile reset deferred state updater cannot close a newer owner confirmation', async () => {
-  const h = harness(); h.mountAuth(); h.login(A); h.mount('profile', 'ProfilePage'); await h.settle();
+  const h = harness(); h.mountAuth(); await h.login(A); h.mount('profile', 'ProfilePage'); await h.settle();
   h.child.exposed.setResetConfirm(true); h.child.render();
   const pending = deferred(); h.resetProgress = () => pending.promise;
   const resetting = findResetButton(h.child.result).props.onClick();
@@ -475,24 +483,39 @@ test('FlashcardsPage queue write failure cannot locally hide an uncancelled pend
     if (key.startsWith('linguaai_offline_queue_')) throw new Error('Disk full');
     write(key, value);
   };
-  await assert.rejects(h.child.exposed.handleDeleteCard(pending._id), /Disk full/);
+  await h.child.exposed.handleDeleteCard(pending._id); await h.settle();
+  assert.equal(h.child.exposed.error, 'Disk full');
   assert.equal(h.child.exposed.allCards[0]._id, pending._id);
   assert.equal(h.queue.getOfflineQueue().length, 1);
+});
+
+test('old same-owner render cannot enqueue a draft under a replacement token generation', async () => {
+  const h = harness(); h.mountAuth(); await h.login(A); h.isOffline = true;
+  h.mount('cards', 'FlashcardsPage'); await h.settle();
+  h.child.exposed.handleOpenAdd(); h.child.render();
+  h.child.exposed.setFormData({ targetWord: 'old draft', turkishTranslation: 'translation' }); h.child.render();
+  const oldSave = h.child.exposed.handleSaveCard;
+  const cached = h.localStorage.getItem(`flashcards_all_${A}_English`);
+  await h.auth().login(user(A), 'replacement-token'); h.authRunner.render();
+  // The old DOM handler is still reachable before the child is committed again.
+  await oldSave({ preventDefault() {} });
+  assert.equal(h.load('queue').getOfflineQueue().length, 0);
+  assert.equal(h.localStorage.getItem(`flashcards_all_${A}_English`), cached);
 });
 
 test('startup A profile response cannot overwrite B auth/storage', async () => {
   const h = harness({ linguaai_user: JSON.stringify(user(A)), linguaai_token: `test-${A}` });
   const pending = deferred(); h.api.fetchMe = () => pending.promise;
-  h.mountAuth(); h.login(B);
+  h.mountAuth(); await h.login(B);
   pending.resolve(user(A)); await h.settle();
   assert.equal(h.auth().user.id, B);
-  assert.equal(JSON.parse(h.localStorage.getItem('linguaai_user')).id, B);
+  assert.equal(JSON.parse(h.localStorage.getItem('linguaai_session_v1')).user.id, B);
 });
 for (const failure of [false, true]) {
   test(`pending guest login cannot restore A or local guest after B login (failure: ${failure})`, async () => {
     const h = harness(); h.mountAuth(); await h.settle();
     const pending = deferred(); h.fetchGuest = () => pending.promise;
-    const operation = h.auth().loginAsGuest(); h.auth().logout(); h.login(B);
+    const operation = h.auth().loginAsGuest(); await h.auth().logout(); await h.login(B);
     if (failure) pending.reject(new Error('Offline'));
     else pending.resolve({ ok: true, json: async () => ({ user: { ...user(A), email: 'guest-a@guest.lingua.local' }, access_token: `test-${A}` }) });
     await operation; await h.settle();
@@ -500,16 +523,16 @@ for (const failure of [false, true]) {
   });
 }
 test('ordinary same-session profile update does not advance revision', async () => {
-  const h = harness(); h.mountAuth(); h.login(A);
+  const h = harness(); h.mountAuth(); await h.login(A);
   const revision = h.load('queueSession').getOfflineQueueSession().revision;
-  h.auth().login({ ...user(A), name: 'Updated' }, `test-${A}`); h.authRunner.render();
+  await h.auth().login({ ...user(A), name: 'Updated' }, `test-${A}`); h.authRunner.render();
   assert.equal(h.load('queueSession').getOfflineQueueSession().revision, revision);
   assert.equal(h.auth().user.name, 'Updated');
 });
 
 for (const kind of ['fetch', 'completion-success', 'completion-failure', 'reset', 'language', 'unmount']) {
   test(`progress discards stale ${kind} response and follow-ups`, async () => {
-    const h = harness(); h.isOffline = false; h.mountAuth(); h.login(A); h.mount('progress', 'ProgressProvider'); await h.settle();
+    const h = harness(); h.isOffline = false; h.mountAuth(); await h.login(A); h.mount('progress', 'ProgressProvider'); await h.settle();
     const pending = deferred();
     let operation;
     if (kind.startsWith('completion')) {
@@ -522,6 +545,7 @@ for (const kind of ['fetch', 'completion-success', 'completion-failure', 'reset'
       h.fetchProgress = (id, lang) => id === A && lang === 'English' ? pending.promise : Promise.resolve(progress(30));
       operation = h.child.result.props.value.reloadProgress();
     }
+    await h.settle(); // Wait for the asynchronous queue lock and request dispatch.
     if (kind === 'language') {
       h.language = 'German'; h.localStorage.setItem('linguaai_target_language', 'German'); h.child.render(); await h.settle();
     } else if (kind === 'unmount') h.child.unmount();
@@ -541,7 +565,7 @@ for (const kind of ['fetch', 'completion-success', 'completion-failure', 'reset'
 
 for (const kind of ['fetch', 'create', 'update', 'delete', 'review', 'failed-create', 'sync-refresh', 'language', 'unmount']) {
   test(`flashcards discard stale ${kind} UI/cache changes`, async () => {
-    const h = harness(); h.isOffline = false; h.mountAuth(); h.login(A);
+    const h = harness(); h.isOffline = false; h.mountAuth(); await h.login(A);
     h.mount('cards', 'FlashcardsPage'); await h.settle();
     const pending = deferred(); let operation;
     const originalTransport = h.transport;
@@ -560,6 +584,7 @@ for (const kind of ['fetch', 'create', 'update', 'delete', 'review', 'failed-cre
       else if (['create', 'update', 'failed-create'].includes(kind)) operation = h.child.exposed.handleSaveCard({ preventDefault() {} });
       else operation = h.child.exposed.fetchCards();
     }
+    await h.settle(); // Wait for the asynchronous queue lock and request dispatch.
     if (kind === 'language') {
       h.language = 'German'; h.localStorage.setItem('linguaai_target_language', 'German');
       h.transport = (method, url, data) => url.includes('targetLanguage=de') ? originalTransport(method, url, data) : pending.promise;
@@ -581,7 +606,7 @@ for (const kind of ['fetch', 'create', 'update', 'delete', 'review', 'failed-cre
 }
 
 test('A language update cannot call login to restore A after B becomes active', async () => {
-  const h = harness(); h.mountAuth(); h.login(A); h.mount('target', 'TargetLanguageProvider'); await h.settle();
+  const h = harness(); h.mountAuth(); await h.login(A); h.mount('target', 'TargetLanguageProvider'); await h.settle();
   const pending = deferred(); h.api.updateProfile = () => pending.promise;
   const operation = h.child.result.props.value.setTargetLanguage('German');
   await h.switchToB();
@@ -590,7 +615,7 @@ test('A language update cannot call login to restore A after B becomes active', 
   assert.equal(h.auth().user.id, B); assert.equal(h.localStorage.getItem('linguaai_target_language'), stored);
 });
 test('older same-session language update cannot overwrite a newer language', async () => {
-  const h = harness(); h.mountAuth(); h.login(A); h.mount('target', 'TargetLanguageProvider'); await h.settle();
+  const h = harness(); h.mountAuth(); await h.login(A); h.mount('target', 'TargetLanguageProvider'); await h.settle();
   const pending = deferred();
   h.api.updateProfile = data => data.targetLanguage === 'German' ? pending.promise : Promise.resolve({ ...user(A), targetLanguage: data.targetLanguage });
   const first = h.child.result.props.value.setTargetLanguage('German');
@@ -599,7 +624,7 @@ test('older same-session language update cannot overwrite a newer language', asy
   assert.equal(h.auth().user.targetLanguage, 'French');
 });
 test('stale profile-name response cannot replace B authentication', async () => {
-  const h = harness(); h.mountAuth(); h.login(A); h.mount('profile', 'ProfilePage'); await h.settle();
+  const h = harness(); h.mountAuth(); await h.login(A); h.mount('profile', 'ProfilePage'); await h.settle();
   h.child.exposed.setName('new name'); h.child.render();
   const pending = deferred(); h.api.updateProfile = () => pending.promise;
   const operation = h.child.exposed.handleSave(); await h.switchToB();
@@ -615,7 +640,7 @@ test('login screen cannot apply an old login response after B is active', async 
   assert.equal(h.auth().user.id, B); assert.equal(h.calls.length, count);
 });
 test('current-session progress and flashcard responses still apply and cache', async () => {
-  const h = harness(); h.isOffline = false; h.mountAuth(); h.login(B); h.mount('progress', 'ProgressProvider'); await h.settle();
+  const h = harness(); h.isOffline = false; h.mountAuth(); await h.login(B); h.mount('progress', 'ProgressProvider'); await h.settle();
   assert.equal(h.child.result.props.value.progress.totalXp, 20);
   assert.equal(JSON.parse(h.localStorage.getItem(`progress_registered_${B}_English`)).totalXp, 20);
   h.child.unmount(); h.isOffline = false; h.mount('cards', 'FlashcardsPage'); await h.settle();
@@ -624,7 +649,7 @@ test('current-session progress and flashcard responses still apply and cache', a
 });
 
 async function offlineProgressHarness(initial) {
-  const h = harness(initial); h.mountAuth(); if (!initial) h.login(A);
+  const h = harness(initial); h.mountAuth(); if (!initial) await h.login(A);
   await h.settle();
   h.serverProgress = progress(0); h.sent = [];
   h.fetchProgress = async () => h.serverProgress;
@@ -693,7 +718,7 @@ test('Phase 4E: append during GET wins over server snapshot, without lost pendin
   const h = await offlineProgressHarness(); await h.online();
   const pending = deferred(); h.fetchProgress = () => pending.promise;
   const refresh = h.value().reloadProgress(); await tick();
-  h.load('queue').pushToOfflineQueue('complete-lesson', { lessonId: 'new', score: 73,
+  await h.load('queue').pushToOfflineQueue('complete-lesson', { lessonId: 'new', score: 73,
     xpReward: 50, targetLanguage: 'English', progressEpoch: 0, _lessonLanguageBound: true }, `registered_${A}`);
   pending.resolve(progress(0)); await refresh; await h.settle();
   assert.equal(h.value().progress.totalXp, 50); assert.deepEqual(copy(h.value().progress.completedLessonIds), ['new']);
@@ -704,7 +729,7 @@ test('Phase 4E: pending completions cannot cross account or language boundaries'
   h.language = 'German'; h.localStorage.setItem('linguaai_target_language', 'German'); h.child.render(); await h.settle();
   assert.equal(h.value().progress.totalXp, 0);
   await h.switchToB(); assert.equal(h.value().progress.totalXp, 0);
-  h.auth().logout(); h.login(A); h.language = 'English'; h.localStorage.setItem('linguaai_target_language', 'English');
+  await h.auth().logout(); await h.login(A); h.language = 'English'; h.localStorage.setItem('linguaai_target_language', 'English');
   h.child.render(); await h.settle(); assert.equal(h.value().progress.totalXp, 50);
 });
 
@@ -746,7 +771,7 @@ test('Phase 4E: reset waits behind active completion and cannot be undone by its
 });
 
 test('Phase 4E: owner-scoped legacy action lacking a score is retained without inventing 100', async () => {
-  const h = await offlineProgressHarness(); h.load('queue').pushToOfflineQueue('complete-lesson', { lessonId: 'unknown-score' }, `registered_${A}`);
+  const h = await offlineProgressHarness(); await h.load('queue').pushToOfflineQueue('complete-lesson', { lessonId: 'unknown-score' }, `registered_${A}`);
   await h.online(); assert.equal(h.sent.length, 0); assert.equal(h.load('queue').getOfflineQueue().length, 0);
   assert.equal(h.load('queue').getFailedOfflineActions().length, 1);
 });
@@ -755,7 +780,7 @@ test('Phase 4E: owner-scoped legacy action lacking a score is retained without i
 test('Phase 4E: valid legacy owned score gains cached lesson context without ID replacement', async () => {
   const h = await offlineProgressHarness();
   h.localStorage.setItem('linguaai_lessons_English', JSON.stringify([{ id: 'legacy', xpReward: 50, targetLanguage: 'English' }]));
-  h.load('queue').pushToOfflineQueue('complete-lesson', { lessonId: 'legacy', score: 73, progressEpoch: 0 }, `registered_${A}`);
+  await h.load('queue').pushToOfflineQueue('complete-lesson', { lessonId: 'legacy', score: 73, progressEpoch: 0 }, `registered_${A}`);
   const id = h.load('queue').getOfflineQueue()[0].id;
   await h.value().reloadProgress(); await h.settle();
   assert.equal(h.value().progress.totalXp, 50);
@@ -801,12 +826,12 @@ test('Phase 4E: deferred React updater checks session again before applying pend
   h.deferChildState = false; await h.settle();
   assert.equal(h.value().progress.totalXp, 0); assert.deepEqual(copy(h.value().progress.completedLessonIds), []);
   assert.equal(h.load('queue').getOfflineQueue().length, 0);
-  h.auth().logout(); h.login(A); h.child.render(); await h.settle();
+  await h.auth().logout(); await h.login(A); h.child.render(); await h.settle();
   assert.equal(h.value().progress.totalXp, 50);
 });
 
 async function onlineMutationHarness() {
-  const h = harness(); h.mountAuth(); h.login(A); h.isOffline = false;
+  const h = harness(); h.mountAuth(); await h.login(A); h.isOffline = false;
   h.mutations = [];
   h.transport = async (method, url, data, config) => {
     if (method === 'get') return { data: [card(A)] };
@@ -886,7 +911,7 @@ test('Phase 5C: changing a failed mutation payload creates a new operation key',
 });
 
 test('Phase 5C: web image posts allow clearing their caption, text-only posts do not', async () => {
-  const h = harness(); h.mountAuth(); h.login(A);
+  const h = harness(); h.mountAuth(); await h.login(A);
   h.communityPosts = [{ _id: 'image', userId: A, userName: 'Test', text: 'caption', imageUrl: '/image.png',
     learningLanguage: 'English', likes: [], likesCount: 0, createdAt: new Date().toISOString() },
     { _id: 'text', userId: A, userName: 'Test', text: 'caption', learningLanguage: 'English',
@@ -920,7 +945,7 @@ for (const backendGuest of [false, true]) {
 test('Phase 5E: stale startup 401 cannot invalidate a replacement session', async () => {
   const h = harness({ linguaai_user: JSON.stringify(user(A)), linguaai_token: `test-${A}` });
   const pending = deferred(); h.api.fetchMe = () => pending.promise;
-  h.mountAuth(); h.login(B);
+  h.mountAuth(); await h.login(B);
   pending.reject({ response: { status: 401 } }); await h.settle();
   assert.equal(h.auth().user.id, B); assert.equal(h.auth().token, `test-${B}`);
 });
@@ -934,7 +959,7 @@ test('Phase 5E: local_guest restoration never sends a token validation request',
 });
 
 async function writingHarness() {
-  const h = harness(); h.mountAuth(); h.login(A); h.isOffline = false;
+  const h = harness(); h.mountAuth(); await h.login(A); h.isOffline = false;
   h.mount('writing', 'WritingPracticePage'); await h.settle();
   h.child.exposed.setTopic('Topic'); h.child.exposed.setText('A sufficiently long writing sample.');
   h.child.render(); return h;
@@ -962,7 +987,7 @@ test('Phase 5E: stale writing failure cannot change the replacement session UI',
   const h = await writingHarness(); const pending = deferred();
   h.checkWriting = () => pending.promise;
   const request = h.child.exposed.handleSubmit(); h.child.render();
-  h.login(B); h.child.render(); await h.settle();
+  await h.login(B); h.child.render(); await h.settle();
   pending.reject({ response: { status: 503, data: { message: 'Writing evaluation is temporarily unavailable. Please try again.' } } });
   await request; await h.settle();
   assert.equal(h.child.exposed.error, ''); assert.equal(h.child.exposed.loading, false);
@@ -971,7 +996,7 @@ test('Phase 5E: stale writing failure cannot change the replacement session UI',
 });
 
 test('Phase 6B: successful pronunciation is feedback only, with no persistent XP or reward badge', async () => {
-  const h = harness(); h.mountAuth(); h.login(A); h.isOffline = false;
+  const h = harness(); h.mountAuth(); await h.login(A); h.isOffline = false;
   h.mount('pronunciation', 'PronunciationPracticePage'); await h.settle();
   h.child.exposed.setTargetText('Hello world'); h.child.render(); await h.settle();
   h.child.exposed.setAudioBlob({ recorded: true }); h.child.render();
@@ -1019,7 +1044,7 @@ test('Phase 6A: retry and quarantine preserve original epoch; legacy work never 
   await h.online();
   const failed = queue.getFailedOfflineActions()[0];
   assert.equal(failed.id, action.id); assert.equal(failed.payload.progressEpoch, 0);
-  queue.pushToOfflineQueue('complete-lesson', { lessonId: 'legacy', score: 73 }, owner);
+  await queue.pushToOfflineQueue('complete-lesson', { lessonId: 'legacy', score: 73 }, owner);
   h.saveProgress = async () => { throw new Error('legacy must not dispatch'); };
   await h.value().reloadProgress(); await h.settle();
   assert.equal(queue.getFailedOfflineActions()[1].payload.progressEpoch, undefined);
@@ -1132,7 +1157,7 @@ test('Phase 6C: GET failures preserve acknowledged progress and expose their exi
 test('Phase 6C: trusted cached lesson repairs old UI-language metadata without changing epoch or operation ID', async () => {
   const h = await offlineProgressHarness(), queue = h.load('queue');
   h.localStorage.setItem('linguaai_lessons_English', JSON.stringify([{ id: 'one', targetLanguage: 'en', xpReward: 50 }]));
-  queue.pushToOfflineQueue('complete-lesson', { lessonId: 'one', score: 73, xpReward: 50,
+  await queue.pushToOfflineQueue('complete-lesson', { lessonId: 'one', score: 73, xpReward: 50,
     targetLanguage: 'German', progressEpoch: 0 }, `registered_${A}`);
   const id = queue.getOfflineQueue()[0].id;
   h.language = 'German'; h.localStorage.setItem('linguaai_target_language', 'German'); h.child.render(); await h.settle();
@@ -1144,14 +1169,14 @@ test('Phase 6C: trusted cached lesson repairs old UI-language metadata without c
 test('Phase 6C: invalid newer snapshot cannot advance epoch or erase valid cache', async () => {
   const h = await offlineProgressHarness(), owner = `registered_${A}`, queue = h.load('queue'), store = h.load('storage');
   store.saveProgress(owner, 'en', { ...progress(50), completedLessonIds: ['one'] });
-  assert.equal(queue.saveServerProgress(owner, 'English', queue.getProgressQueueRevision(owner),
+  assert.equal(await queue.saveServerProgress(owner, 'English', queue.getProgressQueueRevision(owner),
     { ...progress(-1), progressEpoch: 1 }), false);
   assert.equal(store.getOwnerProgressEpoch(owner), 0);
   assert.equal(store.loadProgress(owner, 'en').totalXp, 50);
 });
 test('Phase 6C: unverified legacy language is not optimistic and authoritative acknowledgement supplies binding', async () => {
   const h = await offlineProgressHarness(), owner = `registered_${A}`;
-  h.load('queue').pushToOfflineQueue('complete-lesson', { lessonId: 'one', score: 73,
+  await h.load('queue').pushToOfflineQueue('complete-lesson', { lessonId: 'one', score: 73,
     xpReward: 50, targetLanguage: 'German', progressEpoch: 0 }, owner);
   h.language = 'German'; h.localStorage.setItem('linguaai_target_language', 'German'); h.child.render(); await h.settle();
   assert.equal(h.value().progress.completedLessonIds.length, 0);

@@ -19,7 +19,7 @@ const INTERFACE_LANGS = [
 const TARGET_LANGS = ["English", "German", "Spanish", "French", "Arabic"];
 
 export function ProfilePage() {
-  const { user, isGuest, logout, login, token } = useAuth();
+  const { user, isGuest, logout, updateUser, token } = useAuth();
   const captureSession = useSessionGuard(getUserProgressKey(user, isGuest, token));
   const { language, setLanguage, t } = useLanguage();
   const { targetLanguage, setTargetLanguage } = useTargetLanguage();
@@ -49,8 +49,9 @@ export function ProfilePage() {
       if (name.trim() && name !== user?.name && !isGuest && token) {
         const updatedUser = await updateProfile({ name });
         if (!isCurrent()) return;
-        login(updatedUser, token);
+        await updateUser(updatedUser);
       }
+      if (!isCurrent()) return;
       setSaved(true);
       setTimeout(() => { if (isCurrent()) setSaved(false); }, 2000);
     } catch (e) {

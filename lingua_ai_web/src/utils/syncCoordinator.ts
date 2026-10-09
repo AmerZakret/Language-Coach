@@ -1,3 +1,4 @@
+import { coordinationAvailable } from './browserCoordination';
 import { backendReachability } from './backendReachability';
 import type { BackendReachability } from './backendReachability';
 import { getOfflineQueue, getFailedOfflineActions, processOfflineQueue, subscribeOfflineQueue } from './offlineQueue';
@@ -32,7 +33,7 @@ export class SyncCoordinator {
     this.timer = setTimeout(() => { void this.drain(); }, 0);
   };
   private schedule() {
-    if (!this.started || !this.health.snapshot().backendReachable) return;
+    if (!coordinationAvailable() || !this.started || !this.health.snapshot().backendReachable) return;
     const session = getOfflineQueueSession();
     if (!isOfflineQueueSessionActive(session)) return;
     const first = getOfflineQueue()[0];
@@ -41,7 +42,7 @@ export class SyncCoordinator {
     this.timer = setTimeout(() => { void this.drain(); }, delay);
   }
   private async drain() {
-    if (!this.started || this.running || !this.health.snapshot().backendReachable) return;
+    if (!coordinationAvailable() || !this.started || this.running || !this.health.snapshot().backendReachable) return;
     const session = getOfflineQueueSession();
     if (!isOfflineQueueSessionActive(session)) return;
     this.running = true;

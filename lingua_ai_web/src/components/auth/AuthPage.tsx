@@ -41,7 +41,7 @@ export function AuthPage({ initialMode }: AuthPageProps) {
         data = await apiRegister(name, email, password);
       }
       if (!isCurrent()) return;
-      login(data.user, data.access_token);
+      await login(data.user, data.access_token);
       navigate("/");
     } catch (err: any) {
       if (!isCurrent()) return;
@@ -57,8 +57,8 @@ export function AuthPage({ initialMode }: AuthPageProps) {
     }
   };
 
-  const handleGuest = () => {
-    loginAsGuest();
+  const handleGuest = async () => {
+    await loginAsGuest();
     navigate("/");
   };
 

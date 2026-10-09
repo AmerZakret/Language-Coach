@@ -4,6 +4,7 @@ const { join } = require('node:path');
 const { test } = require('node:test');
 const vm = require('node:vm');
 const ts = require('typescript');
+const { locks } = require('./helpers/webLocks.cjs');
 
 const A = '507f1f77bcf86cd799439011';
 const B = '507f1f77bcf86cd799439012';
@@ -38,6 +39,7 @@ function storage() {
 // Execute the real queue, AuthProvider, namespace policy, and Axios interceptor.
 // Only hooks, browser storage, and the transport are replaced; no live backend.
 function harness(saved = storage(), fakeTimers = false) {
+  const lockManager = locks();
   const clock = { now: Date.now() };
   class ClockDate extends Date {
     constructor(...args) { super(...(args.length ? args : [clock.now])); }
@@ -85,6 +87,7 @@ function harness(saved = storage(), fakeTimers = false) {
       if (!(index in state)) state[index] = initial;
       return [state[index], value => { state[index] = value; }];
     },
+    useLayoutEffect: callback => { callback(); },
     useEffect: callback => effects.push(callback),
     createElement: (type, props) => ({ type, props }),
   };
@@ -99,6 +102,7 @@ function harness(saved = storage(), fakeTimers = false) {
   function request(method, url, data, config = {}) {
     let pending = Promise.resolve({ ...config, method, url, data, headers: { ...config.headers } });
     // Match Axios's asynchronous interceptor boundary before actual dispatch.
+    if (control.beforeInterceptors) pending = pending.then(async config => { await control.beforeInterceptors(); return config; });
     for (const interceptor of requestInterceptors) pending = pending.then(interceptor);
     return pending.then(prepared => {
       requests.push(prepared);
@@ -124,7 +128,7 @@ function harness(saved = storage(), fakeTimers = false) {
   const sources = {
     reachability: 'utils/backendReachability.ts', coordinator: 'utils/syncCoordinator.ts',
     policy: 'utils/syncRetryPolicy.ts', storage: 'utils/progressStorage.ts', types: 'types/progress.ts',
-    userKey: 'utils/userKey.ts', queueSession: 'utils/queueSession.ts',
+    userKey: 'utils/userKey.ts', queueSession: 'utils/queueSession.ts', authStorage: 'utils/authSessionStorage.ts', coordination: 'utils/browserCoordination.ts',
     apiClient: 'api/apiClient.ts', offlineQueue: 'utils/offlineQueue.ts',
     auth: 'context/AuthContext.tsx',
     authApi: 'api/authApi.ts', progressApi: 'api/progressApi.ts', language: 'utils/targetLanguage.ts', mutation: 'utils/flashcardMutation.ts',
@@ -142,7 +146,7 @@ function harness(saved = storage(), fakeTimers = false) {
     vm.runInNewContext(compiled, {
       module, exports: module.exports, localStorage: saved, Date: ClockDate, AbortController,
       setTimeout: timeout, clearTimeout: cancel, setInterval: interval, clearInterval: cancelInterval,
-      navigator: { onLine: true }, window: { addEventListener() {}, removeEventListener() {} },
+      navigator: { onLine: true, locks: lockManager }, window: { addEventListener() {}, removeEventListener() {} },
       console: { log() {}, error() {} },
       fetch: (...args) => control.fetchGuest(...args),
       require: name => {
@@ -155,6 +159,8 @@ function harness(saved = storage(), fakeTimers = false) {
         if (name.endsWith('/progressStorage')) return load('storage');
         if (name.endsWith('/types/progress')) return load('types');
         if (name.endsWith('/userKey')) return load('userKey');
+        if (name.endsWith('/authSessionStorage')) return load('authStorage');
+        if (name.endsWith('/browserCoordination')) return load('coordination');
         if (name.endsWith('/queueSession')) return load('queueSession');
         if (name.endsWith('/targetLanguage')) return load('language');
         if (name.endsWith('/flashcardMutation')) return load('mutation');
@@ -169,15 +175,18 @@ function harness(saved = storage(), fakeTimers = false) {
   const provider = load('auth');
   const auth = () => {
     cursor = 0;
-    return provider.AuthProvider({ children: null }).props.value;
+    const value = provider.AuthProvider({ children: null }).props.value;
+    return { ...value, ...Object.fromEntries(['login','logout','loginAsGuest'].map(method => [method,
+      async (...args) => { await value[method](...args); auth(); }])) };
+
   };
   async function mount() {
     auth();
     for (const effect of [...effects]) effect();
     await tick();
   }
-  const enqueue = (type = 'complete-lesson', data = payload) => {
-    queue.pushToOfflineQueue(type, { ...(type === 'complete-lesson' ? { progressEpoch: 0 } : type === 'reset-progress' ? { expectedEpoch: 0 } : {}), ...data }, session.getOfflineQueueSession().ownerNamespace);
+  const enqueue = async (type = 'complete-lesson', data = payload) => {
+    await queue.pushToOfflineQueue(type, { ...(type === 'complete-lesson' ? { progressEpoch: 0 } : type === 'reset-progress' ? { expectedEpoch: 0 } : {}), ...data }, session.getOfflineQueueSession().ownerNamespace);
   };
   return { advanceTimers, advance: ms => { clock.now += ms; }, load, saved, requests, control, queue, session, auth, mount, enqueue,
     authApi: load('authApi'), progressApi: load('progressApi'), client: load('apiClient').default };
@@ -186,20 +195,20 @@ function harness(saved = storage(), fakeTimers = false) {
 test('registered A logout, B isolation, and A recovery preserve owner queues', async () => {
   const h = harness();
   await h.mount();
-  h.auth().login(user(A), `test-${A}`);
-  h.enqueue();
+  await h.auth().login(user(A), `test-${A}`);
+  await h.enqueue();
   const savedA = h.saved.getItem(key(`registered_${A}`));
-  h.auth().logout();
-  h.auth().login(user(B), `test-${B}`);
+  await h.auth().logout();
+  await h.auth().login(user(B), `test-${B}`);
   assert.equal(h.queue.getOfflineQueue().length, 0);
   assert.equal(await h.queue.processOfflineQueue(A), false);
-  h.enqueue();
+  await h.enqueue();
   assert.equal(await h.queue.processOfflineQueue(B), true);
   assert.equal(h.requests.length, 1);
   assert.equal(h.requests[0].headers.Authorization, `Bearer test-${B}`);
   assert.equal(h.saved.getItem(key(`registered_${A}`)), savedA);
-  h.auth().logout();
-  h.auth().login(user(A), `test-${A}`);
+  await h.auth().logout();
+  await h.auth().login(user(A), `test-${A}`);
   assert.equal(h.queue.getOfflineQueue().length, 1);
   assert.equal(await h.queue.processOfflineQueue(A), true);
   assert.equal(h.requests[1].headers.Authorization, `Bearer test-${A}`);
@@ -209,25 +218,25 @@ test('backend guests A/B, registered same ID, and local guest queues stay separa
   const h = harness();
   await h.mount();
   await h.auth().loginAsGuest();
-  h.enqueue();
+  await h.enqueue();
   const local = h.saved.getItem(key('local_guest'));
   assert.equal(await h.queue.processOfflineQueue('guest'), false);
   h.control.fetchGuest = async () => ({ ok: true, json: async () => guest(A) });
   await h.auth().loginAsGuest();
-  h.enqueue();
+  await h.enqueue();
   const savedA = h.saved.getItem(key(`guest_${A}`));
   const refreshed = harness(h.saved);
   await refreshed.mount();
   assert.equal(refreshed.queue.getOfflineQueue()[0].ownerNamespace, `guest_${A}`);
   assert.equal(refreshed.saved.getItem(key(`guest_${A}`)), savedA);
-  refreshed.auth().logout();
+  await refreshed.auth().logout();
   refreshed.control.fetchGuest = async () => ({ ok: true, json: async () => guest(B) });
   await refreshed.auth().loginAsGuest();
   assert.equal(refreshed.queue.getOfflineQueue().length, 0);
-  refreshed.enqueue();
+  await refreshed.enqueue();
   assert.equal(await refreshed.queue.processOfflineQueue(B), true);
   assert.equal(refreshed.saved.getItem(key(`guest_${A}`)), savedA);
-  refreshed.auth().login(user(A), `test-${A}`);
+  await refreshed.auth().login(user(A), `test-${A}`);
   assert.equal(refreshed.queue.getOfflineQueue().length, 0);
   assert.equal(refreshed.saved.getItem(key('local_guest')), local);
   refreshed.control.fetchGuest = async () => ({ ok: true, json: async () => guest(A) });
@@ -239,18 +248,18 @@ for (const sameAccount of [false, true]) {
   test(`account switch during drain retains all unacknowledged actions (same account: ${sameAccount})`, async () => {
     const h = harness();
     await h.mount();
-    h.auth().login(user(A), `test-${A}`);
-    h.enqueue();
-    h.enqueue();
+    await h.auth().login(user(A), `test-${A}`);
+    await h.enqueue();
+    await h.enqueue();
     const started = deferred();
     const release = deferred();
     h.control.dispatch = async () => { started.resolve(); return release.promise; };
     const drain = h.queue.processOfflineQueue(A);
     await started.promise;
     const savedA = h.saved.getItem(key(`registered_${A}`));
-    h.auth().logout();
-    h.auth().login(user(sameAccount ? A : B), `test-${sameAccount ? A : B}`);
-    if (!sameAccount) h.enqueue();
+    await h.auth().logout();
+    await h.auth().login(user(sameAccount ? A : B), `test-${sameAccount ? A : B}`);
+    if (!sameAccount) await h.enqueue();
     const savedB = h.saved.getItem(key(`registered_${B}`));
     release.resolve({ data: {} });
     assert.equal(await drain, false);
@@ -258,7 +267,7 @@ for (const sameAccount of [false, true]) {
     assert.equal(h.requests[0].headers.Authorization, `Bearer test-${A}`);
     assert.equal(h.saved.getItem(key(`registered_${A}`)), savedA);
     assert.equal(h.saved.getItem(key(`registered_${B}`)), savedB);
-    h.auth().login(user(A), `test-${A}`);
+    await h.auth().login(user(A), `test-${A}`);
     h.advance(300_001);
   h.control.dispatch = async () => ({ data: {} });
     assert.equal(await h.queue.processOfflineQueue(A), true);
@@ -270,13 +279,13 @@ for (const type of ['complete-lesson', 'create-flashcard', 'update-flashcard', '
   test(`Axios prevents pre-dispatch token replacement for ${type}`, async () => {
     const h = harness();
     await h.mount();
-    h.auth().login(user(A), `test-${A}`);
-    h.enqueue(type);
+    await h.auth().login(user(A), `test-${A}`);
+    await h.enqueue(type);
     const drain = h.queue.processOfflineQueue(A);
     const savedA = h.saved.getItem(key(`registered_${A}`));
     // Switch after processor check, before Axios's asynchronous interceptor.
-    h.auth().logout();
-    h.auth().login(user(B), `test-${B}`);
+    await h.auth().logout();
+    await h.auth().login(user(B), `test-${B}`);
     assert.equal(await drain, false);
     assert.equal(h.requests.length, 0);
     assert.equal(h.saved.getItem(key(`registered_${A}`)), savedA);
@@ -286,9 +295,9 @@ for (const type of ['complete-lesson', 'create-flashcard', 'update-flashcard', '
 test('all operations pin owner credentials and create ignores a stale payload userId', async () => {
   const h = harness();
   await h.mount();
-  h.auth().login(user(A), `test-${A}`);
+  await h.auth().login(user(A), `test-${A}`);
   for (const type of ['complete-lesson', 'create-flashcard', 'update-flashcard', 'delete-flashcard', 'review-flashcard']) {
-    h.enqueue(type, { ...payload, userId: B });
+    await h.enqueue(type, { ...payload, userId: B });
   }
   assert.equal(await h.queue.processOfflineQueue(B), false);
   assert.equal(await h.queue.processOfflineQueue(A), true);
@@ -300,8 +309,8 @@ test('all operations pin owner credentials and create ignores a stale payload us
 test('new action has precisely the versioned ownership envelope without credentials', async () => {
   const h = harness();
   await h.mount();
-  h.auth().login(user(A), `test-${A}`);
-  h.enqueue();
+  await h.auth().login(user(A), `test-${A}`);
+  await h.enqueue();
   const action = h.queue.getOfflineQueue()[0];
   assert.deepEqual(Object.keys(action).sort(), ['createdAt', 'id', 'ownerNamespace', 'payload', 'schemaVersion', 'type']);
   assert.equal(action.ownerNamespace, `registered_${A}`);
@@ -314,8 +323,8 @@ test('new action has precisely the versioned ownership envelope without credenti
 test('misfiled action owner fails closed without changing stored data', async () => {
   const h = harness();
   await h.mount();
-  h.auth().login(user(A), `test-${A}`);
-  h.enqueue();
+  await h.auth().login(user(A), `test-${A}`);
+  await h.enqueue();
   const raw = JSON.parse(h.saved.getItem(key(`registered_${A}`)));
   raw.actions[0].ownerNamespace = `registered_${B}`;
   const tampered = JSON.stringify(raw);
@@ -328,13 +337,15 @@ test('misfiled action owner fails closed without changing stored data', async ()
 test('ownerless and malformed legacy queues are preserved in quarantine, never assigned', async () => {
   const h = harness();
   await h.mount();
-  h.auth().login(user(B), `test-${B}`);
+  await h.auth().login(user(B), `test-${B}`);
   const raw = JSON.stringify([{ id: 'old', type: 'complete-lesson', payload: { userId: A } }]);
   h.saved.setItem(GLOBAL, raw);
+  await h.queue.preparePendingProgress(h.session.getOfflineQueueSession().ownerNamespace);
   assert.equal(h.queue.getOfflineQueue().length, 0);
   assert.equal(h.saved.getItem(GLOBAL), null);
   assert.deepEqual(JSON.parse(h.saved.getItem(QUARANTINE)), [raw]);
   h.saved.setItem(GLOBAL, '{invalid-json');
+  await h.queue.preparePendingProgress(h.session.getOfflineQueueSession().ownerNamespace);
   assert.equal(h.queue.getOfflineQueue().length, 0);
   assert.deepEqual(JSON.parse(h.saved.getItem(QUARANTINE)), [raw, '{invalid-json']);
   assert.equal(await h.queue.processOfflineQueue(B), true);
@@ -350,7 +361,7 @@ test('quarantine write failure leaves the global legacy data intact', async () =
     if (name === QUARANTINE) throw new Error('Storage unavailable');
     originalWrite(name, value);
   };
-  assert.throws(() => h.queue.getOfflineQueue(), /Storage unavailable/);
+  await assert.rejects(h.queue.preparePendingProgress(h.session.getOfflineQueueSession().ownerNamespace), /Storage unavailable/);
   assert.equal(h.saved.getItem(GLOBAL), '{legacy');
 });
 
@@ -362,20 +373,20 @@ test('late auth profile cannot replace B owner with A while retaining B credenti
   const profile = deferred();
   h.control.fetchMe = () => profile.promise;
   await h.mount();
-  h.auth().logout();
-  h.auth().login(user(B), `test-${B}`);
+  await h.auth().logout();
+  await h.auth().login(user(B), `test-${B}`);
   profile.resolve(user(A));
   await tick();
   assert.equal(h.session.getOfflineQueueSession().ownerNamespace, `registered_${B}`);
   assert.equal(h.auth().user.id, B);
-  h.enqueue();
+  await h.enqueue();
   assert.equal(await h.queue.processOfflineQueue(B), true);
   assert.equal(h.requests[0].headers.Authorization, `Bearer test-${B}`);
 });
 
 for (const operation of ['profile-fetch', 'profile-update', 'progress-fetch', 'lesson-complete', 'progress-reset', 'card-fetch']) {
   test(`ordinary ${operation} request cannot pick up B token before dispatch`, async () => {
-    const h = harness(); await h.mount(); h.auth().login(user(A), `test-${A}`);
+    const h = harness(); await h.mount(); await h.auth().login(user(A), `test-${A}`);
     const send = {
       'profile-fetch': () => h.authApi.fetchMe(),
       'profile-update': () => h.authApi.updateProfile({ name: 'A name' }),
@@ -384,8 +395,10 @@ for (const operation of ['profile-fetch', 'profile-update', 'progress-fetch', 'l
       'progress-reset': () => h.progressApi.resetProgressInBackend(A, 0, 'reset-guard'),
       'card-fetch': () => h.client.get(`/flashcards/all?userId=${A}`, h.session.getSessionRequestConfig()),
     }[operation];
-    const pending = send(); h.auth().logout(); h.auth().login(user(B), `test-${B}`);
-    await assert.rejects(pending, /Session changed before dispatch/);
+    const dispatchGate = deferred(); h.control.beforeInterceptors = () => dispatchGate.promise;
+    const pending = send(); const rejected = assert.rejects(pending, /Session changed/);
+    await h.auth().logout(); await h.auth().login(user(B), `test-${B}`);
+    dispatchGate.resolve(); await rejected;
     assert.equal(h.requests.length, 0);
   });
 }
@@ -393,14 +406,14 @@ for (const operation of ['profile-fetch', 'profile-update', 'progress-fetch', 'l
 const createPayload = { tempId: 'local_123', targetWord: 'old', turkishTranslation: 'translation', targetLanguage: 'English' };
 async function durableHarness(saved) {
   const h = harness(saved); await h.mount();
-  if (!saved) h.auth().login(user(A), `test-${A}`);
+  if (!saved) await h.auth().login(user(A), `test-${A}`);
   return h;
 }
 
 for (const type of ['create-flashcard', 'update-flashcard', 'delete-flashcard', 'review-flashcard', 'complete-lesson']) {
   test(`${type} retries send the same durable action ID after page restart`, async () => {
     const h = await durableHarness();
-    h.enqueue(type, { ...createPayload, id: 'mongo-real', lessonId: 'lesson-1', score: 4 });
+    await h.enqueue(type, { ...createPayload, id: 'mongo-real', lessonId: 'lesson-1', score: 4 });
     const operationId = h.queue.getOfflineQueue()[0].id;
     h.control.dispatch = async () => { throw new Error('Response lost after dispatch'); };
     assert.equal(await h.queue.processOfflineQueue(A), false);
@@ -415,7 +428,7 @@ for (const type of ['create-flashcard', 'update-flashcard', 'delete-flashcard', 
 }
 
 test('durable acknowledgement survives interrupted successor and page restart', async () => {
-  const h = await durableHarness(); h.enqueue(); h.enqueue('complete-lesson', { lessonId: 'second', score: 73 });
+  const h = await durableHarness(); await h.enqueue(); await h.enqueue('complete-lesson', { lessonId: 'second', score: 73 });
   const second = deferred(); const release = deferred();
   h.control.dispatch = async request => {
     if (request.data.lessonId === 'second') { second.resolve(); return release.promise; }
@@ -424,8 +437,8 @@ test('durable acknowledgement survives interrupted successor and page restart', 
   const drain = h.queue.processOfflineQueue(A); await second.promise;
   assert.equal(h.queue.getOfflineQueue().length, 1);
   assert.equal(h.queue.getOfflineQueue()[0].payload.lessonId, 'second');
-  h.auth().logout(); release.resolve({ data: {} }); assert.equal(await drain, false);
-  h.auth().login(user(A), `test-${A}`);
+  await h.auth().logout(); release.resolve({ data: {} }); assert.equal(await drain, false);
+  await h.auth().login(user(A), `test-${A}`);
   const restarted = await durableHarness(h.saved);
   restarted.advance(300_001);
   assert.equal(await restarted.queue.processOfflineQueue(A), true);
@@ -434,7 +447,7 @@ test('durable acknowledgement survives interrupted successor and page restart', 
 });
 
 test('Phase 4A actions migrate; failed dependent retries real ID after page restart', async () => {
-  const h = await durableHarness(); h.enqueue('create-flashcard', createPayload);
+  const h = await durableHarness(); await h.enqueue('create-flashcard', createPayload);
   const create = h.queue.getOfflineQueue()[0];
   const update = { ...create, id: 'legacy-update', type: 'update-flashcard', payload: { id: 'local_123', targetWord: 'new' } };
   // Old owned arrays must preserve their dependency order and action IDs.
@@ -454,9 +467,9 @@ test('Phase 4A actions migrate; failed dependent retries real ID after page rest
 });
 
 test('pending create plus edits sends latest fields in one create', async () => {
-  const h = await durableHarness(); h.enqueue('create-flashcard', createPayload);
-  h.enqueue('update-flashcard', { id: 'local_123', targetWord: 'new', note: 'latest' });
-  h.enqueue('update-flashcard', { cardId: 'local_123', turkishTranslation: 'new translation' });
+  const h = await durableHarness(); await h.enqueue('create-flashcard', createPayload);
+  await h.enqueue('update-flashcard', { id: 'local_123', targetWord: 'new', note: 'latest' });
+  await h.enqueue('update-flashcard', { cardId: 'local_123', turkishTranslation: 'new translation' });
   assert.equal(h.queue.getOfflineQueue().length, 1);
   assert.equal(await h.queue.processOfflineQueue(A), true);
   assert.equal(h.requests.length, 1); assert.equal(h.requests[0].data.targetWord, 'new');
@@ -464,14 +477,14 @@ test('pending create plus edits sends latest fields in one create', async () => 
 });
 
 test('compaction preserves earlier migrated edits and review order', async () => {
-  const h = await durableHarness(); h.enqueue('create-flashcard', createPayload);
+  const h = await durableHarness(); await h.enqueue('create-flashcard', createPayload);
   const create = h.queue.getOfflineQueue()[0];
   const edit = { ...create, id: 'legacy-edit', type: 'update-flashcard', payload: {
     id: 'local_123', turkishTranslation: 'earlier translation', exampleSentence: 'earlier example', note: 'earlier note',
   } };
   const review = { ...create, id: 'legacy-review', type: 'review-flashcard', payload: { id: 'local_123', score: 2 } };
   h.saved.setItem(key(`registered_${A}`), JSON.stringify([create, edit, review]));
-  h.enqueue('update-flashcard', { id: 'local_123', targetWord: 'latest', note: null });
+  await h.enqueue('update-flashcard', { id: 'local_123', targetWord: 'latest', note: null });
   const actions = h.queue.getOfflineQueue();
   assert.deepEqual(Array.from(actions, a => a.id), [create.id, 'legacy-review']);
   const restarted = await durableHarness(h.saved);
@@ -484,9 +497,9 @@ test('compaction preserves earlier migrated edits and review order', async () =>
 });
 
 test('failed review retains real ID and exact score after restart', async () => {
-  const h = await durableHarness(); h.enqueue('create-flashcard', createPayload);
-  h.enqueue('review-flashcard', { id: 'local_123', score: 2 });
-  h.enqueue('review-flashcard', { cardId: 'local_123', score: 5 });
+  const h = await durableHarness(); await h.enqueue('create-flashcard', createPayload);
+  await h.enqueue('review-flashcard', { id: 'local_123', score: 2 });
+  await h.enqueue('review-flashcard', { cardId: 'local_123', score: 5 });
   h.control.dispatch = async request => {
     if (request.method === 'put') throw new Error('Review unavailable');
     return { data: { _id: 'mongo-real' } };
@@ -503,7 +516,7 @@ test('failed review retains real ID and exact score after restart', async () => 
 });
 
 test('overlapping owner drains do not dispatch or acknowledge twice', async () => {
-  const h = await durableHarness(); h.enqueue(); const started = deferred(); const release = deferred();
+  const h = await durableHarness(); await h.enqueue(); const started = deferred(); const release = deferred();
   h.control.dispatch = () => { started.resolve(); return release.promise; };
   const drain = h.queue.processOfflineQueue(A); await started.promise;
   assert.equal(await h.queue.processOfflineQueue(A), false); assert.equal(h.requests.length, 1);
@@ -512,9 +525,9 @@ test('overlapping owner drains do not dispatch or acknowledge twice', async () =
 });
 
 test('pending create plus review plus delete cancels all dependents without server creation', async () => {
-  const h = await durableHarness(); h.enqueue('create-flashcard', createPayload);
-  h.enqueue('review-flashcard', { id: 'local_123', score: 4 });
-  h.enqueue('delete-flashcard', { id: 'local_123' });
+  const h = await durableHarness(); await h.enqueue('create-flashcard', createPayload);
+  await h.enqueue('review-flashcard', { id: 'local_123', score: 4 });
+  await h.enqueue('delete-flashcard', { id: 'local_123' });
   const restarted = await durableHarness(h.saved);
   restarted.advance(300_001);
   assert.equal(await restarted.queue.processOfflineQueue(A), true);
@@ -522,32 +535,32 @@ test('pending create plus review plus delete cancels all dependents without serv
 });
 
 test('pending reviews remain ordered and retain exact scores behind create', async () => {
-  const h = await durableHarness(); h.enqueue('create-flashcard', createPayload);
-  h.enqueue('review-flashcard', { cardId: 'local_123', score: 2 });
-  h.enqueue('review-flashcard', { id: 'local_123', score: 5 });
+  const h = await durableHarness(); await h.enqueue('create-flashcard', createPayload);
+  await h.enqueue('review-flashcard', { cardId: 'local_123', score: 2 });
+  await h.enqueue('review-flashcard', { id: 'local_123', score: 5 });
   assert.equal(await h.queue.processOfflineQueue(A), true);
   assert.deepEqual(h.requests.map(r => r.url), ['/flashcards', '/flashcards/server-card/review', '/flashcards/server-card/review']);
   assert.deepEqual(h.requests.slice(1).map(r => r.data.score), [2, 5]);
 });
 
 test('append during drain remains persisted without being overwritten by acknowledgement', async () => {
-  const h = await durableHarness(); h.enqueue(); const started = deferred(); const release = deferred();
+  const h = await durableHarness(); await h.enqueue(); const started = deferred(); const release = deferred();
   h.control.dispatch = () => { started.resolve(); return release.promise; };
   const drain = h.queue.processOfflineQueue(A); await started.promise;
-  h.enqueue('complete-lesson', { lessonId: 'new', score: 73 });
+  await h.enqueue('complete-lesson', { lessonId: 'new', score: 73 });
   release.resolve({ data: {} }); assert.equal(await drain, true);
   assert.equal(h.requests.length, 1); assert.equal(h.queue.getOfflineQueue()[0].payload.lessonId, 'new');
   const restarted = await durableHarness(h.saved); assert.equal(restarted.queue.getOfflineQueue().length, 1);
 });
 
 test('edits and delete during in-flight create become durable real-ID dependents', async () => {
-  const h = await durableHarness(); h.enqueue('create-flashcard', createPayload);
+  const h = await durableHarness(); await h.enqueue('create-flashcard', createPayload);
   const started = deferred(); const release = deferred();
   h.control.dispatch = () => { started.resolve(); return release.promise; };
   const drain = h.queue.processOfflineQueue(A); await started.promise;
-  h.enqueue('update-flashcard', { id: 'local_123', targetWord: 'new' });
-  h.enqueue('review-flashcard', { id: 'local_123', score: 4 });
-  h.enqueue('delete-flashcard', { id: 'local_123' });
+  await h.enqueue('update-flashcard', { id: 'local_123', targetWord: 'new' });
+  await h.enqueue('review-flashcard', { id: 'local_123', score: 4 });
+  await h.enqueue('delete-flashcard', { id: 'local_123' });
   assert.equal(h.queue.getOfflineQueue().length, 4);
   release.resolve({ data: { _id: 'mongo-real' } }); assert.equal(await drain, true);
   assert.ok(h.queue.getOfflineQueue().every(a => a.payload.id === 'mongo-real'));
@@ -557,23 +570,23 @@ test('edits and delete during in-flight create become durable real-ID dependents
 });
 
 test('owner-scoped mappings never cross registered, guest, or local queues', async () => {
-  const h = await durableHarness(); h.enqueue('create-flashcard', createPayload);
+  const h = await durableHarness(); await h.enqueue('create-flashcard', createPayload);
   assert.equal(await h.queue.processOfflineQueue(A), true);
-  h.auth().login(user(B), `test-${B}`);
+  await h.auth().login(user(B), `test-${B}`);
   assert.equal(h.queue.isPendingBackendCard('local_123', `registered_${B}`), false);
-  h.enqueue('create-flashcard', createPayload); assert.equal(await h.queue.processOfflineQueue(B), true);
+  await h.enqueue('create-flashcard', createPayload); assert.equal(await h.queue.processOfflineQueue(B), true);
   h.control.fetchGuest = async () => ({ ok: true, json: async () => guest(A) }); await h.auth().loginAsGuest();
   assert.equal(h.queue.isPendingBackendCard('local_123', `guest_${A}`), false);
-  h.enqueue('create-flashcard', createPayload); assert.equal(await h.queue.processOfflineQueue(A), true);
+  await h.enqueue('create-flashcard', createPayload); assert.equal(await h.queue.processOfflineQueue(A), true);
   assert.equal(h.queue.isPendingBackendCard('local_123', `guest_${B}`), false);
   assert.equal(h.queue.isPendingBackendCard('local_123', 'local_guest'), false);
-  h.auth().login(user(A), `test-${A}`);
-  h.enqueue('review-flashcard', { id: 'local_123', score: 4 });
+  await h.auth().login(user(A), `test-${A}`);
+  await h.enqueue('review-flashcard', { id: 'local_123', score: 4 });
   assert.equal(h.queue.getOfflineQueue()[0].payload.id, 'server-card');
 });
 
 test('acknowledgement persistence failure retains action and stops successor dispatch', async () => {
-  const h = await durableHarness(); h.enqueue(); h.enqueue();
+  const h = await durableHarness(); await h.enqueue(); await h.enqueue();
   const original = h.saved.setItem;
   h.control.dispatch = async () => {
     h.saved.setItem = (name, value) => { if (name === key(`registered_${A}`)) throw new Error('Disk full'); original(name, value); };
@@ -585,7 +598,7 @@ test('acknowledgement persistence failure retains action and stops successor dis
 
 
 async function coordinatedHarness() {
-  const h = harness(undefined, true); await h.mount(); h.auth().login(user(A), `test-${A}`);
+  const h = harness(undefined, true); await h.mount(); await h.auth().login(user(A), `test-${A}`);
   let reachable = false;
   const health = new (h.load('reachability').BackendReachability)(async () => reachable);
   let changes = 0;
@@ -598,7 +611,7 @@ async function coordinatedHarness() {
 test('Phase 4F: network online/backend down cannot drain; health recovery drains without any page', async () => {
   const h = await coordinatedHarness();
   try {
-    h.enqueue(); await h.advanceTimers(0);
+    await h.enqueue(); await h.advanceTimers(0);
     assert.equal(h.health.snapshot().networkAvailable, true); assert.equal(h.health.snapshot().backendReachable, false);
     assert.equal(h.requests.length, 0); assert.equal(h.queue.getOfflineQueue().length, 1);
     h.recover(); await h.advanceTimers(30_000);
@@ -610,7 +623,7 @@ test('Phase 4F: network online/backend down cannot drain; health recovery drains
 });
 
 test('Phase 4F: transient failure persists attempt/backoff across restart and reuses ID', async () => {
-  const h = await durableHarness(); h.enqueue(); const id = h.queue.getOfflineQueue()[0].id;
+  const h = await durableHarness(); await h.enqueue(); const id = h.queue.getOfflineQueue()[0].id;
   h.control.dispatch = async () => { throw { response: { status: 503, data: 'secret response' } }; };
   assert.equal(await h.queue.processOfflineQueue(A), false);
   const failed = h.queue.getOfflineQueue()[0];
@@ -626,7 +639,7 @@ test('Phase 4F: transient failure persists attempt/backoff across restart and re
 });
 
 test('Phase 4F: bounded exponential backoff and FIFO prevent tight/unsafe retries', async () => {
-  const h = await durableHarness(); h.enqueue(); h.enqueue('review-flashcard', { cardId: 'real', score: 4 });
+  const h = await durableHarness(); await h.enqueue(); await h.enqueue('review-flashcard', { cardId: 'real', score: 4 });
   h.control.dispatch = async () => { throw { response: { status: 429 } }; };
   const expected = [5000, 10000, 20000, 40000, 80000, 160000, 300000, 300000];
   for (const delay of expected) {
@@ -640,9 +653,9 @@ test('Phase 4F: bounded exponential backoff and FIFO prevent tight/unsafe retrie
 
 for (const status of [400, 403, 404, 409, 422]) {
   test(`Phase 4F: terminal ${status} is durable/owner-scoped, preserves dependencies, permits independent work`, async () => {
-    const h = await durableHarness(); h.enqueue('create-flashcard', createPayload);
-    h.enqueue('review-flashcard', { cardId: 'local_123', score: 4 });
-    h.enqueue('complete-lesson', { lessonId: 'independent', score: 73 });
+    const h = await durableHarness(); await h.enqueue('create-flashcard', createPayload);
+    await h.enqueue('review-flashcard', { cardId: 'local_123', score: 4 });
+    await h.enqueue('complete-lesson', { lessonId: 'independent', score: 73 });
     h.control.dispatch = async request => {
       if (request.url === '/flashcards') throw { response: { status } };
       return { data: {} };
@@ -653,19 +666,19 @@ for (const status of [400, 403, 404, 409, 422]) {
     assert.equal(h.requests.length, 2); assert.equal(h.requests[1].data.lessonId, 'independent');
     const restarted = await durableHarness(h.saved); assert.equal(restarted.queue.getFailedOfflineActions().length, 2);
     assert.equal(await restarted.queue.processOfflineQueue(A), true); assert.equal(restarted.requests.length, 0);
-    restarted.auth().logout(); restarted.auth().login(user(B), `test-${B}`);
+    await restarted.auth().logout(); await restarted.auth().login(user(B), `test-${B}`);
     assert.equal(restarted.queue.getFailedOfflineActions().length, 0);
   });
 }
 
 test('Phase 6E: terminal reset is diagnostic; valid successor/future completions remain executable', async () => {
-  const h = await durableHarness(); h.enqueue('reset-progress', {}); h.enqueue('complete-lesson', { lessonId: 'later', score: 73 });
+  const h = await durableHarness(); await h.enqueue('reset-progress', {}); await h.enqueue('complete-lesson', { lessonId: 'later', score: 73 });
   h.control.dispatch = async request => { if (request.method === 'delete') throw { response: { status: 403 } }; return { data: {} }; };
   assert.equal(await h.queue.processOfflineQueue(A), false); assert.equal(h.requests.length, 2);
   assert.equal(h.queue.getFailedOfflineActions().length, 1);
-  h.enqueue('complete-lesson', { lessonId: 'future', score: 73 });
+  await h.enqueue('complete-lesson', { lessonId: 'future', score: 73 });
   assert.equal(await h.queue.processOfflineQueue(A), true); assert.equal(h.requests.length, 3);
-  h.enqueue('reset-progress', {}); assert.equal(h.queue.getFailedOfflineActions().length, 1);
+  await h.enqueue('reset-progress', {}); assert.equal(h.queue.getFailedOfflineActions().length, 1);
   h.control.dispatch = async () => ({ data: {} }); assert.equal(await h.queue.processOfflineQueue(A), true);
 });
 
@@ -673,7 +686,7 @@ test('Phase 4F: recovery and overlapping coordinator triggers send exactly once 
   const h = await coordinatedHarness();
   try {
     h.control.fetchGuest = async () => ({ ok: true, json: async () => guest(B) });
-    await h.auth().loginAsGuest(); h.enqueue();
+    await h.auth().loginAsGuest(); await h.enqueue();
     const started = deferred(), release = deferred();
     h.control.dispatch = async () => { started.resolve(); return release.promise; };
     h.recover(); await h.advanceTimers(30_000); await started.promise;
@@ -687,8 +700,8 @@ test('Phase 4F: recovery and overlapping coordinator triggers send exactly once 
 test('Phase 4F: local guest is blocked even with healthy backend and automatic coordinator', async () => {
   const h = await coordinatedHarness();
   try {
-    h.auth().logout(); h.control.fetchGuest = async () => { throw new Error('Offline'); };
-    await h.auth().loginAsGuest(); h.enqueue(); h.recover(); await h.advanceTimers(30_000);
+    await h.auth().logout(); h.control.fetchGuest = async () => { throw new Error('Offline'); };
+    await h.auth().loginAsGuest(); await h.enqueue(); h.recover(); await h.advanceTimers(30_000);
     h.coordinator.wake(); await h.advanceTimers(0);
     assert.equal(h.session.getOfflineQueueSession().ownerNamespace, 'local_guest');
     assert.equal(h.requests.length, 0); assert.equal(h.queue.getOfflineQueue().length, 1);
@@ -696,7 +709,7 @@ test('Phase 4F: local guest is blocked even with healthy backend and automatic c
 });
 
 test('Phase 4F: timeout aborts transport and retains its stable operation', async () => {
-  const h = harness(undefined, true); await h.mount(); h.auth().login(user(A), `test-${A}`); h.enqueue();
+  const h = harness(undefined, true); await h.mount(); await h.auth().login(user(A), `test-${A}`); await h.enqueue();
   let aborted = false;
   h.control.dispatch = request => { request.signal.addEventListener('abort', () => { aborted = true; }); return new Promise(() => {}); };
   const operation = h.queue.processOfflineQueue(A); await h.advanceTimers(45_000);
@@ -716,13 +729,13 @@ test('Phase 4F: public health probe accepts only health success and has no crede
 });
 
 test('Phase 4F: 401 is retained for authentication recovery, not silently quarantined', async () => {
-  const h = await durableHarness(); h.enqueue(); h.control.dispatch = async () => { throw { response: { status: 401 } }; };
+  const h = await durableHarness(); await h.enqueue(); h.control.dispatch = async () => { throw { response: { status: 401 } }; };
   await h.queue.processOfflineQueue(A);
   assert.equal(h.auth().token, null);
   assert.equal(h.saved.getItem('linguaai_token'), null);
   const retained = JSON.parse(h.saved.getItem(key(`registered_${A}`)));
   assert.equal(retained.actions[0].lastErrorCategory, 'authentication');
-  h.auth().login(user(A), `new-${A}`);
+  await h.auth().login(user(A), `new-${A}`);
   assert.equal(h.queue.getOfflineQueue()[0].lastErrorCategory, 'authentication');
   assert.equal(h.queue.getFailedOfflineActions().length, 0);
 });
@@ -731,7 +744,7 @@ test('Phase 4F: 401 is retained for authentication recovery, not silently quaran
 test('Phase 4F: coordinator timer retries a healthy-backend transient failure with no additional page/session event', async () => {
   const h = await coordinatedHarness();
   try {
-    h.recover(); await h.health.refresh(); h.enqueue();
+    h.recover(); await h.health.refresh(); await h.enqueue();
     h.control.dispatch = async request => {
       if (h.requests.length === 1) throw { response: { status: 503 } };
       return { data: {} };
@@ -745,7 +758,7 @@ test('Phase 4F: coordinator timer retries a healthy-backend transient failure wi
 test('Phase 4F: coordinator waits for an existing service drain without repeated probes', async () => {
   const h = await coordinatedHarness();
   try {
-    h.enqueue();
+    await h.enqueue();
     const started = deferred(), release = deferred();
     h.control.dispatch = async () => { started.resolve(); return release.promise; };
     const externalDrain = h.queue.processOfflineQueue(A); await started.promise;
@@ -769,9 +782,9 @@ test('Phase 4F: account switch during a drain automatically resumes only the new
       if (h.requests.length === 1) { started.resolve(); return release.promise; }
       return { data: {} };
     };
-    h.enqueue(); h.recover(); await h.health.refresh(); await h.advanceTimers(0); await started.promise;
+    await h.enqueue(); h.recover(); await h.health.refresh(); await h.advanceTimers(0); await started.promise;
     const oldQueue = h.saved.getItem(key(`registered_${A}`));
-    h.auth().logout(); h.auth().login(user(B), `test-${B}`); h.enqueue(); h.coordinator.wake();
+    await h.auth().logout(); await h.auth().login(user(B), `test-${B}`); await h.enqueue(); h.coordinator.wake();
     release.resolve({ data: {} }); await h.advanceTimers(1);
     assert.equal(h.requests.length, 2); assert.equal(h.requests[1].headers.Authorization, `Bearer test-${B}`);
     assert.equal(h.queue.getOfflineQueue().length, 0);
@@ -780,8 +793,8 @@ test('Phase 4F: account switch during a drain automatically resumes only the new
 });
 
 test('Phase 5C: partial update omits untouched fields, keeps clears and native fields across retry', async () => {
-  const h = harness(); await h.mount(); h.auth().login(user(A), `test-${A}`);
-  h.enqueue('update-flashcard', { cardId: 'card', nativeLanguage: 'tr', nativeTranslation: 'native', note: '', exampleSentence: '' });
+  const h = harness(); await h.mount(); await h.auth().login(user(A), `test-${A}`);
+  await h.enqueue('update-flashcard', { cardId: 'card', nativeLanguage: 'tr', nativeTranslation: 'native', note: '', exampleSentence: '' });
   h.control.dispatch = async () => { if (h.requests.length === 1) throw new Error('lost response'); return { data: {} }; };
   assert.equal(await h.queue.processOfflineQueue(A), false);
   h.advance(6 * 60 * 1000);
@@ -794,8 +807,8 @@ test('Phase 5C: partial update omits untouched fields, keeps clears and native f
 });
 
 test('Phase 5C: previously attempted legacy web updates retain their receipt payload', async () => {
-  const h = harness(); await h.mount(); h.auth().login(user(A), `test-${A}`);
-  h.enqueue('update-flashcard', { cardId: 'card', targetWord: 'word', turkishTranslation: 'translation',
+  const h = harness(); await h.mount(); await h.auth().login(user(A), `test-${A}`);
+  await h.enqueue('update-flashcard', { cardId: 'card', targetWord: 'word', turkishTranslation: 'translation',
     nativeLanguage: 'tr', nativeTranslation: 'native', note: '', exampleSentence: '' });
   const state = JSON.parse(h.saved.getItem(key(`registered_${A}`)));
   state.actions[0].attemptCount = 1;
@@ -809,8 +822,8 @@ test('Phase 5C: previously attempted legacy web updates retain their receipt pay
 for (const type of ['create-flashcard', 'update-flashcard']) {
   test(`Phase 5D: ${type} normalizes new aliases and preserves previously attempted receipt language`, async () => {
     for (const attempted of [false, true]) {
-      const h = harness(); await h.mount(); h.auth().login(user(A), `test-${A}`);
-      h.enqueue(type, { cardId: 'card', targetWord: 'word', turkishTranslation: 'translation', targetLanguage: 'German' });
+      const h = harness(); await h.mount(); await h.auth().login(user(A), `test-${A}`);
+      await h.enqueue(type, { cardId: 'card', targetWord: 'word', turkishTranslation: 'translation', targetLanguage: 'German' });
       const state = JSON.parse(h.saved.getItem(key(`registered_${A}`)));
       state.actions[0].attemptCount = attempted ? 1 : 0;
       h.saved.setItem(key(`registered_${A}`), JSON.stringify(state));
@@ -822,7 +835,7 @@ for (const type of ['create-flashcard', 'update-flashcard']) {
 }
 
 test('Phase 5E: online current-token 401 invalidates auth and preserves queued owner work', async () => {
-  const h = await durableHarness(); h.enqueue();
+  const h = await durableHarness(); await h.enqueue();
   const rawQueue = h.saved.getItem(key(`registered_${A}`));
   h.control.dispatch = async () => { throw { response: { status: 401 } }; };
   await assert.rejects(h.client.get('/users/me'));
@@ -833,7 +846,7 @@ test('Phase 5E: old-token 401 cannot invalidate the same owner with a replacemen
   const h = await durableHarness(); const started = deferred(), release = deferred();
   h.control.dispatch = () => { started.resolve(); return release.promise; };
   const pending = h.client.get('/users/me'); const failed = assert.rejects(pending);
-  await started.promise; h.auth().login(user(A), 'replacement-token');
+  await started.promise; await h.auth().login(user(A), 'replacement-token');
   release.resolve(Promise.reject({ response: { status: 401 } })); await failed;
   assert.equal(h.auth().token, 'replacement-token');
 });
@@ -847,7 +860,7 @@ test('Phase 5E: invalid login credentials do not revoke a separate current authe
 
 
 test('Phase 6A: HTTP replay retains completion epoch across durable restart and backoff', async () => {
-  const h = await durableHarness(); h.enqueue('complete-lesson', { lessonId: 'one', score: 73, progressEpoch: 5 });
+  const h = await durableHarness(); await h.enqueue('complete-lesson', { lessonId: 'one', score: 73, progressEpoch: 5 });
   const original = h.queue.getOfflineQueue()[0];
   h.control.dispatch = async () => { throw { response: { status: 503 } }; };
   assert.equal(await h.queue.processOfflineQueue(A), false);
@@ -867,7 +880,7 @@ for (const [code, category] of [
 ]) {
   test(`Phase 6E: ${code} is terminal and its code survives quarantine/restart`, async () => {
     const h = await durableHarness();
-    h.enqueue(code === 'RESET_IDEMPOTENCY_CONFLICT' || code.endsWith('RESET_EPOCH') ? 'reset-progress' : 'complete-lesson');
+    await h.enqueue(code === 'RESET_IDEMPOTENCY_CONFLICT' || code.endsWith('RESET_EPOCH') ? 'reset-progress' : 'complete-lesson');
     const original = h.queue.getOfflineQueue()[0];
     h.control.dispatch = async () => { throw { response: { status: 409, data: { code } } }; };
     assert.equal(await h.queue.processOfflineQueue(A), false);
@@ -885,7 +898,7 @@ for (const [code, category] of [
 test('Phase 6E: failed N completion remains immutable across reset and independent N+1 work', async () => {
   const h = await durableHarness(), owner = `registered_${A}`, store = h.load('storage');
   store.acknowledgeProgressEpoch(owner, 0);
-  h.enqueue('complete-lesson', { lessonId: 'old', score: 73, progressEpoch: 0 });
+  await h.enqueue('complete-lesson', { lessonId: 'old', score: 73, progressEpoch: 0 });
   const original = h.queue.getOfflineQueue()[0];
   h.control.dispatch = async () => { throw { response: { status: 409, data: { code: 'STALE_PROGRESS_EPOCH' } } }; };
   assert.equal(await h.queue.processOfflineQueue(A), false);
@@ -898,14 +911,14 @@ test('Phase 6E: failed N completion remains immutable across reset and independe
     pending.some(a => a.type === 'reset-progress'));
   assert.equal(visible.totalXp, 80);
   assert.deepEqual([...visible.completedLessonIds], ['server']);
-  h.enqueue('reset-progress', { expectedEpoch: 0 });
+  await h.enqueue('reset-progress', { expectedEpoch: 0 });
   h.control.dispatch = async () => ({ data: {} });
   assert.equal(await h.queue.processOfflineQueue(A), true);
   assert.equal(store.getOwnerProgressEpoch(owner), 1);
   assert.equal(await h.queue.reconcileFailedReset(original.id), false);
   assert.equal(h.queue.getOfflineQueue().length, 0);
   assert.equal(h.queue.epochForNewProgress(owner), 1);
-  h.enqueue('complete-lesson', { lessonId: 'new', score: 91, progressEpoch: 1 });
+  await h.enqueue('complete-lesson', { lessonId: 'new', score: 91, progressEpoch: 1 });
   assert.notEqual(h.queue.getOfflineQueue()[0].id, original.id);
   assert.equal(await h.queue.processOfflineQueue(A), true);
   assert.deepEqual(h.requests.map(r => r.method), ['post', 'delete', 'post']);
@@ -919,7 +932,7 @@ test('Phase 6E: terminal reset cannot advance epoch or hide authoritative progre
   store.saveProgress(owner, 'English', { available: true, progressEpoch: 0, totalXp: 80, streak: 0,
     completedLessonIds: ['server'], lessonScores: { server: 73 }, weeklyActivity: [] });
   const before = JSON.stringify(store.loadProgress(owner, 'English'));
-  h.enqueue('reset-progress', { expectedEpoch: 0 });
+  await h.enqueue('reset-progress', { expectedEpoch: 0 });
   h.control.dispatch = async () => { throw { response: { status: 403 } }; };
   assert.equal(await h.queue.processOfflineQueue(A), false);
   assert.equal(store.getOwnerProgressEpoch(owner), 0);
@@ -934,7 +947,7 @@ test('Phase 6E: terminal reset cannot advance epoch or hide authoritative progre
 
 test('Phase 6E: lost reset acknowledgement retries the same operation without a second reset', async () => {
   const h = await durableHarness(), owner = `registered_${A}`, store = h.load('storage');
-  store.acknowledgeProgressEpoch(owner, 0); h.enqueue('reset-progress', { expectedEpoch: 0 });
+  store.acknowledgeProgressEpoch(owner, 0); await h.enqueue('reset-progress', { expectedEpoch: 0 });
   const original = h.queue.getOfflineQueue()[0]; let committed = false, resets = 0;
   h.control.dispatch = async request => {
     assert.equal(request.headers['X-Idempotency-Key'], original.id);
@@ -951,7 +964,7 @@ test('Phase 6E: lost reset acknowledgement retries the same operation without a 
 async function failedResetHarness() {
   const h = await durableHarness(), owner = `registered_${A}`;
   h.load('storage').acknowledgeProgressEpoch(owner, 0);
-  h.enqueue('reset-progress', { expectedEpoch: 0 });
+  await h.enqueue('reset-progress', { expectedEpoch: 0 });
   h.control.dispatch = async () => { throw { response: { status: 403 } }; };
   assert.equal(await h.queue.processOfflineQueue(A), false);
   return { h, owner, action: h.queue.getFailedOfflineActions()[0] };
@@ -991,7 +1004,7 @@ test('Phase 6E: stale reset and conflicting key leave newer progress intact', as
   store.acknowledgeProgressEpoch(owner, 2);
   store.saveProgress(owner, 'English', { available: true, progressEpoch: 2, totalXp: 80,
     streak: 0, completedLessonIds: ['new'], lessonScores: { new: 91 }, weeklyActivity: [] });
-  h.enqueue('reset-progress', { expectedEpoch: 0 });
+  await h.enqueue('reset-progress', { expectedEpoch: 0 });
   h.control.dispatch = async () => { throw { response: { status: 409, data: { code: 'STALE_RESET_EPOCH' } } }; };
   assert.equal(await h.queue.processOfflineQueue(A), false);
   assert.equal(store.getOwnerProgressEpoch(owner), 2); assert.equal(store.loadProgress(owner, 'English').totalXp, 80);
@@ -1005,14 +1018,14 @@ test('Phase 6E: stale reset and conflicting key leave newer progress intact', as
 
 test('Phase 6E: another owner and a replaced session cannot recover a quarantined reset', async () => {
   const { h, owner, action } = await failedResetHarness(), evidence = h.saved.getItem(key(owner));
-  h.auth().logout(); h.auth().login(user(B), `test-${B}`);
+  await h.auth().logout(); await h.auth().login(user(B), `test-${B}`);
   assert.equal(h.queue.getFailedOfflineActions().length, 0);
   assert.equal(await h.queue.reconcileFailedReset(action.id), false); assert.equal(h.requests.length, 1);
-  h.auth().logout(); h.auth().login(user(A), `test-${A}`);
+  await h.auth().logout(); await h.auth().login(user(A), `test-${A}`);
   const started = deferred(), release = deferred();
   h.control.dispatch = () => { started.resolve(); return release.promise; };
   const pending = h.queue.reconcileFailedReset(action.id); await started.promise;
-  h.auth().logout(); h.auth().login(user(A), 'replacement-token');
+  await h.auth().logout(); await h.auth().login(user(A), 'replacement-token');
   release.resolve(resetReceipt(action)); assert.equal(await pending, false);
   assert.equal(h.saved.getItem(key(owner)), evidence); assert.equal(h.load('storage').getOwnerProgressEpoch(owner), 0);
 });
@@ -1034,7 +1047,7 @@ test('Phase 6E: retryable network/server errors and unknown conflicts retain con
   }
   assert.equal(classify(new Error('offline')).terminal, false);
   assert.equal(classify({ response: { status: 409, data: { code: 'UNKNOWN_CONFLICT' } } }).category, 'conflict');
-  h.enqueue(); h.control.dispatch = async () => { throw { response: { status: 503 } }; };
+  await h.enqueue(); h.control.dispatch = async () => { throw { response: { status: 503 } }; };
   assert.equal(await h.queue.processOfflineQueue(A), false);
   assert.equal(h.queue.getOfflineQueue()[0].lastErrorCategory, 'backend');
   assert.ok(h.queue.getOfflineQueue()[0].nextAttemptAt); assert.equal(h.queue.getFailedOfflineActions().length, 0);
@@ -1044,7 +1057,7 @@ test('Phase 6E: missing/malformed legacy epochs stay quarantined without upgrade
   const h = await durableHarness(), owner = `registered_${A}`;
   h.load('storage').acknowledgeProgressEpoch(owner, 5);
   for (const epoch of [undefined, -1, 1.5, '5']) {
-    h.enqueue('complete-lesson', { lessonId: `legacy-${epoch}`, score: 73, progressEpoch: epoch });
+    await h.enqueue('complete-lesson', { lessonId: `legacy-${epoch}`, score: 73, progressEpoch: epoch });
     assert.equal(await h.queue.processOfflineQueue(A), false);
   }
   assert.equal(h.requests.length, 0);

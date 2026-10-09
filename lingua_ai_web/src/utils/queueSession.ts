@@ -1,67 +1,49 @@
 import { getUserProgressKey } from './userKey';
-import type { User } from '../types/auth';
+import { readStoredSession, replaceStoredSession, initializeStoredSession, subscribeAuthSession, invalidateStoredSessionLocally } from './authSessionStorage';
+import { coordinationAvailable } from './browserCoordination';
+import type { StoredSession } from './authSessionStorage';
 import type { AxiosRequestConfig } from 'axios';
-
-const SESSION_REVISION_KEY = 'linguaai_session_revision';
 
 export interface QueueSession {
   readonly ownerNamespace: string;
   readonly userId: string;
   readonly token: string;
   readonly revision: string;
+  readonly pendingVerification?: boolean;
 }
-
-export function advanceOfflineQueueSession(): void {
-  localStorage.setItem(SESSION_REVISION_KEY, `${Date.now()}_${Math.random().toString(36).slice(2)}`);
-}
-
-export function ensureOfflineQueueSessionRevision(): void {
-  if (!localStorage.getItem(SESSION_REVISION_KEY)) advanceOfflineQueueSession();
-}
-
-export function getOfflineQueueSession(): QueueSession {
-  let user: User | null = null;
-  try {
-    user = JSON.parse(localStorage.getItem('linguaai_user') || 'null');
-  } catch {
-    // An incomplete session has no backend replay identity.
-  }
-  const token = localStorage.getItem('linguaai_token') || '';
-  const isGuest = localStorage.getItem('linguaai_is_guest') === 'true';
-  return {
-    ownerNamespace: getUserProgressKey(user, isGuest, token),
-    userId: user?.id || user?.email || '',
-    token,
-    revision: localStorage.getItem(SESSION_REVISION_KEY) || '',
-  };
-}
-
+const snapshot = (record: StoredSession): QueueSession => ({
+  ownerNamespace: getUserProgressKey(record.user, record.isGuest, record.token),
+  userId: record.user?.id || '', token: record.token || '', revision: record.revision,
+  pendingVerification: record.pendingVerification,
+});
+// Intent belongs to the session rendered by this tab, not a new token stored
+// elsewhere. Until AuthProvider commits that replacement, protected calls stop.
+let renderedSession: QueueSession | undefined;
+export function observeRenderedSession(record: StoredSession): void { renderedSession = snapshot(record); }
+export function getOfflineQueueSession(): QueueSession { return snapshot(readStoredSession()); }
 export function isSessionCurrent(session: QueueSession): boolean {
   const active = getOfflineQueueSession();
-  return active.ownerNamespace === session.ownerNamespace
-    && active.userId === session.userId && active.token === session.token
-    && active.revision === session.revision;
+  return active.ownerNamespace === session.ownerNamespace && active.userId === session.userId
+    && active.token === session.token && active.revision === session.revision;
 }
-
 export function getSessionRequestConfig(): AxiosRequestConfig & { sessionSnapshot: QueueSession } {
-  return { sessionSnapshot: getOfflineQueueSession() };
+  const sessionSnapshot = renderedSession || getOfflineQueueSession();
+  if (!isSessionCurrent(sessionSnapshot)) throw new Error('Session changed; wait for this tab to refresh');
+  return { sessionSnapshot };
 }
-
 export function isOfflineQueueSessionActive(session: QueueSession): boolean {
-  return session.ownerNamespace !== 'local_guest' && !!session.token.trim()
+  return !session.pendingVerification && session.ownerNamespace !== 'local_guest' && !!session.token.trim()
     && !!session.userId && isSessionCurrent(session);
 }
-
-const invalidationListeners = new Set<() => void>();
-export function onSessionInvalidated(listener: () => void): () => void {
-  invalidationListeners.add(listener);
-  return () => { invalidationListeners.delete(listener); };
+export const ensureOfflineQueueSessionRevision = initializeStoredSession;
+export async function advanceOfflineQueueSession(): Promise<void> {
+  const current = readStoredSession();
+  await replaceStoredSession(current.user, current.token, current.revision, true);
 }
-
-export function invalidateCurrentSession(session: QueueSession): void {
-  if (!session.token || session.ownerNamespace === 'local_guest' || !isSessionCurrent(session)) return;
-  advanceOfflineQueueSession();
-  for (const key of ['linguaai_user', 'linguaai_token', 'linguaai_is_guest']) localStorage.removeItem(key);
-  // Owner-scoped queues and caches remain available for a later valid login.
-  invalidationListeners.forEach(listener => listener());
+export const onSessionInvalidated = subscribeAuthSession;
+export async function invalidateCurrentSession(session: QueueSession): Promise<void> {
+  if (!session.token || (session.ownerNamespace === 'local_guest' && !session.pendingVerification) || !isSessionCurrent(session)) return;
+  if (coordinationAvailable()) await replaceStoredSession(null, null, session.revision);
+  else invalidateStoredSessionLocally(session.revision);
+  // Owner queues/caches survive logout, invalidation, and account switches.
 }
