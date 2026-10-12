@@ -1,35 +1,34 @@
 import { targetLanguageCode, targetLanguageQuery, tryTargetLanguage } from '../common/target-language';
-import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Optional, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { CommunityPost, CommunityPostDocument } from './schemas/community-post.schema';
 import { User } from '../users/schemas/user.schema';
-import * as fs from 'fs';
-import { join } from 'path';
+import { CommunityImageStorage } from './community-image.storage';
 
 @Injectable()
 export class CommunityService {
+  private readonly logger = new Logger(CommunityService.name);
   constructor(
     @InjectModel(CommunityPost.name)
     private readonly communityPostModel: Model<CommunityPostDocument>,
     @InjectModel(User.name)
     private readonly userModel: Model<User>,
+    @Optional() private readonly images: CommunityImageStorage = new CommunityImageStorage(),
   ) {}
 
-  private deleteImageFile(imageUrl: string) {
+  private async cleanupUnreferenced(imageUrl: string | undefined, operation: string): Promise<void> {
     if (!imageUrl) return;
     try {
-      const urlParts = imageUrl.split('/uploads/');
-      if (urlParts.length > 1) {
-        // Resolve path: dist/community/../../uploads/<filename> -> root/uploads/<filename>
-        const relativePath = join(__dirname, '..', '..', 'uploads', urlParts[1]);
-        if (fs.existsSync(relativePath)) {
-          fs.unlinkSync(relativePath);
-        }
-      }
-    } catch (err) {
-      console.error('Failed to delete file:', err);
+      // A lost DB acknowledgement must not cause deletion of a committed image.
+      // Historical shared references also remain valid. Uncertain DB state is
+      // preserved for manual reconciliation, never guessed to mean "unreferenced".
+      if (await this.communityPostModel.exists({ imageUrl }).exec()) return;
+    } catch {
+      this.logger.error(`Community image cleanup deferred (${operation}): DB state unavailable`);
+      return;
     }
+    await this.images.cleanup(imageUrl, operation);
   }
 
   async create(
@@ -37,23 +36,22 @@ export class CommunityService {
     userName: string,
     learningLanguage: string,
     text?: string,
-    imageUrl?: string,
+    image?: Express.Multer.File,
   ): Promise<CommunityPost> {
-    if (!text && !imageUrl) {
+    if (!text && !image) {
       throw new BadRequestException('Post must contain either text or an image');
     }
 
-    const newPost = new this.communityPostModel({
-      userId,
-      userName,
-      learningLanguage: targetLanguageCode(learningLanguage),
-      text,
-      imageUrl,
-      likes: [],
-      likesCount: 0,
-    });
-
-    return newPost.save();
+    const language = targetLanguageCode(learningLanguage);
+    const imageUrl = image ? await this.images.store(image) : undefined;
+    try {
+      const newPost = new this.communityPostModel({ userId, userName, learningLanguage: language,
+        text, imageUrl, likes: [], likesCount: 0 });
+      return await newPost.save();
+    } catch (error) {
+      await this.cleanupUnreferenced(imageUrl, 'failed create');
+      throw error;
+    }
   }
 
   async findAll(
@@ -119,34 +117,31 @@ export class CommunityService {
     userId: string,
     text?: string,
     removeImage?: boolean,
-    newImageUrl?: string,
+    image?: Express.Multer.File,
   ): Promise<CommunityPost> {
     const post = await this.findOne(id);
     if (post.userId !== userId) {
       throw new ForbiddenException('Cannot edit another user\'s post');
     }
 
-    if (text !== undefined) {
-      post.text = text;
-    }
-
-    // Handle image removal or replacement
-    if (removeImage || newImageUrl) {
-      if (post.imageUrl) {
-        this.deleteImageFile(post.imageUrl);
-        post.imageUrl = undefined;
-      }
-    }
-
-    if (newImageUrl) {
-      post.imageUrl = newImageUrl;
-    }
-
-    if (!post.text && !post.imageUrl) {
+    const oldImageUrl = post.imageUrl;
+    const nextText = text === undefined ? post.text : text;
+    if (!nextText && !image && (removeImage || !oldImageUrl))
       throw new BadRequestException('Post cannot be updated to be completely empty');
-    }
 
-    return post.save();
+    const newImageUrl = image ? await this.images.store(image) : undefined;
+    if (text !== undefined) post.text = text;
+    if (newImageUrl || removeImage) post.imageUrl = newImageUrl;
+    let saved: CommunityPost;
+    try { saved = await post.save(); }
+    catch (error) {
+      await this.cleanupUnreferenced(newImageUrl, 'failed update');
+      throw error;
+    }
+    // Commit the new reference before removing the old image. Cleanup failure
+    // leaves an orphan, never a broken live post reference.
+    if (newImageUrl || removeImage) await this.cleanupUnreferenced(oldImageUrl, 'replaced image');
+    return saved;
   }
 
   async delete(id: string, userId: string): Promise<{ success: boolean }> {
@@ -155,11 +150,10 @@ export class CommunityService {
       throw new ForbiddenException('Cannot delete another user\'s post');
     }
 
-    if (post.imageUrl) {
-      this.deleteImageFile(post.imageUrl);
-    }
-
-    await this.communityPostModel.findByIdAndDelete(id).exec();
+    // A failed DB deletion retains the referenced file. Clean the document
+    // actually removed, including a replacement committed after the first read.
+    const deleted = await this.communityPostModel.findByIdAndDelete(id).exec();
+    if (deleted) await this.cleanupUnreferenced(deleted.imageUrl, 'deleted post');
     return { success: true };
   }
 

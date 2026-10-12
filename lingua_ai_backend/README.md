@@ -45,3 +45,46 @@ A clean NestJS backend for the LinguaAI English learning application.
 *   **Language**: TypeScript
 *   **Database**: MongoDB (Mongoose)
 *   **Validation**: class-validator
+
+
+## Community image storage
+
+Community images use `UPLOAD_ROOT` (absolute or relative to the backend working
+directory), defaulting to `<backend working directory>/uploads`. Writing,
+serving and cleanup use the same resolved root. Keep this directory on persistent
+writable storage owned by the backend service; multiple backend instances must
+share that storage. Unshared instance disks and ephemeral deployment filesystems
+are insufficient. Preserve/copy existing uploads when deploying; Git does not
+package runtime images. Keep a custom root outside the checkout or explicitly
+ignore its path. Do not place other application assets in this directory.
+
+Uploads stage in bounded memory (one image, at most 5 MiB) after JWT authorization.
+DTO validation and post ownership checks precede permanent writes. Only JPEG,
+PNG (normalized to one frame) and single-frame WebP are accepted: byte signatures, declared MIME and file
+extension must agree. Sharp then decodes/re-encodes with a 16-million-pixel limit
+and a five-second processing timeout, stripping metadata/trailing content and
+preserving EXIF orientation in the pixels. GIF, animated WebP, SVG, XML, HTML,
+unknown and malformed content are rejected. Normalized output must also fit 5 MiB.
+
+Images get UUID filenames with detected-format extensions and exclusive creation.
+Create/update DB failures remove the newly written image without hiding the
+original error. Cleanup first checks for live DB references, preserving files
+on a lost DB acknowledgement or unavailable DB state. Replacement saves the new
+DB reference before old-image cleanup.
+Deletion removes the DB post first, then cleans the image referenced by the
+removed document. Cleanup failures are logged and do not undo a successful DB
+operation. A process crash between disk and DB operations, or a filesystem
+cleanup failure, can still leave an orphan; no production orphan sweep runs here.
+
+Serving is restricted to server-generated raster filenames under
+`/uploads/community/`, verifies actual raster content (including historical
+files), and returns `X-Content-Type-Options: nosniff`. The verification cache holds
+at most 128 file fingerprints and revalidates changed files. Cleanup rejects
+traversal, arbitrary URLs/absolute paths, and symlinks escaping the upload root.
+Uploads are public image URLs as before; post mutation still requires JWT ownership.
+
+Image decoder dependencies must be installed for the deployment platform via
+`npm ci` (including Sharp's platform-specific optional dependencies). Do not copy
+Windows `node_modules` into a Linux deployment. Decoder behavior and resource
+limits follow [Sharp input options](https://sharp.pixelplumbing.com/api-constructor/)
+and [output options](https://sharp.pixelplumbing.com/api-output/).

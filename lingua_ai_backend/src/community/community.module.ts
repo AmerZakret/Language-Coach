@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { CommunityController } from './community.controller';
+import { CommunityImageStorage } from './community-image.storage';
 import { CommunityService } from './community.service';
 import { CommunityPost, CommunityPostSchema } from './schemas/community-post.schema';
 import { User, UserSchema } from '../users/schemas/user.schema';
@@ -13,7 +14,7 @@ import { User, UserSchema } from '../users/schemas/user.schema';
     ]),
   ],
   controllers: [CommunityController],
-  providers: [CommunityService],
+  providers: [CommunityService, CommunityImageStorage],
   exports: [CommunityService],
 })
 export class CommunityModule {}

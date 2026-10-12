@@ -12,43 +12,20 @@ import {
   Req,
   UseInterceptors,
   UploadedFile,
-  BadRequestException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CommunityService } from './community.service';
 import { CreateCommunityPostDto } from './dto/create-community-post.dto';
 import { UpdateCommunityPostDto } from './dto/update-community-post.dto';
-import { diskStorage } from 'multer';
-import { extname } from 'path';
-import * as fs from 'fs';
+import { memoryStorage } from 'multer';
+import { COMMUNITY_IMAGE_LIMIT } from './community-image.storage';
 
-const uploadDir = './uploads/community';
-
+// Bounded in-memory staging: guards and DTO pipes run before any permanent
+// image is created. Content validation and compensation belong to the service.
 export const communityMulterOptions = {
-  storage: diskStorage({
-    destination: (req, file, cb) => {
-      if (!fs.existsSync(uploadDir)) {
-        fs.mkdirSync(uploadDir, { recursive: true });
-      }
-      cb(null, uploadDir);
-    },
-    filename: (req, file, cb) => {
-      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-      cb(null, `post-${uniqueSuffix}${extname(file.originalname)}`);
-    },
-  }),
-  fileFilter: (req: any, file: any, cb: any) => {
-    const allowedMimes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-    if (allowedMimes.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new BadRequestException('Only images of type jpg, jpeg, png, or webp are allowed'), false);
-    }
-  },
-  limits: {
-    fileSize: 5 * 1024 * 1024, // 5MB
-  },
+  storage: memoryStorage(),
+  limits: { fileSize: COMMUNITY_IMAGE_LIMIT, files: 1, fields: 10, fieldSize: 16 * 1024, parts: 11 },
 };
 
 @Controller('community/posts')
@@ -79,18 +56,12 @@ export class CommunityController {
     const userId = req.user.id;
     const userName = req.user.name || 'Guest User';
     
-    let imageUrl: string | undefined;
-    if (file) {
-      // Store relative path `/uploads/community/filename.png`
-      imageUrl = `/uploads/community/${file.filename}`;
-    }
-
     return this.communityService.create(
       userId,
       userName,
       dto.learningLanguage,
       dto.text,
-      imageUrl,
+      file,
     );
   }
 
@@ -107,17 +78,12 @@ export class CommunityController {
     // Parse removeImage as boolean
     const removeImageVal = dto.removeImage === 'true' || dto.removeImage === true;
 
-    let imageUrl: string | undefined;
-    if (file) {
-      imageUrl = `/uploads/community/${file.filename}`;
-    }
-
     const post = await this.communityService.update(
       id,
       userId,
       dto.text,
       removeImageVal,
-      imageUrl,
+      file,
     );
     return { ...post.toObject(), learningLanguage: tryTargetLanguage(post.learningLanguage) ?? post.learningLanguage };
   }
