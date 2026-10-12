@@ -163,4 +163,37 @@ void main() {
             ? pending.future
             : Future.value(progress())));
   });
+  for (final operation in ['send', 'clear']) {
+    for (final boundary in ['language', 'account', 'language ABA']) {
+      testWidgets('AI $operation ignores late completion after $boundary', (tester) async {
+        final pending = Completer<http.Response>();
+        await http.runWithClient(() async {
+          await login(a);
+          await tester.pumpWidget(const MaterialApp(home: AiCoachScreen())); await tester.pumpAndSettle();
+          if (operation == 'send') {
+            await tester.enterText(find.byType(TextField), 'old question');
+            await tester.tap(find.byIcon(Icons.send_rounded)); await tester.pump();
+          } else {
+            await tester.tap(find.byIcon(Icons.delete_sweep_rounded)); await tester.pumpAndSettle();
+            await tester.tap(find.text(LanguageService().getString('delete')).last); await tester.pump();
+          }
+          if (boundary == 'account') { await login(b); }
+          else {
+            await languages.setLanguage('de', syncToBackend: false);
+            if (boundary == 'language ABA') { await languages.setLanguage('en', syncToBackend: false); }
+          }
+          await tester.pumpAndSettle(); expect(find.text('current history'), findsOneWidget);
+          pending.complete(http.Response(operation == 'send' ? '{"reply":"stale reply"}' : '{}', 200));
+          await tester.pumpAndSettle();
+          expect(find.text('stale reply'), findsNothing); expect(find.text('current history'), findsOneWidget);
+          expect(find.byType(CircularProgressIndicator), findsNothing);
+          expect(tester.takeException(), isNull); await tester.pumpWidget(const SizedBox.shrink());
+        }, () => MockClient((request) async {
+          if (request.url.path.endsWith('/chat') || request.url.path.endsWith('/clear')) { return pending.future; }
+          return request.url.path.endsWith('/history') ? history('current history') : progress();
+        }));
+      });
+    }
+  }
+
 }

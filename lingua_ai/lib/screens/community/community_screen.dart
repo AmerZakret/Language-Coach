@@ -45,10 +45,35 @@ class _CommunityScreenState extends State<CommunityScreen> {
   String _learningLanguage = 'English';
   XFile? _selectedImage;
   bool _isPosting = false;
+  late SessionSnapshot _visibleSession;
+  int _queryRevision = 0;
+  int _feedRevision = 0;
+  final Map<String, int> _reactionRevisions = {};
+
+  bool Function() _captureView() {
+    final session = _visibleSession;
+    final language = _selectedLanguage;
+    final revision = _queryRevision;
+    return () => mounted && session.isCurrent && revision == _queryRevision &&
+        language == _selectedLanguage && session.ownerNamespace != 'local_guest';
+  }
+
+  void _onSessionChanged() {
+    if (!mounted) return;
+    _visibleSession = AuthService().captureSession();
+    _queryRevision++;
+    _postTextController.clear();
+    setState(() {
+      _posts = []; _selectedImage = null; _isPosting = false;
+    });
+    _loadFeed();
+  }
 
   @override
   void initState() {
     super.initState();
+    _visibleSession = AuthService().captureSession();
+    AuthService().addListener(_onSessionChanged);
     // Default learningLanguage to current targetLanguage
     final targetLangCode = TargetLanguageService().currentLanguage;
     _learningLanguage = TargetLanguageService.toFullName(targetLangCode);
@@ -57,25 +82,30 @@ class _CommunityScreenState extends State<CommunityScreen> {
 
   @override
   void dispose() {
+    AuthService().removeListener(_onSessionChanged);
     _postTextController.dispose();
     super.dispose();
   }
 
   Future<void> _loadFeed() async {
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
-
+    if (!mounted) return;
+    final session = _visibleSession;
+    final viewCurrent = _captureView();
+    final revision = ++_feedRevision;
+    bool isCurrent() => viewCurrent() && revision == _feedRevision;
+    setState(() { _isLoading = true; _errorMessage = null; _posts = []; });
+    if (session.ownerNamespace == 'local_guest' || AuthService().token.isEmpty) {
+      setState(() { _isLoading = false; _errorMessage = 'Sign in to use Community.'; });
+      return;
+    }
     try {
       final posts = await _communityService.fetchPosts(
-        language: _selectedLanguage == 'All' ? null : _selectedLanguage,
+        language: _selectedLanguage, isCurrent: isCurrent,
       );
-      setState(() {
-        _posts = posts;
-        _isLoading = false;
-      });
+      if (!isCurrent()) return;
+      setState(() { _posts = posts; _isLoading = false; });
     } catch (e) {
+      if (!isCurrent()) return;
       setState(() {
         _errorMessage = e.toString().replaceAll('Exception: ', '');
         _isLoading = false;
@@ -84,19 +114,21 @@ class _CommunityScreenState extends State<CommunityScreen> {
   }
 
   Future<void> _pickImage() async {
+    final isCurrent = _captureView();
+    if (!isCurrent()) return;
     final lang = LanguageService();
     try {
       final picked = await _picker.pickImage(
         source: ImageSource.gallery,
         imageQuality: 85,
       );
-      if (picked != null) {
+      if (picked != null && isCurrent()) {
         setState(() {
           _selectedImage = picked;
         });
       }
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || !isCurrent()) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('${lang.getString('failed_pick_image')}: $e')),
       );
@@ -110,6 +142,9 @@ class _CommunityScreenState extends State<CommunityScreen> {
   }
 
   Future<void> _createPost(LanguageService lang) async {
+    final isCurrent = _captureView();
+    final session = _visibleSession;
+    if (!isCurrent() || AuthService().token.isEmpty) return;
     final text = _postTextController.text.trim();
     if (text.isEmpty && _selectedImage == null) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -125,8 +160,10 @@ class _CommunityScreenState extends State<CommunityScreen> {
         learningLanguage: _learningLanguage,
         text: text.isNotEmpty ? text : null,
         imagePath: _selectedImage?.path,
+        expectedSession: session,
       );
 
+      if (!isCurrent()) return;
       _postTextController.clear();
       _clearImage();
       if (!mounted) return;
@@ -135,18 +172,25 @@ class _CommunityScreenState extends State<CommunityScreen> {
       );
       _loadFeed();
     } catch (e) {
-      if (!mounted) return;
+      if (!isCurrent()) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('${lang.getString('failed_share_post')}: $e')),
       );
     } finally {
-      if (mounted) {
+      if (isCurrent()) {
         setState(() => _isPosting = false);
       }
     }
   }
 
   Future<void> _toggleLike(CommunityPost post) async {
+    final viewCurrent = _captureView();
+    final revision = (_reactionRevisions[post.id] ?? 0) + 1;
+    _reactionRevisions[post.id] = revision;
+    bool isCurrent() => viewCurrent() && _reactionRevisions[post.id] == revision;
+    final session = _visibleSession;
+    if (!isCurrent() || AuthService().token.isEmpty) return;
+    _feedRevision++;
     final lang = LanguageService();
     if (ConnectivityService().isOffline) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -184,8 +228,10 @@ class _CommunityScreenState extends State<CommunityScreen> {
     });
 
     try {
-      await _communityService.toggleLike(postId: postId);
+      await _communityService.toggleLike(postId: postId, expectedSession: session);
+      if (isCurrent()) _loadFeed();
     } catch (e) {
+      if (!isCurrent()) return;
       // Revert on error
       setState(() {
         final index = _posts.indexWhere((p) => p.id == postId);
@@ -201,6 +247,9 @@ class _CommunityScreenState extends State<CommunityScreen> {
   }
 
   Future<void> _showEditDialog(CommunityPost post, LanguageService lang) async {
+    final isCurrent = _captureView();
+    final session = _visibleSession;
+    if (!isCurrent()) return;
     final editController = TextEditingController(text: post.text);
     bool isSaving = false;
 
@@ -250,6 +299,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
                   onPressed: isSaving
                       ? null
                       : () async {
+                          if (!isCurrent()) return;
                           final text = editController.text.trim();
                           if (text.isEmpty && (post.imageUrl == null || post.imageUrl!.isEmpty)) return;
 
@@ -258,17 +308,18 @@ class _CommunityScreenState extends State<CommunityScreen> {
                             await _communityService.updatePost(
                               postId: post.id,
                               text: text,
+                              expectedSession: session,
                             );
-                            if (!dialogContext.mounted) return;
+                            if (!dialogContext.mounted || !isCurrent()) return;
                             Navigator.pop(dialogContext);
                             _loadFeed();
                           } catch (e) {
-                            if (!statefulContext.mounted) return;
+                            if (!statefulContext.mounted || !isCurrent()) return;
                             ScaffoldMessenger.of(statefulContext).showSnackBar(
                               SnackBar(content: Text('${lang.getString('failed_update_post')}: $e')),
                             );
                           } finally {
-                            setDialogState(() => isSaving = false);
+                            if (statefulContext.mounted && isCurrent()) setDialogState(() => isSaving = false);
                           }
                         },
                   style: ElevatedButton.styleFrom(
@@ -289,6 +340,9 @@ class _CommunityScreenState extends State<CommunityScreen> {
   }
 
   Future<void> _showDeleteDialog(CommunityPost post, LanguageService lang) async {
+    final isCurrent = _captureView();
+    final session = _visibleSession;
+    if (!isCurrent()) return;
     showDialog(
       context: context,
       builder: (dialogContext) {
@@ -311,8 +365,9 @@ class _CommunityScreenState extends State<CommunityScreen> {
             ElevatedButton(
               onPressed: () async {
                 try {
-                  await _communityService.deletePost(postId: post.id);
-                  if (!dialogContext.mounted) return;
+                  if (!isCurrent()) return;
+                  await _communityService.deletePost(postId: post.id, learningLanguage: post.learningLanguage, expectedSession: session);
+                  if (!dialogContext.mounted || !isCurrent()) return;
                   Navigator.pop(dialogContext);
                   
                   if (!mounted) return;
@@ -321,7 +376,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
                   );
                   _loadFeed();
                 } catch (e) {
-                  if (!dialogContext.mounted) return;
+                  if (!dialogContext.mounted || !isCurrent()) return;
                   Navigator.pop(dialogContext);
                   
                   if (!mounted) return;
@@ -429,6 +484,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
                           child: GestureDetector(
                             onTap: () {
                               setState(() {
+                                _queryRevision++;
                                 _selectedLanguage = l;
                               });
                               _loadFeed();
@@ -546,7 +602,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
   }
 
   Widget _buildCreatePostCard(LanguageService lang) {
-    if (ConnectivityService().isOffline) {
+    if (ConnectivityService().isOffline || _visibleSession.ownerNamespace == 'local_guest') {
       return const SizedBox.shrink();
     }
     return Container(

@@ -111,7 +111,7 @@ void main() {
       await CommunityService().updatePost(postId: 'image-post');
     }, () => MockClient((request) async {
       requests.add(request);
-      return http.Response('{"_id":"image-post","text":"","imageUrl":"/image.png"}', 200);
+      return http.Response('{"_id":"image-post","learningLanguage":"en","text":"","imageUrl":"/image.png"}', 200);
     }));
     expect(requests[0].body, contains('name="text"'));
     expect(requests[0].body.split('\r\n\r\n')[1], startsWith('\r\n--'));

@@ -28,11 +28,15 @@ export function AiCoachPage() {
   const [isTyping, setIsTyping] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(true);
   const endRef = useRef<HTMLDivElement>(null);
+  const historyRevision = useRef(0);
   useEffect(() => {
     const isSessionCurrent = captureSession();
+    const revision = ++historyRevision.current;
     let cancelled = false;
-    const isCurrent = () => !cancelled && isSessionCurrent();
+    const isCurrent = () => !cancelled && isSessionCurrent() && revision === historyRevision.current;
     setMessages(prev => isCurrent() ? [] : prev);
+    setInput(prev => isCurrent() ? '' : prev);
+    setIsTyping(prev => isCurrent() ? false : prev);
     if (isOffline || !token) {
       setHistoryLoading(false);
       return () => { cancelled = true; };
@@ -56,10 +60,13 @@ export function AiCoachPage() {
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, isTyping, historyLoading]);
 
   const handleSend = async (content: string) => {
-    if (!content.trim() || isTyping) return;
+    const currentSession = captureSession();
+    const revision = historyRevision.current;
+    const isCurrent = () => currentSession() && revision === historyRevision.current;
+    if (!content.trim() || isTyping || historyLoading || !token || !isCurrent()) return;
     
     const userMsg: ChatMessage = { role: "user", message: content, createdAt: new Date().toISOString() };
-    setMessages((prev) => [...prev, userMsg]);
+    setMessages((prev) => isCurrent() ? [...prev, userMsg] : prev);
     setInput("");
     setIsTyping(true);
 
@@ -70,7 +77,9 @@ export function AiCoachPage() {
         targetLanguage: targetLanguage
       });
 
+      if (!isCurrent()) return;
       setMessages((prev) => {
+        if (!isCurrent()) return prev;
         const filtered = prev.slice(0, -1);
         const actualUserMsg = response.userMessage || userMsg;
         const actualAssistantMsg = response.assistantMessage || {
@@ -81,12 +90,13 @@ export function AiCoachPage() {
         return [...filtered, actualUserMsg, actualAssistantMsg];
       });
     } catch (e: any) {
+      if (!isCurrent()) return;
       console.error('AI Coach error', e);
-      setMessages((prev) => prev.slice(0, -1));
+      setMessages((prev) => isCurrent() ? prev.slice(0, -1) : prev);
       const errMsg = e.response?.data?.message || t("something_wrong");
       alert(errMsg);
     } finally {
-      setIsTyping(false);
+      if (isCurrent()) setIsTyping(prev => isCurrent() ? false : prev);
     }
   };
 
@@ -101,15 +111,19 @@ export function AiCoachPage() {
   };
 
   const handleClearChat = async () => {
-    if (window.confirm(t("clear_chat_confirm"))) {
+    const currentSession = captureSession();
+    if (!currentSession() || !token || isTyping || historyLoading) return;
+    if (window.confirm(t("clear_chat_confirm")) && currentSession()) {
+      const revision = ++historyRevision.current;
+      const isCurrent = () => currentSession() && revision === historyRevision.current;
       setHistoryLoading(true);
       try {
         await clearChatHistory(targetLanguage);
-        setMessages([]);
+        if (isCurrent()) setMessages(prev => isCurrent() ? [] : prev);
       } catch (e) {
-        console.error('Failed to clear chat history', e);
+        if (isCurrent()) console.error('Failed to clear chat history', e);
       } finally {
-        setHistoryLoading(false);
+        if (isCurrent()) setHistoryLoading(prev => isCurrent() ? false : prev);
       }
     }
   };

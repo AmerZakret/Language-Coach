@@ -25,7 +25,8 @@ function harness(initial = {}) {
   const values = new Map(Object.entries(initial));
   for (const prefix of ['registered', 'guest']) for (const id of [A,B]) { const key = `progress_epoch_${prefix}_${id}`; if (!values.has(key)) values.set(key, '0'); }
   const localStorage = { getItem: k => values.get(k) ?? null,
-    setItem: (k, v) => values.set(k, String(v)), removeItem: k => values.delete(k) };
+    setItem: (k, v) => values.set(k, String(v)), removeItem: k => values.delete(k),
+    get length() { return values.size; }, key: i => [...values.keys()][i] ?? null };
   let activeRunner;
   const modules = new Map();
   const calls = [];
@@ -93,15 +94,15 @@ function harness(initial = {}) {
     storage: 'utils/progressStorage.ts', types: 'types/progress.ts',
     progress: 'context/ProgressContext.tsx', target: 'context/TargetLanguageContext.tsx',
     cards: 'pages/FlashcardsPage.tsx', queue: 'utils/offlineQueue.ts', authPage: 'components/auth/AuthPage.tsx',
-    profile: 'pages/ProfilePage.tsx', writing: 'pages/WritingPracticePage.tsx', pronunciation: 'pages/PronunciationPracticePage.tsx', language: 'utils/targetLanguage.ts', mutation: 'utils/flashcardMutation.ts', community: 'pages/CommunityPage.tsx', coach: 'pages/AiCoachPage.tsx' };
+    profile: 'pages/ProfilePage.tsx', writing: 'pages/WritingPracticePage.tsx', pronunciation: 'pages/PronunciationPracticePage.tsx', language: 'utils/targetLanguage.ts', mutation: 'utils/flashcardMutation.ts', communityCache: 'utils/communityFeedCache.ts', community: 'pages/CommunityPage.tsx', coach: 'pages/AiCoachPage.tsx' };
   const exposed = {
     cards: 'fetchCards, handleSaveCard, handleDeleteCard, handleStudyScore, handleOpenAdd, handleOpenEdit, setFormData, allCards, dueCards, loading, error, successMsg, modal, studyResults',
     authPage: 'handleSubmit, setEmail, setPassword, loading, error',
     profile: 'handleSave, setName, saved, resetConfirm, setResetConfirm',
     writing: 'handleSubmit, setTopic, setText, feedback, error, loading',
     pronunciation: 'handleSubmitAssessment, setAudioBlob, setTargetText, result, error',
-    community: 'startEditing, setEditingText, handleUpdatePost',
-    coach: 'messages, historyLoading',
+    community: 'startEditing, setEditingText, handleUpdatePost, handleCreatePost, handleToggleLike, handleDeletePost, setSelectedLanguage, setNewPostText, fetchFeed, posts, loading, error, newPostText, isPosting',
+    coach: 'messages, historyLoading, handleSend, handleClearChat, isTyping',
   };
   function load(name) {
     if (modules.has(name)) return modules.get(name).exports;
@@ -120,12 +121,12 @@ function harness(initial = {}) {
       esModuleInterop: true, target: ts.ScriptTarget.ES2020,
     } }).outputText;
     vm.runInNewContext(compiled, {
-      module, exports: module.exports, localStorage, AbortController, FormData, __capture: value => { activeRunner.exposed = value; },
+      module, exports: module.exports, localStorage, AbortController, FormData, alert: message => h.calls.push(['alert', message]), __capture: value => { activeRunner.exposed = value; },
       fetch: (...args) => h.fetchGuest(...args), console: { log() {}, error() {} },
       setTimeout: fn => { timers.push(fn); return timers.length; }, clearTimeout() {},
       setInterval: () => 1, clearInterval() {},
       navigator: { locks: lockManager },
-      document: { addEventListener() {}, removeEventListener() {} }, window: {},
+      document: { addEventListener() {}, removeEventListener() {} }, window: { confirm: () => true },
       require: path => {
         if (path === 'react') return react;
         if (path === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment: 'fragment' };
@@ -140,14 +141,20 @@ function harness(initial = {}) {
         if (path.endsWith('/targetLanguage')) return load('language');
         if (path.endsWith('/flashcardMutation')) return load('mutation');
         if (path.endsWith('/writingTopics')) return h.writingTopics || (h.writingTopics = { writingTopics: { en: { en: ['Topic'] } } });
+        if (path.endsWith('/communityFeedCache')) return load('communityCache');
         if (path.endsWith('/aiCoachApi')) return {
+          sendMessage: (...args) => h.sendMessage(...args),
+          clearChatHistory: (...args) => h.clearChatHistory(...args),
           checkWriting: (...args) => h.checkWriting(...args),
           getChatHistory: (...args) => h.getChatHistory(...args),
         };
         if (path.endsWith('/pronunciationApi')) return { assessPronunciation: (...args) => h.assessPronunciation(...args) };
         if (path.endsWith('/communityApi')) return {
-          getCommunityPosts: async () => ({ items: h.communityPosts || [] }),
-          updateCommunityPost: async (id, body) => { h.calls.push(['community-update', id, body]); },
+          getCommunityPosts: async params => h.fetchCommunity ? h.fetchCommunity(params) : ({ items: (h.communityPosts || []).map(post => ({ likes: [], likedByMe: false, likesCount: 0, learningLanguage: 'English', createdAt: '', updatedAt: '', ...post })), page: 1, limit: 50, total: (h.communityPosts || []).length, hasMore: false }),
+          createCommunityPost: async (...args) => { h.calls.push(['community-create', ...args]); return h.communityMutation?.(...args); },
+          deleteCommunityPost: async (...args) => { h.calls.push(['community-delete', ...args]); return h.communityMutation?.(...args); },
+          toggleLikeCommunityPost: async (...args) => { h.calls.push(['community-like', ...args]); return h.communityMutation ? h.communityMutation(...args) : { likesCount: 1, likedByMe: true }; },
+          updateCommunityPost: async (id, body) => { h.calls.push(['community-update', id, body]); return h.communityMutation?.(id, body); },
         };
         if (path.endsWith('/syncRetryPolicy')) return load('policy');
         if (path.endsWith('/SyncContext')) return { useSync: () => ({ syncRevision: h.syncRevision || 0, lastDrainSucceeded: true }) };
@@ -916,6 +923,7 @@ test('Phase 5C: web image posts allow clearing their caption, text-only posts do
     learningLanguage: 'English', likes: [], likesCount: 0, createdAt: new Date().toISOString() },
     { _id: 'text', userId: A, userName: 'Test', text: 'caption', learningLanguage: 'English',
       likes: [], likesCount: 0, createdAt: new Date().toISOString() }];
+  h.isOffline = false;
   h.mount('community', 'CommunityPage'); await h.settle();
   h.child.exposed.startEditing(h.communityPosts[0]); h.child.render();
   h.child.exposed.setEditingText('  '); h.child.render();
@@ -1183,4 +1191,126 @@ test('Phase 6C: unverified legacy language is not optimistic and authoritative a
   h.fetchProgress = async () => progress(0); await h.online();
   assert.equal(h.load('storage').loadProgress(owner, 'en').totalXp, 50);
   assert.equal(h.load('storage').loadProgress(owner, 'de').totalXp, 0);
+});
+const communityFeed = (owner = A, text = 'current', language = 'English') => ({ items: [{ _id: 'post', userId: owner,
+  userName: owner, text, learningLanguage: language, likes: [], likesCount: 0, likedByMe: false,
+  createdAt: '', updatedAt: '' }], page: 1, limit: 50, total: 1, hasMore: false });
+async function communityHarness() {
+  const h = harness(); h.mountAuth(); await h.settle(); await h.login(A); h.isOffline = false;
+  return h;
+}
+for (const boundary of ['account', 'language', 'language ABA', 'unmount']) {
+  test(`Community late response cannot update state/cache after ${boundary}`, async () => {
+    const h = await communityHarness(), old = deferred();
+    let count = 0;
+    h.fetchCommunity = async () => ++count === 1 ? old.promise : communityFeed(B, 'new feed');
+    h.mount('community', 'CommunityPage'); await h.settle();
+    if (boundary === 'account') await h.switchToB();
+    else if (boundary === 'unmount') h.child.unmount();
+    else {
+      h.child.exposed.setSelectedLanguage('German'); h.child.render(); await h.settle();
+      if (boundary === 'language ABA') { h.child.exposed.setSelectedLanguage('English'); h.child.render(); await h.settle(); }
+    }
+    const before = h.snapshot(), posts = copy(h.child.exposed.posts), writes = h.child.writes;
+    old.resolve(communityFeed(A, 'old feed')); await h.settle();
+    assert.deepEqual(h.snapshot(), before); assert.deepEqual(copy(h.child.exposed.posts), posts);
+    assert.equal(h.child.writes, writes, 'stale response schedules no state writes');
+  });
+}
+for (const failure of ['network', '401', 'server', 'malformed']) {
+  test(`Community ${failure} failure uses only authorized fallback policy`, async () => {
+    const h = await communityHarness(), cache = h.load('communityCache');
+    cache.writeCommunityFeed(cache.communityQuery(`registered_${A}`), communityFeed(A, 'own cache'));
+    h.fetchCommunity = async () => {
+      if (failure === 'malformed') return {};
+      throw failure === 'network' ? { code: 'ERR_NETWORK' } : { response: { status: failure === '401' ? 401 : 503 } };
+    };
+    h.mount('community', 'CommunityPage'); await h.settle();
+    assert.equal(h.child.exposed.posts.length, failure === 'network' ? 1 : 0);
+    assert.equal(h.child.exposed.error === null, failure === 'network');
+  });
+}
+test('tokenless Community makes no request and never reads a previous backend cache', async () => {
+  const h = await communityHarness(), cache = h.load('communityCache');
+  cache.writeCommunityFeed(cache.communityQuery(`registered_${A}`), communityFeed());
+  await h.auth().logout(); h.authRunner.render();
+  let calls = 0; h.fetchCommunity = async () => { calls++; return communityFeed(); };
+  h.mount('community', 'CommunityPage'); await h.settle();
+  assert.equal(calls, 0); assert.equal(h.child.exposed.posts.length, 0);
+});
+test('Community old draft callback cannot dispatch after silent atomic account replacement', async () => {
+  const h = await communityHarness(); h.fetchCommunity = async () => communityFeed();
+  h.mount('community', 'CommunityPage'); await h.settle();
+  h.child.exposed.setNewPostText('A draft'); h.child.render();
+  const oldSubmit = h.child.exposed.handleCreatePost;
+  await h.load('authStorage').replaceStoredSession(user(B), `test-${B}`);
+  await oldSubmit({ preventDefault() {} });
+  assert.equal(h.calls.filter(c => c[0] === 'community-create').length, 0);
+  h.authRunner.render(); h.child.render(); await h.settle();
+  assert.equal(h.child.exposed.newPostText, '');
+});
+for (const operation of ['send', 'clear']) for (const boundary of ['language', 'account', 'language ABA']) {
+  test(`AI ${operation} ignores callbacks after ${boundary} switch`, async () => {
+    const h = await communityHarness(), pending = deferred();
+    h.getChatHistory = async () => [{ role: 'assistant', message: 'current history' }];
+    h.sendMessage = () => pending.promise; h.clearChatHistory = () => pending.promise;
+    h.mount('coach', 'AiCoachPage'); await h.settle();
+    const work = operation === 'send' ? h.child.exposed.handleSend('old question') : h.child.exposed.handleClearChat();
+    if (boundary === 'account') await h.switchToB();
+    else {
+      h.language = 'German'; h.localStorage.setItem('linguaai_target_language', 'German'); h.child.render(); await h.settle();
+      if (boundary === 'language ABA') { h.language = 'English'; h.localStorage.setItem('linguaai_target_language', 'English'); h.child.render(); await h.settle(); }
+    }
+    const before = copy(h.child.exposed.messages), writes = h.child.writes;
+    pending.resolve({ reply: 'old reply' }); await work; await h.settle();
+    assert.deepEqual(copy(h.child.exposed.messages), before); assert.equal(h.child.writes, writes);
+    assert.equal(h.child.exposed.isTyping, false); assert.equal(h.child.exposed.historyLoading, false);
+  });
+}
+test('Community cannot read replacement owner cache before that session becomes visible', async () => {
+  const h = await communityHarness(), cache = h.load('communityCache');
+  cache.writeCommunityFeed(cache.communityQuery(`registered_${B}`), communityFeed(B, 'B private cache'));
+  h.fetchCommunity = async () => communityFeed(A, 'A feed');
+  h.mount('community', 'CommunityPage'); await h.settle();
+  h.child.exposed.setNewPostText('A draft'); h.child.render();
+  await h.load('authStorage').replaceStoredSession(user(B), `test-${B}`);
+  h.isOffline = true;
+  h.child.render(); // AuthProvider still renders A; atomic storage already holds B.
+  assert.equal(h.auth().user.id, A);
+  assert.equal(h.child.exposed.posts.some(post => post.text === 'B private cache'), false);
+  h.authRunner.render(); h.child.render(); await h.settle();
+  assert.equal(h.child.exposed.posts[0].text, 'B private cache');
+  assert.equal(h.child.exposed.newPostText, '');
+});
+for (const operation of ['create', 'edit', 'delete', 'like']) {
+  for (const boundary of ['account', 'language']) {
+    test(`Community ${operation} completion cannot mutate replacement ${boundary} state/cache`, async () => {
+      const h = await communityHarness(), pending = deferred();
+      h.fetchCommunity = async () => communityFeed(h.auth().user.id, 'visible feed');
+      h.communityMutation = () => pending.promise;
+      h.mount('community', 'CommunityPage'); await h.settle();
+      if (operation === 'create') { h.child.exposed.setNewPostText('A draft'); h.child.render(); }
+      if (operation === 'edit') { h.child.exposed.startEditing(h.child.exposed.posts[0]); h.child.render(); }
+      const work = operation === 'create' ? h.child.exposed.handleCreatePost({ preventDefault() {} })
+        : operation === 'edit' ? h.child.exposed.handleUpdatePost('post')
+        : operation === 'delete' ? h.child.exposed.handleDeletePost('post') : h.child.exposed.handleToggleLike('post');
+      if (boundary === 'account') await h.switchToB();
+      else { h.child.exposed.setSelectedLanguage('German'); h.child.render(); await h.settle(); }
+      const posts = copy(h.child.exposed.posts), writes = h.child.writes;
+      const cache = h.load('communityCache'), otherOwner = copy(cache.readCommunityFeed(cache.communityQuery(`registered_${B}`)) || null);
+      pending.resolve({ likesCount: 99, likedByMe: true }); await work; await h.settle();
+      assert.deepEqual(copy(h.child.exposed.posts), posts); assert.equal(h.child.writes, writes);
+      assert.deepEqual(copy(cache.readCommunityFeed(cache.communityQuery(`registered_${B}`)) || null), otherOwner);
+    });
+  }
+}
+test('older like response cannot overwrite a newer reaction result', async () => {
+  const h = await communityHarness(), old = deferred(), next = deferred(); let count = 0;
+  h.fetchCommunity = async () => communityFeed(); h.communityMutation = () => ++count === 1 ? old.promise : next.promise;
+  h.mount('community', 'CommunityPage'); await h.settle();
+  const first = h.child.exposed.handleToggleLike('post'); h.child.render();
+  const second = h.child.exposed.handleToggleLike('post');
+  next.resolve({ likesCount: 0, likedByMe: false }); await second; await h.settle();
+  old.resolve({ likesCount: 1, likedByMe: true }); await first; await h.settle();
+  assert.equal(h.child.exposed.posts[0].likesCount, 0); assert.equal(h.child.exposed.posts[0].likedByMe, false);
 });

@@ -146,9 +146,12 @@ void main() {
       await prefs.setString(
           'linguaai_offline_queue_local_guest', 'local pending work');
       await http.runWithClient(() async {
-        await expectLater(entry.value(), throwsA(unauthorized));
+        await expectLater(entry.value(), throwsA(entry.key.startsWith('community ')
+            ? isA<ApiException>().having((e) => e.kind, 'kind', ApiFailure.client)
+            : unauthorized));
       },
           () => MockClient((request) async {
+                expect(entry.key.startsWith('community '), false, reason: 'local_guest Community must not dispatch');
                 expect(request.headers.containsKey('Authorization'), false);
                 return http.Response('{}', 401);
               }));
