@@ -88,3 +88,23 @@ Image decoder dependencies must be installed for the deployment platform via
 Windows `node_modules` into a Linux deployment. Decoder behavior and resource
 limits follow [Sharp input options](https://sharp.pixelplumbing.com/api-constructor/)
 and [output options](https://sharp.pixelplumbing.com/api-output/).
+
+## Durable sync receipt retention
+
+There is no enforced maximum replay age. Offline requests may return months or
+years later; timestamps are diagnostic, never permission to reuse operation keys.
+
+| Record | Policy | Why |
+|---|---|---|
+| Flashcard create | NEVER_EXPIRE | Replay must not recreate a renamed/deleted card |
+| Flashcard review | NEVER_EXPIRE | Replay must not apply SRS/history twice |
+| Flashcard update | NEVER_EXPIRE | An old update must not overwrite later state |
+| Flashcard delete | UNSAFE_TO_CLEAN_AUTOMATICALLY; retain | Deletion still consumes its owner/type/key |
+| Progress reset | NEVER_EXPIRE | Lost-ack reconciliation must not rerun a reset |
+| Completion/provenance | NEVER_EXPIRE within epoch | Natural-key evidence prevents XP re-award |
+
+There are no TTL indexes on these collections and no cleanup job is added.
+An explicit progress reset transaction may remove prior-epoch completion rows;
+epoch checks then reject obsolete completion replays. Reset and flashcard receipts
+remain retained across later mutations/deletions. Capacity growth is intentional
+until an enforceable replay-age contract and safe operation-key reuse policy exist.

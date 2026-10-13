@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'auth_service.dart';
 import 'connectivity_service.dart';
 import 'offline_queue_service.dart';
+import 'sync_storage.dart';
 
 class SyncCoordinator {
   static final SyncCoordinator _instance = SyncCoordinator._internal();
@@ -26,6 +27,7 @@ class SyncCoordinator {
   Timer? _timer;
   bool _started = false;
   bool _running = false;
+  String? lastStorageError;
   void Function(bool success)? onChanged;
 
   void start() {
@@ -81,6 +83,7 @@ class SyncCoordinator {
     final session = auth.captureSession();
     try {
       final actions = await _queue.getQueue();
+      lastStorageError = null;
       if (!_started || !session.isCurrent || actions.isEmpty) return;
       if (actions.first.nextAttemptAt?.isAfter(_now()) == true) return;
       final failedCount = (await _queue.getFailedActions()).length;
@@ -95,8 +98,12 @@ class SyncCoordinator {
         onChanged?.call(success);
       }
       if (!success) await _health.refresh();
-    } catch (_) {
+    } catch (error) {
       storageFailure = true;
+      lastStorageError = error is SyncStorageCorruption
+          ? error.toString()
+          : 'Sync storage is unavailable. Existing work has been preserved.';
+      debugPrint(lastStorageError);
     } finally {
       _running = false;
       if (_started) {

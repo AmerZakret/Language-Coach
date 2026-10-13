@@ -42,10 +42,83 @@ These features require real-time processing from the backend server or AI servic
 
 LinguaAI does not lose progress made offline. When offline mutations occur, they are managed chronologically in a local queue:
 
-1.  **Queueing**: Completing lessons or managing flashcards offline instantly updates the local interface for maximum responsiveness, while the exact action is saved to the offline queue (`localStorage` on Web, `SharedPreferences` on Mobile).
+1.  **Queueing**: Completing lessons or managing flashcards offline saves the exact action before acknowledging it locally (`localStorage` on Web, flushed owner files on Flutter mobile/desktop). Flutter web retains its existing SharedPreferences queue.
 2.  **Reconnection Check**: Once the app detects that internet is restored, it triggers the synchronization worker.
 3.  **Conflict & ID Mapping Resolution**: 
     *   Offline-created cards use temporary IDs (e.g. `local_1717900000`).
     *   Upon syncing `create-flashcard`, the backend saves the card and returns its official MongoDB ObjectId.
     *   The sync worker maps the temporary ID to the new database ID and rewrites subsequent queued actions (updates, reviews, deletes) that reference that card, maintaining integrity.
-4.  **Concurrency Lock**: Mobile execution uses an asynchronous `_isProcessing` lock to prevent multiple services from trying to drain the queue at the same time.
+4.  **Concurrency Lock**: Flutter uses owner-specific drain exclusion and separate serialized queue mutations to prevent overlapping drains or lost queue updates.
+
+## Phase 7D: native queue durability and retained evidence
+
+Flutter Android/iOS/Linux/macOS/Windows sync state lives under the application's
+persistent support directory, in `sync-v1`. `path_provider` and `crypto` were
+already resolved dependencies; they are now direct dependencies for locating
+that directory and SHA-256 corruption detection. No database is introduced.
+
+| State previously stored in SharedPreferences | Classification / new authority |
+|---|---|
+| Active actions, original IDs/payloads/epochs/owners | CRITICAL_DURABLE: owner file |
+| Failed/quarantined actions and error/recovery evidence | CRITICAL_DURABLE: owner file |
+| Started-create markers, temp-ID maps, dependent rewrites | CRITICAL_DURABLE: same owner file |
+| Active retry/backoff metadata | CRITICAL_DURABLE: part of its action |
+| Reset barriers and progress revisions | CRITICAL_DURABLE: same queue record |
+| Owner progress epoch and acknowledged progress checkpoints | CRITICAL_DURABLE: same owner file |
+| Preference epoch / acknowledged progress display snapshots | RECONSTRUCTABLE: projected from the owner file |
+| Server lesson/card/feed caches and ordinary UI settings | CACHE_ONLY; unchanged |
+
+Auth/session preferences remain in their existing independent storage. Durable
+queue ownership is the validated ID namespace in the record, never an email.
+
+Each owner (`registered_<id>`, `guest_<id>`, `local_guest`) has two checksummed,
+generation-numbered committed slots. `legacy_unowned` is a separate diagnostic
+record, never a replay owner. A replacement is serialized to a unique `.pending`
+file, written and flushed with `RandomAccessFile.flush`, closed, then renamed
+onto the older slot. The newest valid slot is never removed before promotion.
+Readers ignore uncommitted `.pending` files. The commit promise resolves after
+promotion; notification, queue acknowledgement and successor dispatch follow it.
+Create acknowledgements include the temp mapping, dependent rewrites, action
+removal and started-create removal in one commit. Completion/reset checkpoints
+include their epoch and revision in that commit. Preference display projection
+runs afterward and may be retried without undoing an acknowledged operation.
+
+This establishes a stronger process-crash persistence boundary than preferences.
+It does **not** promise complete power-loss durability: portable Dart exposes no
+directory fsync here, so directory-entry persistence and hardware behavior remain
+platform-dependent. File rename behavior can vary across platforms; replacing
+only the older slot preserves the newest copy even if replacement is interrupted.
+Interrupted staging files are retained as evidence, not adopted or age-cleaned.
+
+Both committed slots are checked for schema, owner, generation and checksum.
+If either is corrupt, replay/writes stop with a safe diagnostic; verified backup
+data is exposed on the corruption exception and both files remain untouched.
+Automatic rollback is unsafe because an older snapshot may omit pending work or
+a dispatched-create marker. Startup displays a storage-recovery message and
+runtime sync exposes `lastStorageError`; no destructive recovery UI is added.
+I/O/permission failures remain failures, not empty queues. Ordinary missing files
+are empty only before an owner has stored state.
+
+Migration is lazy per owner on its first access (the active owner is checked at
+startup). Only validated, explicitly owned v1 action lists/v2 queue envelopes
+are adopted. The file commit is the migration marker; preference queue retirement
+happens afterward. Existing native files take precedence over leftover preferences,
+including after interruption between those steps. Ownerless work and invalid
+owned migration candidates are copied to durable diagnostic quarantine without
+inferring identity; invalid owned candidates remain blocked and preserved.
+Inactive owners' old preference entries remain intact until their own migration.
+
+The app has one queue-writing primary isolate/process and no background isolate
+sync writer. Queue mutations use the existing per-owner read/modify/write locks;
+file access adds serialization across storage instances at the same root. HTTP
+never holds the mutation lock. Multiple app processes or future isolate writers
+require explicit coordination before they may share these files.
+
+No pending/failed work expires by age. Original operation IDs, epochs and failure
+metadata survive migration and restart. Explicit existing cancellation semantics
+remain supported. Temp mappings are retained: cached card IDs can still reference
+them, and complete reference/replay proof is unavailable. `storageDiagnostics()`
+reports current-owner action/failed/map/started-create counts without payloads;
+no public endpoint or production sweep is introduced. Storage grows with retained
+receipts, failures and mappings; replacing old *snapshot copies* never expires
+logical records. Flutter web and the separate web application are not migrated.

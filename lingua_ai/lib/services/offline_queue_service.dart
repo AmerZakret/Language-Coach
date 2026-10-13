@@ -8,6 +8,7 @@ import 'auth_service.dart';
 import 'api_response.dart';
 import 'progress_cache.dart';
 import 'progress_epoch.dart';
+import 'sync_storage.dart';
 import '../core/localization/target_language.dart';
 import 'sync_retry_policy.dart';
 import 'package:http/http.dart' as http;
@@ -70,6 +71,28 @@ class OfflineQueueAction {
         (json['ownerNamespace'] as String).isEmpty) {
       throw const FormatException(
           'Queue action has no supported ownership schema');
+    }
+    for (final key in [
+      'lastAttemptAt',
+      'nextAttemptAt',
+      'failedAt',
+      'reconciledAt'
+    ]) {
+      final value = json[key];
+      if (value != null &&
+          (value is! String || DateTime.tryParse(value) == null)) {
+        throw const FormatException('Malformed queue retry metadata');
+      }
+    }
+    if (json['id'] is! String ||
+        (json['id'] as String).isEmpty ||
+        json['type'] is! String ||
+        (json['type'] as String).isEmpty ||
+        (json['attemptCount'] != null &&
+            (json['attemptCount'] is! int || json['attemptCount'] < 0)) ||
+        (json['acknowledgedEpoch'] != null &&
+            !ProgressEpoch.valid(json['acknowledgedEpoch']))) {
+      throw const FormatException('Malformed queue action metadata');
     }
     return OfflineQueueAction(
         id: json['id'] as String,
@@ -157,6 +180,8 @@ class _QueueState {
   final Set<String> startedCreates;
   String progressRevision;
   List<OfflineQueueAction> failedActions;
+  int? progressEpoch;
+  final Map<String, dynamic> progressCheckpoints = {};
   _QueueState(this.actions, this.tempIds, this.startedCreates,
       [this.progressRevision = '', List<OfflineQueueAction>? failedActions])
       : failedActions = failedActions ?? [];
@@ -215,37 +240,65 @@ class OfflineQueueService {
     }
   }
 
+  Future<void> _preserveEvidence(String snapshot) =>
+      _locked('legacy_unowned', () async {
+        final storage = SyncStorage.backend;
+        final previous = await storage.read('legacy_unowned');
+        final snapshots = List<String>.from(previous?['snapshots'] ?? []);
+        if (!snapshots.contains(snapshot)) {
+          snapshots.add(snapshot);
+          await storage.write('legacy_unowned', {
+            'schemaVersion': 1,
+            'ownerNamespace': 'legacy_unowned',
+            'snapshots': snapshots
+          });
+        }
+      });
+
   Future<void> _quarantineLegacy(SharedPreferences prefs) async {
-    final legacy = prefs.get(_legacyKey);
-    if (legacy == null) return;
-    // Ownerless data stays quarantined; never reconstruct its temp mappings.
-    final snapshot = json.encode(legacy);
-    final quarantine = prefs.getStringList(_quarantineKey) ?? [];
-    if (!quarantine.contains(snapshot)) {
-      quarantine.add(snapshot);
-      if (!await prefs.setStringList(_quarantineKey, quarantine)) {
-        throw StateError('Could not preserve the legacy queue');
+    if (!SyncStorage.backend.durable) {
+      final legacy = prefs.get(_legacyKey);
+      if (legacy == null) return;
+      final snapshot = json.encode(legacy);
+      final quarantine = prefs.getStringList(_quarantineKey) ?? [];
+      if (!quarantine.contains(snapshot)) {
+        quarantine.add(snapshot);
+        if (!await prefs.setStringList(_quarantineKey, quarantine)) {
+          throw StateError('Could not preserve the legacy queue');
+        }
+      }
+      if (json.encode(prefs.get(_legacyKey)) == snapshot) {
+        await prefs.remove(_legacyKey);
+      }
+      return;
+    }
+    for (final snapshot in prefs.getStringList(_quarantineKey) ?? <String>[]) {
+      await _preserveEvidence(snapshot);
+    }
+    final raw = prefs.get(_legacyKey);
+    if (raw != null) {
+      await _preserveEvidence(jsonEncode(raw));
+      if (jsonEncode(prefs.get(_legacyKey)) == jsonEncode(raw)) {
+        await prefs.remove(_legacyKey);
       }
     }
-    if (json.encode(prefs.get(_legacyKey)) == snapshot) {
-      await prefs.remove(_legacyKey);
-    }
+    // Existing quarantine remains a harmless diagnostic projection in prefs.
   }
 
-  Future<_QueueState> _read(String owner) async {
-    final prefs = await SharedPreferences.getInstance();
-    await _quarantineLegacy(prefs);
-    final raw = prefs.get(_storageKey(owner));
-    if (raw == null) return _QueueState([], {}, {});
-    // Phase 4A lists migrate on the first mutation, without changing actions.
+  _QueueState _decode(String owner, dynamic raw) {
     if (raw is List<String>) {
-      return _QueueState(
-          raw.map((s) => OfflineQueueAction.fromJson(json.decode(s))).toList(),
-          {},
-          {});
+      final actions = raw
+          .map((value) => OfflineQueueAction.fromJson(jsonDecode(value)))
+          .toList();
+      if (actions.any((action) => action.ownerNamespace != owner)) {
+        throw const FormatException('Queue owner mismatch');
+      }
+      return _QueueState(actions, {}, {});
     }
-    final data = json.decode(raw as String) as Map<String, dynamic>;
-    if (data['schemaVersion'] != 2 || data['ownerNamespace'] != owner) {
+    final data = raw is String ? jsonDecode(raw) : raw;
+    if (data is! Map ||
+        data['schemaVersion'] != 2 ||
+        data['ownerNamespace'] != owner) {
       throw const FormatException('Unsupported queue state');
     }
     final state = _QueueState(
@@ -260,9 +313,129 @@ class OfflineQueueService {
             .map((a) =>
                 OfflineQueueAction.fromJson(Map<String, dynamic>.from(a)))
             .toList());
-    if ([...state.actions, ...state.failedActions]
-        .any((a) => a.ownerNamespace != owner)) {
-      throw const FormatException('Queue owner mismatch');
+    if ([...state.actions, ...state.failedActions].any((a) =>
+            a.ownerNamespace != owner ||
+            a.id.isEmpty ||
+            a.type.isEmpty ||
+            a.attemptCount < 0) ||
+        state.tempIds.values
+            .any((id) => id.isEmpty || id.startsWith('local_'))) {
+      throw const FormatException('Invalid queue ownership or metadata');
+    }
+    final epoch = data['progressEpoch'];
+    if (epoch != null &&
+        (!ProgressEpoch.valid(epoch) || owner == 'local_guest')) {
+      throw const FormatException('Invalid durable epoch');
+    }
+    state.progressEpoch = epoch as int?;
+    state.progressCheckpoints
+        .addAll(Map<String, dynamic>.from(data['progressCheckpoints'] ?? {}));
+    for (final entry in state.progressCheckpoints.entries) {
+      if (TargetLanguage.tryCode(entry.key) != entry.key ||
+          !ProgressSnapshot.fromCheckpoint(
+                  Map<String, dynamic>.from(entry.value))
+              .valid ||
+          entry.value['progressEpoch'] != epoch) {
+        throw const FormatException('Invalid progress checkpoint');
+      }
+    }
+    return state;
+  }
+
+  Map<String, dynamic> _encode(String owner, _QueueState state) => {
+        'schemaVersion': 2,
+        'ownerNamespace': owner,
+        'actions': state.actions.map((a) => a.toJson()).toList(),
+        'tempIds': state.tempIds,
+        'startedCreates': state.startedCreates.toList(),
+        'progressRevision': state.progressRevision,
+        'failedActions': state.failedActions.map((a) => a.toJson()).toList(),
+        if (SyncStorage.backend.durable && state.progressEpoch != null)
+          'progressEpoch': state.progressEpoch,
+        if (SyncStorage.backend.durable && state.progressCheckpoints.isNotEmpty)
+          'progressCheckpoints': state.progressCheckpoints,
+      };
+
+  bool _advanceEpoch(_QueueState state, String owner, int epoch) {
+    if (owner == 'local_guest' ||
+        !ProgressEpoch.valid(epoch) ||
+        (state.progressEpoch != null && epoch < state.progressEpoch!)) {
+      return false;
+    }
+    if (state.progressEpoch != epoch) state.progressCheckpoints.clear();
+    state.progressEpoch = epoch;
+    return true;
+  }
+
+  Future<void> _project(String owner, _QueueState state) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      if (state.progressEpoch != null) {
+        if (SyncStorage.backend.durable &&
+            ProgressEpoch.read(prefs, owner) != state.progressEpoch) {
+          await ProgressSnapshot.resetOwner(prefs, owner);
+          if (!await prefs.setInt(
+              ProgressEpoch.key(owner), state.progressEpoch!)) {
+            throw StateError('Epoch projection failed');
+          }
+        } else {
+          await ProgressEpoch.acknowledge(prefs, owner, state.progressEpoch!);
+        }
+      }
+      for (final entry in state.progressCheckpoints.entries) {
+        await ProgressSnapshot.fromCheckpoint(
+                Map<String, dynamic>.from(entry.value))
+            .save(prefs, owner, entry.key);
+      }
+    } catch (_) {
+      if (!SyncStorage.backend.durable) rethrow;
+      debugPrint(
+          'Sync checkpoint committed; progress cache projection deferred.');
+    }
+  }
+
+  Future<_QueueState> _read(String owner) async {
+    final prefs = await SharedPreferences.getInstance();
+    await _quarantineLegacy(prefs);
+    final storage = SyncStorage.backend;
+    final stored = await storage.read(owner);
+    if (stored != null) {
+      late _QueueState state;
+      try {
+        state = _decode(owner, stored);
+      } catch (_) {
+        if (storage.durable) throw SyncStorageCorruption();
+        rethrow;
+      }
+      if (!storage.durable) {
+        state.progressEpoch = ProgressEpoch.read(prefs, owner);
+      }
+      if (storage.durable) await _project(owner, state);
+      return state;
+    }
+    final raw = prefs.get(_storageKey(owner));
+    _QueueState state;
+    try {
+      state = raw == null ? _QueueState([], {}, {}) : _decode(owner, raw);
+    } catch (_) {
+      if (storage.durable) {
+        await _preserveEvidence(
+            jsonEncode({'sourceKey': _storageKey(owner), 'raw': raw}));
+        throw SyncStorageCorruption();
+      }
+      rethrow;
+    }
+    final preferenceEpoch = ProgressEpoch.read(prefs, owner);
+    if (preferenceEpoch != null) _advanceEpoch(state, owner, preferenceEpoch);
+    if (storage.durable && (raw != null || state.progressEpoch != null)) {
+      // File commit is the migration marker. A crash before preference retirement
+      // retries migration; a crash afterward reads the committed owner record.
+      await storage.write(owner, _encode(owner, state));
+      if (raw != null &&
+          jsonEncode(prefs.get(_storageKey(owner))) == jsonEncode(raw)) {
+        await prefs.remove(_storageKey(owner));
+      }
+      await _project(owner, state);
     }
     return state;
   }
@@ -273,22 +446,14 @@ class OfflineQueueService {
         .any((a) => a.ownerNamespace != owner)) {
       throw StateError('Cannot save actions in another owner queue');
     }
-    final prefs = await SharedPreferences.getInstance();
     if (session != null && !session.isCurrent) return false;
-    final encoded = json.encode({
-      'schemaVersion': 2,
-      'ownerNamespace': owner,
-      'actions': state.actions.map((a) => a.toJson()).toList(),
-      'tempIds': state.tempIds,
-      'startedCreates': state.startedCreates.toList(),
-      'progressRevision': state.progressRevision,
-      'failedActions': state.failedActions.map((a) => a.toJson()).toList()
-    });
-    if (!await prefs.setString(_storageKey(owner), encoded)) {
-      throw StateError('Could not persist the offline queue');
-    }
+    if (!SyncStorage.backend.durable) await _project(owner, state);
+    await SyncStorage.backend.write(owner, _encode(owner, state));
+    // Queue/epoch/mapping/removal crossed the durable boundary together. Cache
+    // projection is reconstructable and can never undo the committed checkpoint.
+    if (SyncStorage.backend.durable) await _project(owner, state);
     _changes.add(null);
-    return true;
+    return session == null || session.isCurrent;
   }
 
   Future<List<OfflineQueueAction>> getQueue() {
@@ -299,6 +464,22 @@ class OfflineQueueService {
   Future<List<OfflineQueueAction>> getFailedActions() {
     final owner = AuthService().localStorageNamespace;
     return _locked(owner, () async => (await _read(owner)).failedActions);
+  }
+
+  /// Lightweight current-owner diagnostics; no payloads, cleanup or public API.
+  Future<Map<String, Object>> storageDiagnostics() {
+    final owner = AuthService().localStorageNamespace;
+    return _locked(owner, () async {
+      final state = await _read(owner);
+      return {
+        'durable': SyncStorage.backend.durable,
+        'active': state.actions.length,
+        'failed': state.failedActions.length,
+        'mappings': state.tempIds.length,
+        'startedCreates': state.startedCreates.length,
+        if (state.progressEpoch != null) 'progressEpoch': state.progressEpoch!
+      };
+    });
   }
 
   // No resend or reactivation: only an owner-scoped durable reset receipt can
@@ -344,10 +525,7 @@ class OfflineQueueService {
             jsonEncode(current.single.toJson()) != identity) {
           return false;
         }
-        final prefs = await SharedPreferences.getInstance();
-        await ProgressEpoch.acknowledge(
-            prefs, owner, result['progressEpoch'] as int,
-            isCurrent: () => session.isCurrent);
+        _advanceEpoch(state, owner, result['progressEpoch'] as int);
         if (!session.isCurrent) return false;
         state.failedActions = state.failedActions
             .map((a) => a.id == action.id
@@ -548,8 +726,7 @@ class OfflineQueueService {
   Future<int> epochForNewProgress(String owner, {bool forReset = false}) =>
       _locked(owner, () async {
         final state = await _read(owner);
-        final epoch =
-            ProgressEpoch.read(await SharedPreferences.getInstance(), owner);
+        final epoch = state.progressEpoch;
         if (!forReset && state.actions.any((a) => a.type == 'reset-progress')) {
           throw StateError(
               'Wait for progress reset acknowledgement before submitting new progress');
@@ -568,18 +745,18 @@ class OfflineQueueService {
           String revision, ProgressSnapshot progress,
           {bool Function()? isCurrent}) =>
       _locked(owner, () async {
-        if ((await _read(owner)).progressRevision != revision) return false;
-        final prefs = await SharedPreferences.getInstance();
-        if (!progress.valid ||
+        final state = await _read(owner);
+        if (state.progressRevision != revision ||
+            isCurrent?.call() == false ||
+            !progress.valid ||
             !ProgressEpoch.valid(progress.progressEpoch) ||
-            !await ProgressEpoch.acknowledge(
-                prefs, owner, progress.progressEpoch!,
-                isCurrent: isCurrent)) {
+            !_advanceEpoch(state, owner, progress.progressEpoch!)) {
           return false;
         }
-        if (isCurrent != null && !isCurrent()) return false;
-        await progress.save(prefs, owner, language);
-        return true;
+        state.progressCheckpoints[language] = progress.toCheckpoint();
+        if (isCurrent?.call() == false) return false;
+        await _write(owner, state);
+        return isCurrent?.call() ?? true;
       });
 
   Future<void> modifyLocalProgress(String owner, String language,
@@ -628,8 +805,15 @@ class OfflineQueueService {
     _drainWaiters[owner] = released;
     var hadFailure = false;
     try {
-      final batch =
-          await _locked(owner, () async => (await _read(owner)).actions);
+      late List<OfflineQueueAction> batch;
+      try {
+        batch = await _locked(owner, () async => (await _read(owner)).actions);
+      } on FormatException {
+        // Preserve the existing web/preferences drain refusal. Native corruption
+        // has a separate explicit recovery diagnostic and must propagate.
+        if (SyncStorage.backend.durable) rethrow;
+        return false;
+      }
       if (!session.isCurrent || batch.any((a) => a.ownerNamespace != owner)) {
         return false;
       }
@@ -864,12 +1048,10 @@ class OfflineQueueService {
                     : null));
             if (language != null &&
                 result?['newTotalXp'] is int &&
-                await ProgressEpoch.acknowledge(
-                    prefs, owner, result['progressEpoch'] as int,
-                    isCurrent: () => session.isCurrent)) {
+                _advanceEpoch(state, owner, result['progressEpoch'] as int)) {
               if (!session.isCurrent) return false;
               final base = ProgressSnapshot.read(prefs, owner, language);
-              await ProgressSnapshot(
+              final checkpoint = ProgressSnapshot(
                       totalXp: result['newTotalXp'] as int,
                       progressEpoch: result['progressEpoch'] as int,
                       lessonScores: {
@@ -884,14 +1066,13 @@ class OfflineQueueService {
                         action.payload['lessonId'].toString()
                       },
                       activity: base.activity)
-                  .save(prefs, owner, language);
+                  .toCheckpoint();
+              state.progressCheckpoints[language] = checkpoint;
             }
             state.progressRevision = 'ack_${action.id}';
           }
           if (action.type == 'reset-progress') {
-            await ProgressEpoch.acknowledge(
-                prefs, owner, resetResult!['progressEpoch'] as int,
-                isCurrent: () => session.isCurrent);
+            _advanceEpoch(state, owner, resetResult!['progressEpoch'] as int);
             if (!session.isCurrent) return false;
             final legacyOwner =
                 action.payload['legacyOwnerNamespace'] as String?;
