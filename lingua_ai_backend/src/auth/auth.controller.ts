@@ -2,12 +2,14 @@ import { Body, Controller, Post } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
+import { AbusePolicy } from '../security/abuse-policy';
 
 @Controller('auth')
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
   @Post('register')
+  @AbusePolicy('register')
   async register(@Body() registerDto: RegisterDto) {
     return this.authService.register(
       registerDto.name,
@@ -17,11 +19,13 @@ export class AuthController {
   }
 
   @Post('login')
+  @AbusePolicy('login')
   async login(@Body() loginDto: LoginDto) {
     return this.authService.login(loginDto.email, loginDto.password);
   }
 
   @Post('guest')
+  @AbusePolicy('guest')
   async guest() {
     return this.authService.guest();
   }

@@ -4,6 +4,7 @@ import { IsIn, IsNotEmpty, IsString, MaxLength } from 'class-validator';
 export class WritingDto {
   @IsNotEmpty()
   @IsString()
+  @MaxLength(200)
   topic: string;
 
   @IsNotEmpty()

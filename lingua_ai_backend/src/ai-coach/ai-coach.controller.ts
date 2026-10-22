@@ -3,6 +3,7 @@ import { AiCoachService } from './ai-coach.service';
 import { ChatDto } from './dto/chat.dto';
 import { WritingDto } from './dto/writing.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { AbusePolicy } from '../security/abuse-policy';
 
 @Controller('ai-coach')
 @UseGuards(JwtAuthGuard)
@@ -10,6 +11,7 @@ export class AiCoachController {
   constructor(private readonly aiCoachService: AiCoachService) {}
 
   @Post('chat')
+  @AbusePolicy('provider')
   async chat(@Body() chatDto: ChatDto, @Req() req: any, @Headers('x-idempotency-key') operationId: string) {
     const userId = req.user._id.toString();
     return this.aiCoachService.sendMessage(
@@ -22,6 +24,7 @@ export class AiCoachController {
   }
 
   @Post('writing-check')
+  @AbusePolicy('provider')
   async writingCheck(@Body() writingDto: WritingDto, @Req() req: any) {
     const userId = req.user._id.toString();
     return this.aiCoachService.checkWriting(

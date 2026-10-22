@@ -19,10 +19,12 @@ export class CreateFlashcardDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(64)
   nativeLanguage?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(200)
   nativeTranslation?: string;
 
   @IsOptional()

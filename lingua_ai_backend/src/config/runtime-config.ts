@@ -1,6 +1,7 @@
 import { mongo } from 'mongoose';
 import { isAbsolute, resolve, parse } from 'node:path';
 import { tmpdir } from 'node:os';
+import { isIP } from 'node:net';
 import type { ConfigService } from '@nestjs/config';
 import type { CorsOptions } from '@nestjs/common/interfaces/external/cors-options.interface';
 
@@ -16,6 +17,7 @@ export interface RuntimeConfig extends Record<string, unknown> {
   READINESS_TIMEOUT_MS: number;
   READINESS_RECHECK_MS: number;
   SHUTDOWN_GRACE_MS: number;
+  TRUST_PROXY: string;
 }
 
 // Never interpolate supplied values or parser errors: URIs may contain secrets.
@@ -81,27 +83,63 @@ function httpUrl(value: string, name: string): URL {
   }
 }
 export function corsOptions(config: Pick<ConfigService, 'get'>): CorsOptions {
+  return {
+    credentials: false,
+    allowedHeaders: [
+      'Authorization',
+      'Content-Type',
+      'X-Idempotency-Key',
+      'X-Resource-Revision',
+    ],
+    exposedHeaders: ['Retry-After'],
+    origin: (origin, done) => done(null, originAllowed(config, origin)),
+  };
+}
+export function originAllowed(
+  config: Pick<ConfigService, 'get'>,
+  origin: string | undefined,
+): boolean {
   const origins = (config.get<string>('CORS_ORIGINS') || '')
     .split(',')
     .filter(Boolean);
   const development = config.get('NODE_ENV') !== 'production';
-  return {
-    credentials: false, // JWT bearer authentication; native clients need no Origin.
-    origin: (origin, done) =>
-      done(
-        null,
-        !origin ||
-          origins.includes(origin) ||
-          (development &&
-            (() => {
-              try {
-                return isLocalHost(new URL(origin).hostname);
-              } catch {
-                return false;
-              }
-            })()),
-      ),
-  };
+  return (
+    !origin ||
+    origins.includes(origin) ||
+    (development &&
+      (() => {
+        try {
+          return isLocalHost(new URL(origin).hostname);
+        } catch {
+          return false;
+        }
+      })())
+  );
+}
+export function trustedProxyPolicy(value: unknown): false | string[] {
+  if (value === undefined || value === 'false' || value === false) return false;
+  if (typeof value !== 'string' || !value.trim())
+    return invalid(
+      'TRUST_PROXY',
+      'must be false or an explicit IP/CIDR allowlist',
+    );
+  return value.split(',').map((item) => {
+    const parts = item.trim().split('/');
+    const version = isIP(parts[0]);
+    if (
+      !version ||
+      parts.length > 2 ||
+      (parts.length === 2 &&
+        (!/^\d+$/.test(parts[1]) ||
+          Number(parts[1]) < 1 ||
+          Number(parts[1]) > (version === 4 ? 32 : 128)))
+    )
+      return invalid(
+        'TRUST_PROXY',
+        'must be false or an explicit IP/CIDR allowlist; blanket trust is forbidden',
+      );
+    return item.trim();
+  });
 }
 export function featureEnabled(
   config: Pick<ConfigService, 'get'>,
@@ -120,6 +158,8 @@ export function validateEnvironment(
   if (!['development', 'test', 'production'].includes(mode))
     invalid('NODE_ENV', 'must be development, test or production');
   const production = mode === 'production';
+  const proxy = env.TRUST_PROXY === undefined ? 'false' : env.TRUST_PROXY;
+  trustedProxyPolicy(proxy);
   const uri = text(env, 'MONGODB_URI');
   if (!uri) invalid('MONGODB_URI', 'is required');
   try {
@@ -273,6 +313,7 @@ export function validateEnvironment(
     PRONUNCIATION_ENABLED: pronunciation,
     CORS_ORIGINS: [...new Set(origins)].join(','),
     UPLOAD_ROOT: root,
+    TRUST_PROXY: String(proxy),
     READINESS_TIMEOUT_MS: boundedMilliseconds(
       'READINESS_TIMEOUT_MS',
       5000,

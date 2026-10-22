@@ -13,6 +13,7 @@ import { PronunciationModule } from './pronunciation/pronunciation.module';
 import { CommunityModule } from './community/community.module';
 import { validateEnvironment } from './config/runtime-config';
 import { OperationsModule } from './operations/operations.module';
+import { SecurityModule } from './security/security.module';
 
 @Module({
   imports: [
@@ -56,6 +57,7 @@ import { OperationsModule } from './operations/operations.module';
     PronunciationModule,
     CommunityModule,
     OperationsModule,
+    SecurityModule,
   ],
   controllers: [AppController],
   providers: [AppService],

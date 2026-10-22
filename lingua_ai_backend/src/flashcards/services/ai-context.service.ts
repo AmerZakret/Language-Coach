@@ -1,13 +1,15 @@
 import { targetLanguageCode, TARGET_LANGUAGE_NAMES } from '../../common/target-language';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { featureEnabled } from '../../config/runtime-config';
+import { ProviderBudget, withProviderBudget } from '../../security/provider-budget';
+import { OUTPUT_TOKENS } from '../../security/abuse-policy';
 
 @Injectable()
 export class AiContextService {
   private readonly logger = new Logger(AiContextService.name);
 
-  constructor(private configService: ConfigService) {}
+  constructor(private configService: ConfigService, @Optional() private readonly budget?: ProviderBudget) {}
 
   async generateContext(word: string, translation: string, targetLanguage: string) {
     const language = TARGET_LANGUAGE_NAMES[targetLanguageCode(targetLanguage)];
@@ -30,37 +32,40 @@ export class AiContextService {
     Return pure JSON with fields: "sentences" (array of strings) and "mnemonic" (string).
     Do not include markdown code block formatting.`;
 
-    try {
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: systemPrompt }] }],
-            generationConfig: { 
-              responseMimeType: 'application/json'
-            },
-          }),
-        },
-      );
+    return withProviderBudget(this.budget, 'flashcard', async () => {
+      try {
+        const response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: systemPrompt }] }],
+              generationConfig: {
+                maxOutputTokens: OUTPUT_TOKENS.flashcard,
+                responseMimeType: 'application/json'
+              },
+            }),
+          },
+        );
 
-      if (!response.ok) {
-        throw new Error(`Gemini API error: ${response.status}`);
+        if (!response.ok) {
+          throw new Error(`Gemini API error: ${response.status}`);
+        }
+
+        const data = await response.json();
+        const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+
+        if (!text) throw new Error('Empty response from Gemini');
+
+        return JSON.parse(text);
+      } catch {
+        this.logger.warn('Flashcard AI provider unavailable; using fallback context');
+        return {
+          sentences: [`He used the word ${word} in a sentence.`],
+          mnemonic: 'Try to associate the sound with something familiar.'
+        };
       }
-
-      const data = await response.json();
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      
-      if (!text) throw new Error('Empty response from Gemini');
-      
-      return JSON.parse(text);
-    } catch (e) {
-      this.logger.error('Failed to generate AI context for flashcard', e);
-      return { 
-        sentences: [`He used the word ${word} in a sentence.`], 
-        mnemonic: 'Try to associate the sound with something familiar.' 
-      };
-    }
+    });
   }
 }

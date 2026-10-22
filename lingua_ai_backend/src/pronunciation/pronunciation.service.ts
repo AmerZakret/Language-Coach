@@ -1,14 +1,16 @@
 import { targetLanguageCode, TARGET_LANGUAGE_NAMES } from '../common/target-language';
-import { Injectable, Logger, HttpException, HttpStatus } from '@nestjs/common';
+import { Injectable, Logger, HttpException, HttpStatus, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AssessPronunciationDto } from './dto/assess-pronunciation.dto';
 import { featureEnabled } from '../config/runtime-config';
+import { ProviderBudget, withProviderBudget } from '../security/provider-budget';
+import { OUTPUT_TOKENS } from '../security/abuse-policy';
 
 @Injectable()
 export class PronunciationService {
   private readonly logger = new Logger(PronunciationService.name);
 
-  constructor(private readonly configService: ConfigService) {}
+  constructor(private readonly configService: ConfigService, @Optional() private readonly budget?: ProviderBudget) {}
 
   async assess(file: Express.Multer.File, dto: AssessPronunciationDto) {
     if (!featureEnabled(this.configService, 'PRONUNCIATION_ENABLED')) {
@@ -35,42 +37,44 @@ export class PronunciationService {
     let detectedLanguage: string = targetCode;
     let languageProbability = 1.0;
 
-    try {
-      const whisperLanguage = targetCode;
+    await withProviderBudget(this.budget, 'pronunciation', async () => {
+      try {
+        const whisperLanguage = targetCode;
 
-      const formData = new FormData();
-      // Create a Blob from the file buffer to upload via native fetch
-      const fileBlob = new Blob([file.buffer as any], { type: file.mimetype });
-      formData.append('audio', fileBlob, file.originalname || 'audio.wav');
-      formData.append('language', whisperLanguage);
+        const formData = new FormData();
+        // Create a Blob from the file buffer to upload via native fetch
+        const fileBlob = new Blob([file.buffer as any], { type: file.mimetype });
+        formData.append('audio', fileBlob, file.originalname || 'audio.wav');
+        formData.append('language', whisperLanguage);
 
-      const response = await fetch(`${whisperUrl}/transcribe`, {
-        method: 'POST',
-        body: formData,
-      });
+        const response = await fetch(`${whisperUrl}/transcribe`, {
+          method: 'POST',
+          body: formData,
+        });
 
-      if (!response.ok) {
-        const errText = await response.text();
-        this.logger.error(`Python Whisper service returned error: ${response.status} - ${errText}`);
-        throw new Error(`Whisper service error: ${response.status}`);
+        if (!response.ok) {
+          this.logger.warn(`Pronunciation provider returned HTTP ${response.status}`);
+          throw new Error('Pronunciation provider unavailable');
+        }
+
+        const data = (await response.json()) as {
+          recognizedText: string;
+          detectedLanguage: string;
+          languageProbability: number;
+        };
+
+        if (typeof data.recognizedText !== 'string' || data.recognizedText.length > 4000) throw new Error('Invalid transcription response');
+        recognizedText = data.recognizedText;
+        detectedLanguage = data.detectedLanguage || targetCode;
+        languageProbability = data.languageProbability ?? 1.0;
+      } catch {
+        this.logger.warn('Pronunciation provider unavailable');
+        throw new HttpException(
+          { code: 'PROVIDER_UNAVAILABLE', message: 'Pronunciation is temporarily unavailable.' },
+          HttpStatus.SERVICE_UNAVAILABLE,
+        );
       }
-
-      const data = (await response.json()) as {
-        recognizedText: string;
-        detectedLanguage: string;
-        languageProbability: number;
-      };
-
-      recognizedText = data.recognizedText || '';
-      detectedLanguage = data.detectedLanguage || targetCode;
-      languageProbability = data.languageProbability ?? 1.0;
-    } catch (error) {
-      this.logger.error('Failed to communicate with Python Whisper service', error);
-      throw new HttpException(
-        'The pronunciation service is currently offline or unreachable. Please check if the Whisper service is running.',
-        HttpStatus.SERVICE_UNAVAILABLE,
-      );
-    }
+    });
 
     // 2. Normalize and compute similarity
     const score = this.calculateSimilarity(dto.targetText, recognizedText);
@@ -188,29 +192,32 @@ export class PronunciationService {
     - Do not claim phoneme-level accuracy.
     - Keep it under 2 short sentences.`;
 
-    try {
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-          }),
-        },
-      );
+    return withProviderBudget(this.budget, 'feedback', async () => {
+      try {
+        const response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: prompt }] }],
+              generationConfig: { maxOutputTokens: OUTPUT_TOKENS.feedback },
+            }),
+          },
+        );
 
-      if (!response.ok) {
-        throw new Error(`Gemini status code: ${response.status}`);
+        if (!response.ok) {
+          throw new Error(`Gemini status code: ${response.status}`);
+        }
+
+        const data = await response.json();
+        const aiResponse = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+
+        return aiResponse || fallbackMessages[result];
+      } catch {
+        this.logger.warn('Pronunciation feedback provider unavailable; using fallback feedback');
+        return fallbackMessages[result];
       }
-
-      const data = await response.json();
-      const aiResponse = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-
-      return aiResponse || fallbackMessages[result];
-    } catch (error) {
-      this.logger.error('Failed to generate Gemini pronunciation feedback', error);
-      return fallbackMessages[result];
-    }
+    }).catch(() => fallbackMessages[result]); // Optional feedback never discards successful transcription.
   }
 }

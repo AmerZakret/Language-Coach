@@ -6,6 +6,7 @@ import { UpdateFlashcardDto } from './dto/update-flashcard.dto';
 import { ReviewFlashcardDto } from './dto/review-flashcard.dto';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { FlashcardIdempotencyService } from './flashcard-idempotency.service';
+import { AbusePolicy } from '../security/abuse-policy';
 
 @Controller('flashcards')
 @UseGuards(JwtAuthGuard)
@@ -16,6 +17,7 @@ export class FlashcardsController {
   ) {}
 
   @Post()
+  @AbusePolicy('flashcard-write')
   async create(@Body() createFlashcardDto: CreateFlashcardDto, @Req() req: any,
     @Headers('x-idempotency-key') operationId?: string) {
     const userId = req.user._id.toString();
@@ -52,6 +54,7 @@ export class FlashcardsController {
   }
 
   @Put(':id')
+  @AbusePolicy('flashcard-write')
   async update(
     @Param('id') id: string,
     @Body() updateFlashcardDto: UpdateFlashcardDto,

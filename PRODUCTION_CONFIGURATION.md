@@ -257,3 +257,114 @@ every five seconds with a two-second HTTP timeout). Set termination grace above
 the application window, including proxy routing propagation. Do not use liveness
 to restart the backend for a transient database/provider outage. Provision schema
 and the mount before rolling out traffic; do not bypass the application gate.
+
+## Phase 8C: HTTP abuse and browser boundary
+
+### Limits and deployment scope
+
+The centralized limiter uses fixed windows and bounded in-process memory (20,000
+active buckets). Identities are hashed with a random process-local salt. Expired
+limiter buckets are not durable receipts: no receipt/schema/index/TTL policy changes.
+Capacity exhaustion fails closed with 503 `ABUSE_CONTROL_UNAVAILABLE`; active limits
+are never evicted. Process restart resets budgets; window boundaries permit bursts.
+There is no permanent account lockout or account-existence lookup in the limiter.
+
+Limits apply **per process**, not globally across replicas. A controlled single-instance
+rollout needs controlled ingress. Multi-instance/internet-scale protection additionally
+needs coordinated ingress/shared limits; no Redis/global-limit claim is made. Multiple
+source IPs/stolen accounts remain risks. Retain upstream connection/slow-request limits
+and restrict direct backend access.
+
+| Route/category | Limits |
+|---|---|
+| Admitted non-health requests, including public/static/error requests (CORS preflight exempt) | IP 240/minute |
+| Authenticated API requests | JWT owner 180/minute, plus IP ceiling |
+| Login | IP 10/minute and 100/hour; process 300/minute |
+| Register | IP 5/minute and 20/hour; process 100/minute |
+| Guest creation | IP 3/minute and 20/hour; process 100/minute |
+| Community create/edit/delete | Owner 20/minute; IP 60/minute |
+| Community multipart create/edit | Additional owner 10/minute; IP 30/minute |
+| Reactions | Owner 60/minute; IP 120/minute |
+| Flashcard create/edit | Owner 30/minute before optional generation |
+| Actual provider operations, all kinds combined | Owner 20/minute and 300/day; guest 5/minute and 30/day; IP 30/minute; process 120/minute |
+| Actual provider operations by backend guests | Additional shared IP 10/minute across guest IDs |
+| Per-kind provider owner limits | Chat 20/minute; writing 5/minute; flashcard context 10/minute; pronunciation feedback 10/minute; transcription 6/minute |
+| Transcription provider operations | Additional IP 15/minute; process 30/minute |
+| Exact `/health`, `/health/live`, `/health/ready` | Exempt; no authentication required |
+
+Successful login never resets IP limits. JWT `sub` lookup supplies owner and actual
+guest status; email/body/guest claims are not trusted. Local guests cannot access
+protected routes. Another backend guest does not reset the shared IP provider budget.
+
+Provider budgets are charged at actual invocation, after durable replay lookup.
+Committed AI/flashcard replay does not spend provider budget again; ordinary
+request/write ceilings still apply. Failed attempts and transaction retries that
+actually reinvoke a provider consume budget. Respect 429 and Retry-After, retaining
+the same logical operation ID. Existing offline clients classify 429 as retryable.
+401 retains its authentication meaning.
+
+AI concurrency: owner 2, registered IP 4 (guest IP 2), process 8. Transcription:
+owner 1, IP 2, process 2. Permits span calls **and response parsing**; success,
+failure and timeout rejection release them. Capacity fails fast with 429, no queue.
+Before multipart buffering, Community holds owner 1/IP 2/process 4 HTTP permits;
+pronunciation holds owner 1/IP 2/process 2. Supplementary pronunciation feedback
+may use its existing fallback when budget/provider capacity is unavailable.
+Unsettled calls retain slots to bound concurrency. Broader deadlines/circuit breakers
+and Python inference concurrency remain later work. 8B shutdown bounds remain intact.
+
+### Client IP and CORS
+
+`TRUST_PROXY=false` defaults to the socket/Express peer: arbitrary X-Forwarded-For
+does not change identity. Behind ingress, set an explicit comma-separated IP/CIDR
+allowlist of **proxies only**, e.g. `10.20.0.0/24`. Blanket trust, hop counts, aliases
+and `/0` are rejected. This does not discover networks: restrict direct reachability
+and make trusted proxies overwrite/sanitize forwarded headers. Trusting client
+networks permits spoofing; disabled trust behind a proxy shares its IP budget.
+
+Production accepts exact configured CORS_ORIGINS. Unknown browser origins receive
+403 `ORIGIN_NOT_ALLOWED` before controller work. No-Origin native/mobile requests
+remain usable; development permits local origins. Preflight allows Authorization,
+Content-Type, X-Idempotency-Key, X-Resource-Revision; Retry-After is exposed. Cookie
+credentials remain disabled. CORS does not replace JWT auth or non-browser limits.
+
+### Headers, caching and errors
+
+Backend API/static responses use nosniff, no-referrer, X-Frame-Options DENY, CSP
+`frame-ancestors 'none'`, no cross-domain policy and restrictive Permissions-Policy.
+This is not the frontend document policy: do not copy the backend microphone-disabled
+policy to the recording app. Express fingerprint headers are disabled. HSTS is not
+sent on local HTTP; configure it at HTTPS ingress after validating HTTPS rollout.
+Frontend document CSP/security headers remain its host's responsibility.
+
+API/auth/personalized/error responses use Cache-Control no-store, including Community
+likedByMe and AI/history/progress. Validated public raster uploads retain existing
+static caching/content checks and nosniff; their IP ceiling still applies. Client
+owner-scoped cache architecture remains unchanged.
+
+The global filter returns only status, fixed safe code and fixed safe message.
+Known mutation/revision/epoch/feature codes preserve status; unknown 5xx is generic.
+Raw Mongo duplicate errors map to generic 409; provider failures to safe 502/503 or
+existing supplementary fallbacks. No stack, raw exception/body, Mongo identifiers,
+filesystem path, token, user ID, IP or secret is reflected/logged by the filter.
+Its error log contains only fixed category/status. Validation returns bounded 400
+VALIDATION_FAILED without reflected object/value/field dumps. 429 uses RATE_LIMITED
+and Retry-After seconds, never bucket details. No broad request logging is added.
+
+### Input/resource bounds
+
+- JSON 32 KiB; URLencoded 16 KiB/50 parameters; compressed bodies rejected.
+  Multipart retains separate byte/field/file bounds.
+- AI message 500 characters; writing 1,000/topic 200; oversized content is rejected.
+- Community text 1,000; feed page 1-10,000, limit 1-50 (no silent truncation).
+  Existing image 5 MiB/16-million-pixel/decode restrictions remain.
+- Flashcard word 100; translations 200; native-language label 64; example/note 500.
+  These also bound optional generation context.
+- Backend pronunciation audio 10 MiB; target 1,000, native translation 500,
+  native-language label 64. Transcription text above 4,000 is a bad dependency result,
+  rejected before similarity work. Python audio-duration/decoder/auth limits are 8E.
+- Auth email 254/password 128; register/profile name 100.
+- Gemini maxOutputTokens: chat 2,048; writing 4,096; flashcard 1,024; feedback 256.
+  Raw provider bodies are never returned/logged.
+
+Focused tests: `npm test -- --runInBand security` use disposable replica-set MongoDB,
+signed JWT fixtures, temporary images and mocked providers only.

@@ -101,6 +101,12 @@ and [output options](https://sharp.pixelplumbing.com/api-output/).
 
 ## Durable sync receipt retention
 
+Production abuse limits, trusted proxy policy, CORS enforcement, headers, error
+redaction and input limits are documented in
+[PRODUCTION_CONFIGURATION.md](../PRODUCTION_CONFIGURATION.md#phase-8c-http-abuse-and-browser-boundary).
+Limits are per-process; coordinated multi-instance abuse controls require ingress
+or shared infrastructure. Committed replay preserves provider-budget exemptions.
+
 There is no enforced maximum replay age. Offline requests may return months or
 years later; timestamps are diagnostic, never permission to reuse operation keys.
 
