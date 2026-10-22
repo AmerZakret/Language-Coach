@@ -4,6 +4,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Lesson } from './schemas/lesson.schema';
 import { allLessons } from './data';
+import { developmentSchemaChangesAllowed } from '../operations/schema-startup';
 
 @Injectable()
 export class LessonsService implements OnModuleInit {
@@ -14,6 +15,7 @@ export class LessonsService implements OnModuleInit {
   ) {}
 
   async onModuleInit() {
+    if (!developmentSchemaChangesAllowed()) return;
     await this.seedLessons();
   }
 

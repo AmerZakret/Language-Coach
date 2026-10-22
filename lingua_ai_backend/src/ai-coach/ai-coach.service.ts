@@ -8,6 +8,7 @@ import { MutationReceipts } from '../common/mutation-receipt';
 import { ChatBarrier } from './schemas/chat-barrier.schema';
 import { User } from '../users/schemas/user.schema';
 import { featureEnabled } from '../config/runtime-config';
+import { initializeDevelopmentIndexes } from '../operations/schema-startup';
 
 interface GeminiResponse {
   candidates?: Array<{
@@ -37,7 +38,7 @@ export class AiCoachService {
     @InjectModel(ChatBarrier.name) private readonly barriers: Model<ChatBarrier>,
   ) {}
 
-  async onModuleInit() { await this.barriers.createIndexes(); }
+  async onModuleInit() { await initializeDevelopmentIndexes(this.barriers); }
 
   /**
    * Resolve only the MongoDB identity supplied by an authenticated controller.

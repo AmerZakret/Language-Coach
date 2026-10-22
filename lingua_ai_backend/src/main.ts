@@ -5,10 +5,13 @@ import { ConfigService } from '@nestjs/config';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { configureCommunityUploadServing } from './community/community-upload-serving';
 import { corsOptions, safeConfigSummary } from './config/runtime-config';
+import { TrafficLifecycle } from './operations/traffic-lifecycle.service';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   const configService = app.get(ConfigService);
+  app.enableShutdownHooks(['SIGTERM', 'SIGINT']);
+  app.get(TrafficLifecycle).attach(app, () => process.exit(1));
 
   app.useGlobalPipes(
     new ValidationPipe({
@@ -28,6 +31,8 @@ async function bootstrap() {
   Logger.log(`Application listening on port ${port}`, 'Bootstrap');
 }
 bootstrap().catch(() => {
-  console.error('Backend startup failed. Check configuration and dependency availability.');
+  console.error(
+    'Backend startup failed. Check configuration and dependency availability.',
+  );
   process.exit(1);
 });

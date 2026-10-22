@@ -7,6 +7,7 @@ import { Flashcard } from './schemas/flashcard.schema';
 import { User } from '../users/schemas/user.schema';
 import { SrsCalculatorService } from './services/srs-calculator.service';
 import { AiContextService } from './services/ai-context.service';
+import { developmentSchemaChangesAllowed } from '../operations/schema-startup';
 
 @Injectable()
 export class FlashcardsService implements OnModuleInit {
@@ -19,16 +20,18 @@ export class FlashcardsService implements OnModuleInit {
 
   /**
    * NestJS Lifecycle Hook:
-   * 1. Drops legacy unique index userId_1_targetWord_1 to prevent Mongoose schema errors on launch.
+   * Development/test compatibility only: drop the obsolete pre-language index.
+   * Production verifies indexes and leaves migration to the operator.
    * Language compatibility is handled on reads without backfilling documents.
    */
   async onModuleInit() {
+    if (!developmentSchemaChangesAllowed()) return;
     try {
       // Drop the old index if it exists to avoid conflicts when creating the new index
       await this.flashcardModel.collection.dropIndex('userId_1_targetWord_1');
       console.log('Successfully dropped old flashcard unique index.');
     } catch (e) {
-      // Index might not exist, which is fine
+      if (e?.code !== 26 && e?.code !== 27) throw new Error('Development schema initialization failed for flashcards');
     }
 
   }

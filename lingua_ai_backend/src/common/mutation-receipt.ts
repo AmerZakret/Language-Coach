@@ -3,6 +3,7 @@ import { InjectConnection, InjectModel, MongooseModule, Prop, Schema, SchemaFact
 import { Module } from '@nestjs/common';
 import { ClientSession, Connection, Document, Model, Schema as MongoSchema } from 'mongoose';
 import { createHash } from 'node:crypto';
+import { initializeDevelopmentIndexes } from '../operations/schema-startup';
 
 // NEVER_EXPIRE: deleted resources and cleared histories cannot prove safe replay.
 @Schema({ timestamps: true })
@@ -20,7 +21,7 @@ MutationReceiptSchema.index({ userId: 1, operationType: 1, operationId: 1 }, { u
 export class MutationReceipts implements OnModuleInit {
   constructor(@InjectConnection() private readonly connection: Connection,
     @InjectModel(MutationReceipt.name) private readonly receipts: Model<MutationReceipt>) {}
-  async onModuleInit() { await this.receipts.createIndexes(); }
+  async onModuleInit() { await initializeDevelopmentIndexes(this.receipts); }
 
   async execute(userId: string, operationId: string | undefined, operationType: string,
     input: Record<string, unknown>, work: (session: ClientSession) => Promise<any>) {

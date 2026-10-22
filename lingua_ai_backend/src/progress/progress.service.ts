@@ -7,6 +7,7 @@ import { User } from '../users/schemas/user.schema';
 import { Lesson } from '../lessons/schemas/lesson.schema';
 import { ProgressReset } from './schemas/progress-reset.schema';
 import { deriveLevel, validXp } from '../common/xp-level';
+import { initializeDevelopmentIndexes } from '../operations/schema-startup';
 
 @Injectable()
 export class ProgressService implements OnModuleInit {
@@ -18,7 +19,7 @@ export class ProgressService implements OnModuleInit {
     @InjectModel(ProgressReset.name) private resetModel: Model<ProgressReset>,
   ) {}
 
-  async onModuleInit() { await this.resetModel.createIndexes(); }
+  async onModuleInit() { await initializeDevelopmentIndexes(this.resetModel); }
 
   private assertEpoch(expected: number, current: number, reset = false) {
     if (!Number.isSafeInteger(expected) || expected < 0) {

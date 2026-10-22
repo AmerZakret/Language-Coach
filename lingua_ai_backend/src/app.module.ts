@@ -12,6 +12,7 @@ import { FlashcardsModule } from './flashcards/flashcards.module';
 import { PronunciationModule } from './pronunciation/pronunciation.module';
 import { CommunityModule } from './community/community.module';
 import { validateEnvironment } from './config/runtime-config';
+import { OperationsModule } from './operations/operations.module';
 
 @Module({
   imports: [
@@ -24,6 +25,25 @@ import { validateEnvironment } from './config/runtime-config';
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({
         uri: configService.get<string>('MONGODB_URI'),
+        ...(configService.get('NODE_ENV') === 'production'
+          ? {
+              autoIndex: false,
+              autoCreate: false,
+              bufferCommands: false,
+              serverSelectionTimeoutMS: configService.get<number>(
+                'READINESS_TIMEOUT_MS',
+              ),
+              connectTimeoutMS: configService.get<number>(
+                'READINESS_TIMEOUT_MS',
+              ),
+              waitQueueTimeoutMS: configService.get<number>(
+                'READINESS_TIMEOUT_MS',
+              ),
+              retryAttempts: 1,
+              connectionErrorFactory: () =>
+                new Error('Database connection unavailable'),
+            }
+          : {}),
       }),
       inject: [ConfigService],
     }),
@@ -35,6 +55,7 @@ import { validateEnvironment } from './config/runtime-config';
     FlashcardsModule,
     PronunciationModule,
     CommunityModule,
+    OperationsModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -3,6 +3,7 @@ import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import { createHash } from 'node:crypto';
 import { Connection, Model, Types } from 'mongoose';
 import type { ClientSession } from 'mongoose';
+import { initializeDevelopmentIndexes } from '../operations/schema-startup';
 import { Flashcard } from './schemas/flashcard.schema';
 import { FlashcardOperation } from './schemas/flashcard-operation.schema';
 
@@ -15,8 +16,7 @@ export class FlashcardIdempotencyService implements OnModuleInit {
   ) {}
 
   async onModuleInit() {
-    // Explicitly ensure the deduplication constraint even when autoIndex is off.
-    await this.operations.createIndexes();
+    await initializeDevelopmentIndexes(this.operations);
   }
 
   async execute(

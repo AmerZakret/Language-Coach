@@ -13,6 +13,9 @@ export interface RuntimeConfig extends Record<string, unknown> {
   PRONUNCIATION_ENABLED: boolean;
   CORS_ORIGINS: string;
   UPLOAD_ROOT: string;
+  READINESS_TIMEOUT_MS: number;
+  READINESS_RECHECK_MS: number;
+  SHUTDOWN_GRACE_MS: number;
 }
 
 // Never interpolate supplied values or parser errors: URIs may contain secrets.
@@ -244,6 +247,22 @@ export function validateEnvironment(
       'UPLOAD_ROOT',
       'must not use temporary, build, repository metadata or filesystem-root storage',
     );
+  const boundedMilliseconds = (
+    name: string,
+    fallback: number,
+    minimum: number,
+    maximum: number,
+  ) => {
+    const value =
+      env[name] === undefined ? String(fallback) : String(env[name]);
+    if (
+      !/^\d+$/.test(value) ||
+      Number(value) < minimum ||
+      Number(value) > maximum
+    )
+      invalid(name, `must be an integer from ${minimum} to ${maximum}`);
+    return Number(value);
+  };
   return {
     ...env,
     NODE_ENV: mode as RuntimeConfig['NODE_ENV'],
@@ -254,6 +273,24 @@ export function validateEnvironment(
     PRONUNCIATION_ENABLED: pronunciation,
     CORS_ORIGINS: [...new Set(origins)].join(','),
     UPLOAD_ROOT: root,
+    READINESS_TIMEOUT_MS: boundedMilliseconds(
+      'READINESS_TIMEOUT_MS',
+      5000,
+      100,
+      30000,
+    ),
+    READINESS_RECHECK_MS: boundedMilliseconds(
+      'READINESS_RECHECK_MS',
+      15000,
+      1000,
+      60000,
+    ),
+    SHUTDOWN_GRACE_MS: boundedMilliseconds(
+      'SHUTDOWN_GRACE_MS',
+      25000,
+      1000,
+      120000,
+    ),
     GEMINI_API_KEY: apiKey,
     PRONUNCIATION_SERVICE_URL:
       pronunciationUrl.replace(/\/+$/, '') ||

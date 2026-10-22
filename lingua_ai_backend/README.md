@@ -24,6 +24,11 @@ Build first, inject `NODE_ENV=production` and the required configuration, then r
 
 ### 1. Health & System
 *   **GET `/health`**: Returns system status and timestamp.
+*   **GET `/health/live`**: Cheap process liveness, independent of Mongo/providers.
+*   **GET `/health/ready`**: Cached core readiness; 503 for database, transaction,
+    critical-index or upload-storage failure. Production gates business traffic
+    until ready. See the production contract for verify-only schema provisioning
+    and bounded SIGTERM/SIGINT draining.
 
 ### 2. Authentication
 *   **POST `/auth/register`**: Register a new user.
