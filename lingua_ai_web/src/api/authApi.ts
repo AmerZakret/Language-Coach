@@ -2,6 +2,7 @@ import { targetLanguageCode } from '../utils/targetLanguage';
 import apiClient from './apiClient';
 import type { User } from '../types/auth';
 import { getSessionRequestConfig } from '../utils/queueSession';
+import type { QueueSession } from '../utils/queueSession';
 
 export function parsePublicUser(value: unknown): User {
   const user = value as Partial<User> | null;
@@ -31,8 +32,8 @@ export const register = async (name: string, email: string, password: string): P
   return parseSession(response.data);
 };
 
-export const fetchMe = async (): Promise<User> => {
-  const response = await apiClient.get<User>('/users/me', getSessionRequestConfig());
+export const fetchMe = async (session?: QueueSession): Promise<User> => {
+  const response = await apiClient.get<User>('/users/me', session ? { sessionSnapshot: session } : getSessionRequestConfig());
   return parsePublicUser(response.data);
 };
 

@@ -14,7 +14,7 @@ interface TargetLanguageContextType {
 const TargetLanguageContext = createContext<TargetLanguageContextType | undefined>(undefined);
 
 export const TargetLanguageProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { user, token, isGuest, login } = useAuth();
+  const { user, token, isGuest, updateUser } = useAuth();
   const captureSession = useSessionGuard(getUserProgressKey(user, isGuest, token));
   const languageRequest = useRef(0);
 
@@ -47,7 +47,7 @@ export const TargetLanguageProvider: React.FC<{ children: React.ReactNode }> = (
       try {
         const updatedUser = await updateProfile({ targetLanguage: lang });
         if (!isCurrent() || request !== languageRequest.current) return;
-        login({ ...updatedUser, isGuest: false }, token);
+        await updateUser({ ...updatedUser, isGuest: false });
       } catch (e) {
         console.error('Failed to sync target language to backend', e);
       }

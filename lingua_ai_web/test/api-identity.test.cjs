@@ -14,8 +14,10 @@ test('AI and pronunciation helpers omit body/query identity and keep active rout
     const source = readFileSync(join(__dirname, '../src/api', file), 'utf8');
     vm.runInNewContext(ts.transpileModule(source, {
       compilerOptions: { module: ts.ModuleKind.CommonJS, esModuleInterop: true },
-    }).outputText, { module, exports: module.exports, FormData, Blob,
+    }).outputText, { module, exports: module.exports, FormData, Blob, crypto: require('node:crypto').webcrypto,
       require: name => {
+        if (name === './mutationRequest') return load('mutationRequest.ts');
+        if (name.endsWith('/queueSession')) return { getSessionRequestConfig: () => ({ sessionSnapshot: { userId: 'owner' } }), isSessionCurrent: () => true };
         if (name === './apiClient') return { __esModule: true, default: client };
         if (name.endsWith('/targetLanguage')) {
           const languageModule = { exports: {} };

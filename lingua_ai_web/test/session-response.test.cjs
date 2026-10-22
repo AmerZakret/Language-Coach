@@ -4,6 +4,7 @@ const { join } = require('node:path');
 const { test } = require('node:test');
 const vm = require('node:vm');
 const ts = require('typescript');
+const { locks } = require('./helpers/webLocks.cjs');
 const A = '507f1f77bcf86cd799439011';
 const B = '507f1f77bcf86cd799439012';
 const tick = () => new Promise(resolve => setImmediate(resolve));
@@ -20,10 +21,12 @@ const card = id => ({ _id: `card-${id}`, userId: id, targetWord: id,
 const copy = value => JSON.parse(JSON.stringify(value));
 
 function harness(initial = {}) {
+  const lockManager = locks();
   const values = new Map(Object.entries(initial));
   for (const prefix of ['registered', 'guest']) for (const id of [A,B]) { const key = `progress_epoch_${prefix}_${id}`; if (!values.has(key)) values.set(key, '0'); }
   const localStorage = { getItem: k => values.get(k) ?? null,
-    setItem: (k, v) => values.set(k, String(v)), removeItem: k => values.delete(k) };
+    setItem: (k, v) => values.set(k, String(v)), removeItem: k => values.delete(k),
+    get length() { return values.size; }, key: i => [...values.keys()][i] ?? null };
   let activeRunner;
   const modules = new Map();
   const calls = [];
@@ -75,6 +78,7 @@ function harness(initial = {}) {
       if (!r.slots[i] || !depsEqual(r.slots[i].deps, deps)) r.slots[i] = { fn, deps };
       return r.slots[i].fn;
     },
+    useLayoutEffect: callback => { callback(); },
     useEffect: (fn, deps) => {
       const r = activeRunner, i = r.cursor++;
       if (!r.slots[i] || !depsEqual(r.slots[i].deps, deps)) {
@@ -85,20 +89,20 @@ function harness(initial = {}) {
     },
   };
   const jsx = (type, props) => ({ type, props });
-  const sources = { userKey: 'utils/userKey.ts', queueSession: 'utils/queueSession.ts',
+  const sources = { userKey: 'utils/userKey.ts', queueSession: 'utils/queueSession.ts', authStorage: 'utils/authSessionStorage.ts', coordination: 'utils/browserCoordination.ts', localGuestCards: 'utils/localGuestCards.ts',
     policy: 'utils/syncRetryPolicy.ts', guard: 'utils/useSessionGuard.ts', auth: 'context/AuthContext.tsx',
     storage: 'utils/progressStorage.ts', types: 'types/progress.ts',
     progress: 'context/ProgressContext.tsx', target: 'context/TargetLanguageContext.tsx',
     cards: 'pages/FlashcardsPage.tsx', queue: 'utils/offlineQueue.ts', authPage: 'components/auth/AuthPage.tsx',
-    profile: 'pages/ProfilePage.tsx', writing: 'pages/WritingPracticePage.tsx', pronunciation: 'pages/PronunciationPracticePage.tsx', language: 'utils/targetLanguage.ts', mutation: 'utils/flashcardMutation.ts', community: 'pages/CommunityPage.tsx', coach: 'pages/AiCoachPage.tsx' };
+    profile: 'pages/ProfilePage.tsx', writing: 'pages/WritingPracticePage.tsx', pronunciation: 'pages/PronunciationPracticePage.tsx', language: 'utils/targetLanguage.ts', mutation: 'utils/flashcardMutation.ts', communityCache: 'utils/communityFeedCache.ts', community: 'pages/CommunityPage.tsx', coach: 'pages/AiCoachPage.tsx' };
   const exposed = {
     cards: 'fetchCards, handleSaveCard, handleDeleteCard, handleStudyScore, handleOpenAdd, handleOpenEdit, setFormData, allCards, dueCards, loading, error, successMsg, modal, studyResults',
     authPage: 'handleSubmit, setEmail, setPassword, loading, error',
     profile: 'handleSave, setName, saved, resetConfirm, setResetConfirm',
     writing: 'handleSubmit, setTopic, setText, feedback, error, loading',
     pronunciation: 'handleSubmitAssessment, setAudioBlob, setTargetText, result, error',
-    community: 'startEditing, setEditingText, handleUpdatePost',
-    coach: 'messages, historyLoading',
+    community: 'startEditing, setEditingText, handleUpdatePost, handleCreatePost, handleToggleLike, handleDeletePost, setSelectedLanguage, setNewPostText, setNewPostImage, fetchFeed, posts, loading, error, newPostText, isPosting',
+    coach: 'messages, historyLoading, handleSend, handleClearChat, isTyping',
   };
   function load(name) {
     if (modules.has(name)) return modules.get(name).exports;
@@ -117,11 +121,12 @@ function harness(initial = {}) {
       esModuleInterop: true, target: ts.ScriptTarget.ES2020,
     } }).outputText;
     vm.runInNewContext(compiled, {
-      module, exports: module.exports, localStorage, AbortController, FormData, __capture: value => { activeRunner.exposed = value; },
+      module, exports: module.exports, crypto: require('node:crypto').webcrypto, localStorage, AbortController, FormData, alert: message => h.calls.push(['alert', message]), __capture: value => { activeRunner.exposed = value; },
       fetch: (...args) => h.fetchGuest(...args), console: { log() {}, error() {} },
       setTimeout: fn => { timers.push(fn); return timers.length; }, clearTimeout() {},
       setInterval: () => 1, clearInterval() {},
-      document: { addEventListener() {}, removeEventListener() {} }, window: {},
+      navigator: { locks: lockManager },
+      document: { addEventListener() {}, removeEventListener() {} }, window: { confirm: () => true },
       require: path => {
         if (path === 'react') return react;
         if (path === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment: 'fragment' };
@@ -129,18 +134,27 @@ function harness(initial = {}) {
         if (path === 'react-router-dom') return { useNavigate: () => () => calls.push(['navigate']) };
         if (path.endsWith('.png')) return 'image';
         if (path.endsWith('/userKey')) return load('userKey');
+        if (path.endsWith('/authSessionStorage')) return load('authStorage');
+        if (path.endsWith('/localGuestCards')) return load('localGuestCards');
+        if (path.endsWith('/browserCoordination')) return load('coordination');
         if (path.endsWith('/queueSession')) return load('queueSession');
         if (path.endsWith('/targetLanguage')) return load('language');
         if (path.endsWith('/flashcardMutation')) return load('mutation');
         if (path.endsWith('/writingTopics')) return h.writingTopics || (h.writingTopics = { writingTopics: { en: { en: ['Topic'] } } });
+        if (path.endsWith('/communityFeedCache')) return load('communityCache');
         if (path.endsWith('/aiCoachApi')) return {
+          sendMessage: (...args) => h.sendMessage(...args),
+          clearChatHistory: (...args) => h.clearChatHistory(...args),
           checkWriting: (...args) => h.checkWriting(...args),
           getChatHistory: (...args) => h.getChatHistory(...args),
         };
         if (path.endsWith('/pronunciationApi')) return { assessPronunciation: (...args) => h.assessPronunciation(...args) };
         if (path.endsWith('/communityApi')) return {
-          getCommunityPosts: async () => ({ items: h.communityPosts || [] }),
-          updateCommunityPost: async (id, body) => { h.calls.push(['community-update', id, body]); },
+          getCommunityPosts: async params => h.fetchCommunity ? h.fetchCommunity(params) : ({ items: (h.communityPosts || []).map(post => ({ likes: [], likedByMe: false, likesCount: 0, learningLanguage: 'English', createdAt: '', updatedAt: '', ...post })), page: 1, limit: 50, total: (h.communityPosts || []).length, hasMore: false }),
+          createCommunityPost: async (...args) => { h.calls.push(['community-create', ...args]); return h.communityMutation?.(...args); },
+          deleteCommunityPost: async (...args) => { h.calls.push(['community-delete', ...args]); return h.communityMutation?.(...args); },
+          toggleLikeCommunityPost: async (...args) => { h.calls.push(['community-like', ...args]); return h.communityMutation ? h.communityMutation(...args) : { likesCount: 1, likedByMe: true }; },
+          updateCommunityPost: async (id, body, ...args) => { h.calls.push(['community-update', id, body, ...args]); return h.communityMutation?.(id, body, ...args); },
         };
         if (path.endsWith('/syncRetryPolicy')) return load('policy');
         if (path.endsWith('/SyncContext')) return { useSync: () => ({ syncRevision: h.syncRevision || 0, lastDrainSucceeded: true }) };
@@ -165,7 +179,7 @@ function harness(initial = {}) {
           ...load('queue'),
           processOfflineQueue: (...args) => h.progressQueue ? load('queue').processOfflineQueue(...args) : h.drain(...args),
           isPendingBackendCard: (...args) => h.queue?.isPendingBackendCard(...args) ?? false,
-          pushToOfflineQueue: (...args) => load('queue').pushToOfflineQueue(...args),
+          pushToOfflineQueue: async (...args) => await load('queue').pushToOfflineQueue(...args),
         };
         if (path.endsWith('/apiClient')) return Object.fromEntries(['get', 'post', 'put', 'delete'].map(method => [method,
           (url, data, config) => {
@@ -198,7 +212,7 @@ function harness(initial = {}) {
   h.progressQueue = true;
   h.mountAuth = () => { h.authRunner = runner('auth', 'AuthProvider'); };
   h.auth = () => h.authRunner.result.props.value;
-  h.login = id => { h.auth().login(user(id), `test-${id}`); h.authRunner.render(); };
+  h.login = async id => { await h.settle(); await h.auth().login(user(id), `test-${id}`); h.authRunner.render(); };
   h.mount = (name, symbol) => { h.progressQueue = name === 'progress'; h.child = runner(name, symbol); };
   h.settle = async () => {
     for (let i = 0; i < 5; i++) {
@@ -206,13 +220,13 @@ function harness(initial = {}) {
       for (const r of [h.authRunner, h.child]) if (r?.mounted && r.dirty) r.render();
     }
   };
-  h.switchToB = async () => { h.auth().logout(); h.login(B); if (h.child) h.child.render(); await h.settle(); };
+  h.switchToB = async () => { await h.auth().logout(); await h.login(B); if (h.child) h.child.render(); await h.settle(); };
   h.load = load;
   return h;
 }
 
 async function pendingCardHarness() {
-  const h = harness(); h.mountAuth(); h.login(A); h.queue = h.load('queue');
+  const h = harness(); h.mountAuth(); await h.login(A); h.queue = h.load('queue');
   h.transport = async method => {
     if (method === 'get') throw new Error('Offline');
     return { data: card(A) };
@@ -228,7 +242,7 @@ async function pendingCardHarness() {
 for (const boundary of ['language', 'account', 'token refresh', 'language ABA']) {
   test(`AI history rejects a late response after ${boundary} switch`, async () => {
     const old = deferred(), current = deferred();
-    const h = harness(); h.mountAuth(); await h.settle(); h.login(A);
+    const h = harness(); h.mountAuth(); await h.settle(); await h.login(A);
     h.isOffline = false;
     const calls = [];
     h.getChatHistory = language => {
@@ -245,7 +259,7 @@ for (const boundary of ['language', 'account', 'token refresh', 'language ABA'])
       }
     } else if (boundary === 'account') await h.switchToB();
     else {
-      h.auth().login(user(A), 'replacement-token'); h.authRunner.render(); h.child.render();
+      await h.auth().login(user(A), 'replacement-token'); h.authRunner.render(); h.child.render();
     }
     await h.settle();
     assert.equal(h.child.exposed.historyLoading, true);
@@ -263,7 +277,7 @@ for (const boundary of ['language', 'account', 'token refresh', 'language ABA'])
 }
 
 test('AI same-language history applies normally', async () => {
-  const h = harness(); h.mountAuth(); await h.settle(); h.login(A); h.isOffline = false;
+  const h = harness(); h.mountAuth(); await h.settle(); await h.login(A); h.isOffline = false;
   const history = [{ role: 'user', message: 'Hello' }, { role: 'assistant', message: 'Hi' }];
   h.getChatHistory = async language => { assert.equal(language, 'English'); return history; };
   h.mount('coach', 'AiCoachPage'); await h.settle();
@@ -273,7 +287,7 @@ test('AI same-language history applies normally', async () => {
 
 test('AI stale history error cannot finish the new-language load', async () => {
   const old = deferred(), current = deferred();
-  const h = harness(); h.mountAuth(); await h.settle(); h.login(A); h.isOffline = false;
+  const h = harness(); h.mountAuth(); await h.settle(); await h.login(A); h.isOffline = false;
   h.getChatHistory = language => language === 'English' ? old.promise : current.promise;
   h.mount('coach', 'AiCoachPage'); await h.settle();
   h.language = 'German'; h.localStorage.setItem('linguaai_target_language', 'German'); h.child.render();
@@ -287,7 +301,7 @@ test('AI stale history error cannot finish the new-language load', async () => {
 
 test('AI history resolved before a deferred updater crosses language boundary is discarded', async () => {
   const old = deferred();
-  const h = harness(); h.mountAuth(); await h.settle(); h.login(A); h.isOffline = false;
+  const h = harness(); h.mountAuth(); await h.settle(); await h.login(A); h.isOffline = false;
   h.getChatHistory = () => old.promise;
   h.mount('coach', 'AiCoachPage'); await h.settle();
   h.deferChildState = true;
@@ -301,7 +315,7 @@ test('AI history resolved before a deferred updater crosses language boundary is
 
 test('AI history completion after unmount cannot update state', async () => {
   const pending = deferred();
-  const h = harness(); h.mountAuth(); await h.settle(); h.login(A); h.isOffline = false;
+  const h = harness(); h.mountAuth(); await h.settle(); await h.login(A); h.isOffline = false;
   h.getChatHistory = () => pending.promise;
   h.mount('coach', 'AiCoachPage'); await h.settle();
   h.child.unmount(); const writes = h.child.writes;
@@ -314,7 +328,7 @@ test('reset contract: web queued reset reaches the real Nest route and acknowled
   const server = await startResetServer();
   try {
     const h = harness(); h.mountAuth(); await h.settle();
-    h.auth().login(user(server.owner), server.token); h.authRunner.render();
+    await h.auth().login(user(server.owner), server.token); h.authRunner.render();
     h.resetProgress = async (_id, url, config) => {
       const response = await fetch(`${server.url}${url}`, { method: 'DELETE', headers: {
         Authorization: `Bearer ${config.offlineQueueSession.token}`,
@@ -325,7 +339,7 @@ test('reset contract: web queued reset reaches the real Nest route and acknowled
       return { data: await response.json() };
     };
     const queue = h.load('queue');
-    queue.pushToOfflineQueue('reset-progress', { expectedEpoch: 0 }, `registered_${server.owner}`);
+    await queue.pushToOfflineQueue('reset-progress', { expectedEpoch: 0 }, `registered_${server.owner}`);
     assert.equal(await queue.processOfflineQueue(server.owner), true);
     assert.equal(queue.getOfflineQueue().length, 0);
     assert.equal(queue.getFailedOfflineActions().length, 0);
@@ -360,7 +374,8 @@ for (const online of [true, false]) {
     assert.equal(h.child.exposed.allCards.length, 0);
     assert.equal(h.child.exposed.dueCards.length, 0);
     assert.deepEqual(JSON.parse(h.localStorage.getItem('flashcards_all_guest_English')), []);
-    assert.deepEqual(JSON.parse(h.localStorage.getItem('flashcards_due_guest_English')), []);
+    // Due state is derived from the one durable all-card snapshot.
+    assert.equal(h.localStorage.getItem('flashcards_due_guest_English'), null);
     assert.equal(h.load('queue').getOfflineQueue().length, 0);
     assert.equal(h.calls.length, 0);
   });
@@ -370,7 +385,7 @@ for (const backendGuest of [true, false]) {
   test(`online flashcard handlers keep backend identity (backend guest: ${backendGuest})`, async () => {
     const h = harness(); h.mountAuth(); await h.settle();
     if (backendGuest) { await h.auth().loginAsGuest(); await h.settle(); }
-    else h.login(A);
+    else await h.login(A);
     h.isOffline = false;
     let savedCard = card(A);
     const mutations = [];
@@ -408,7 +423,7 @@ function findResetButton(node) {
 }
 for (const switchAccount of [true, false]) {
   test(`profile reset callback respects the active session (switch account: ${switchAccount})`, async () => {
-    const h = harness(); h.mountAuth(); h.login(A); h.mount('profile', 'ProfilePage'); await h.settle();
+    const h = harness(); h.mountAuth(); await h.login(A); h.mount('profile', 'ProfilePage'); await h.settle();
     h.child.exposed.setResetConfirm(true); h.child.render();
     const pending = deferred(); let resets = 0;
     h.resetProgress = () => { resets++; return pending.promise; };
@@ -424,7 +439,7 @@ for (const switchAccount of [true, false]) {
   });
 }
 test('profile reset deferred state updater cannot close a newer owner confirmation', async () => {
-  const h = harness(); h.mountAuth(); h.login(A); h.mount('profile', 'ProfilePage'); await h.settle();
+  const h = harness(); h.mountAuth(); await h.login(A); h.mount('profile', 'ProfilePage'); await h.settle();
   h.child.exposed.setResetConfirm(true); h.child.render();
   const pending = deferred(); h.resetProgress = () => pending.promise;
   const resetting = findResetButton(h.child.result).props.onClick();
@@ -475,24 +490,39 @@ test('FlashcardsPage queue write failure cannot locally hide an uncancelled pend
     if (key.startsWith('linguaai_offline_queue_')) throw new Error('Disk full');
     write(key, value);
   };
-  await assert.rejects(h.child.exposed.handleDeleteCard(pending._id), /Disk full/);
+  await h.child.exposed.handleDeleteCard(pending._id); await h.settle();
+  assert.equal(h.child.exposed.error, 'Disk full');
   assert.equal(h.child.exposed.allCards[0]._id, pending._id);
   assert.equal(h.queue.getOfflineQueue().length, 1);
+});
+
+test('old same-owner render cannot enqueue a draft under a replacement token generation', async () => {
+  const h = harness(); h.mountAuth(); await h.login(A); h.isOffline = true;
+  h.mount('cards', 'FlashcardsPage'); await h.settle();
+  h.child.exposed.handleOpenAdd(); h.child.render();
+  h.child.exposed.setFormData({ targetWord: 'old draft', turkishTranslation: 'translation' }); h.child.render();
+  const oldSave = h.child.exposed.handleSaveCard;
+  const cached = h.localStorage.getItem(`flashcards_all_${A}_English`);
+  await h.auth().login(user(A), 'replacement-token'); h.authRunner.render();
+  // The old DOM handler is still reachable before the child is committed again.
+  await oldSave({ preventDefault() {} });
+  assert.equal(h.load('queue').getOfflineQueue().length, 0);
+  assert.equal(h.localStorage.getItem(`flashcards_all_${A}_English`), cached);
 });
 
 test('startup A profile response cannot overwrite B auth/storage', async () => {
   const h = harness({ linguaai_user: JSON.stringify(user(A)), linguaai_token: `test-${A}` });
   const pending = deferred(); h.api.fetchMe = () => pending.promise;
-  h.mountAuth(); h.login(B);
+  h.mountAuth(); await h.login(B);
   pending.resolve(user(A)); await h.settle();
   assert.equal(h.auth().user.id, B);
-  assert.equal(JSON.parse(h.localStorage.getItem('linguaai_user')).id, B);
+  assert.equal(JSON.parse(h.localStorage.getItem('linguaai_session_v1')).user.id, B);
 });
 for (const failure of [false, true]) {
   test(`pending guest login cannot restore A or local guest after B login (failure: ${failure})`, async () => {
     const h = harness(); h.mountAuth(); await h.settle();
     const pending = deferred(); h.fetchGuest = () => pending.promise;
-    const operation = h.auth().loginAsGuest(); h.auth().logout(); h.login(B);
+    const operation = h.auth().loginAsGuest(); await h.auth().logout(); await h.login(B);
     if (failure) pending.reject(new Error('Offline'));
     else pending.resolve({ ok: true, json: async () => ({ user: { ...user(A), email: 'guest-a@guest.lingua.local' }, access_token: `test-${A}` }) });
     await operation; await h.settle();
@@ -500,16 +530,16 @@ for (const failure of [false, true]) {
   });
 }
 test('ordinary same-session profile update does not advance revision', async () => {
-  const h = harness(); h.mountAuth(); h.login(A);
+  const h = harness(); h.mountAuth(); await h.login(A);
   const revision = h.load('queueSession').getOfflineQueueSession().revision;
-  h.auth().login({ ...user(A), name: 'Updated' }, `test-${A}`); h.authRunner.render();
+  await h.auth().login({ ...user(A), name: 'Updated' }, `test-${A}`); h.authRunner.render();
   assert.equal(h.load('queueSession').getOfflineQueueSession().revision, revision);
   assert.equal(h.auth().user.name, 'Updated');
 });
 
 for (const kind of ['fetch', 'completion-success', 'completion-failure', 'reset', 'language', 'unmount']) {
   test(`progress discards stale ${kind} response and follow-ups`, async () => {
-    const h = harness(); h.isOffline = false; h.mountAuth(); h.login(A); h.mount('progress', 'ProgressProvider'); await h.settle();
+    const h = harness(); h.isOffline = false; h.mountAuth(); await h.login(A); h.mount('progress', 'ProgressProvider'); await h.settle();
     const pending = deferred();
     let operation;
     if (kind.startsWith('completion')) {
@@ -522,6 +552,7 @@ for (const kind of ['fetch', 'completion-success', 'completion-failure', 'reset'
       h.fetchProgress = (id, lang) => id === A && lang === 'English' ? pending.promise : Promise.resolve(progress(30));
       operation = h.child.result.props.value.reloadProgress();
     }
+    await h.settle(); // Wait for the asynchronous queue lock and request dispatch.
     if (kind === 'language') {
       h.language = 'German'; h.localStorage.setItem('linguaai_target_language', 'German'); h.child.render(); await h.settle();
     } else if (kind === 'unmount') h.child.unmount();
@@ -541,7 +572,7 @@ for (const kind of ['fetch', 'completion-success', 'completion-failure', 'reset'
 
 for (const kind of ['fetch', 'create', 'update', 'delete', 'review', 'failed-create', 'sync-refresh', 'language', 'unmount']) {
   test(`flashcards discard stale ${kind} UI/cache changes`, async () => {
-    const h = harness(); h.isOffline = false; h.mountAuth(); h.login(A);
+    const h = harness(); h.isOffline = false; h.mountAuth(); await h.login(A);
     h.mount('cards', 'FlashcardsPage'); await h.settle();
     const pending = deferred(); let operation;
     const originalTransport = h.transport;
@@ -560,6 +591,7 @@ for (const kind of ['fetch', 'create', 'update', 'delete', 'review', 'failed-cre
       else if (['create', 'update', 'failed-create'].includes(kind)) operation = h.child.exposed.handleSaveCard({ preventDefault() {} });
       else operation = h.child.exposed.fetchCards();
     }
+    await h.settle(); // Wait for the asynchronous queue lock and request dispatch.
     if (kind === 'language') {
       h.language = 'German'; h.localStorage.setItem('linguaai_target_language', 'German');
       h.transport = (method, url, data) => url.includes('targetLanguage=de') ? originalTransport(method, url, data) : pending.promise;
@@ -581,7 +613,7 @@ for (const kind of ['fetch', 'create', 'update', 'delete', 'review', 'failed-cre
 }
 
 test('A language update cannot call login to restore A after B becomes active', async () => {
-  const h = harness(); h.mountAuth(); h.login(A); h.mount('target', 'TargetLanguageProvider'); await h.settle();
+  const h = harness(); h.mountAuth(); await h.login(A); h.mount('target', 'TargetLanguageProvider'); await h.settle();
   const pending = deferred(); h.api.updateProfile = () => pending.promise;
   const operation = h.child.result.props.value.setTargetLanguage('German');
   await h.switchToB();
@@ -590,7 +622,7 @@ test('A language update cannot call login to restore A after B becomes active', 
   assert.equal(h.auth().user.id, B); assert.equal(h.localStorage.getItem('linguaai_target_language'), stored);
 });
 test('older same-session language update cannot overwrite a newer language', async () => {
-  const h = harness(); h.mountAuth(); h.login(A); h.mount('target', 'TargetLanguageProvider'); await h.settle();
+  const h = harness(); h.mountAuth(); await h.login(A); h.mount('target', 'TargetLanguageProvider'); await h.settle();
   const pending = deferred();
   h.api.updateProfile = data => data.targetLanguage === 'German' ? pending.promise : Promise.resolve({ ...user(A), targetLanguage: data.targetLanguage });
   const first = h.child.result.props.value.setTargetLanguage('German');
@@ -599,7 +631,7 @@ test('older same-session language update cannot overwrite a newer language', asy
   assert.equal(h.auth().user.targetLanguage, 'French');
 });
 test('stale profile-name response cannot replace B authentication', async () => {
-  const h = harness(); h.mountAuth(); h.login(A); h.mount('profile', 'ProfilePage'); await h.settle();
+  const h = harness(); h.mountAuth(); await h.login(A); h.mount('profile', 'ProfilePage'); await h.settle();
   h.child.exposed.setName('new name'); h.child.render();
   const pending = deferred(); h.api.updateProfile = () => pending.promise;
   const operation = h.child.exposed.handleSave(); await h.switchToB();
@@ -615,7 +647,7 @@ test('login screen cannot apply an old login response after B is active', async 
   assert.equal(h.auth().user.id, B); assert.equal(h.calls.length, count);
 });
 test('current-session progress and flashcard responses still apply and cache', async () => {
-  const h = harness(); h.isOffline = false; h.mountAuth(); h.login(B); h.mount('progress', 'ProgressProvider'); await h.settle();
+  const h = harness(); h.isOffline = false; h.mountAuth(); await h.login(B); h.mount('progress', 'ProgressProvider'); await h.settle();
   assert.equal(h.child.result.props.value.progress.totalXp, 20);
   assert.equal(JSON.parse(h.localStorage.getItem(`progress_registered_${B}_English`)).totalXp, 20);
   h.child.unmount(); h.isOffline = false; h.mount('cards', 'FlashcardsPage'); await h.settle();
@@ -624,7 +656,7 @@ test('current-session progress and flashcard responses still apply and cache', a
 });
 
 async function offlineProgressHarness(initial) {
-  const h = harness(initial); h.mountAuth(); if (!initial) h.login(A);
+  const h = harness(initial); h.mountAuth(); if (!initial) await h.login(A);
   await h.settle();
   h.serverProgress = progress(0); h.sent = [];
   h.fetchProgress = async () => h.serverProgress;
@@ -693,7 +725,7 @@ test('Phase 4E: append during GET wins over server snapshot, without lost pendin
   const h = await offlineProgressHarness(); await h.online();
   const pending = deferred(); h.fetchProgress = () => pending.promise;
   const refresh = h.value().reloadProgress(); await tick();
-  h.load('queue').pushToOfflineQueue('complete-lesson', { lessonId: 'new', score: 73,
+  await h.load('queue').pushToOfflineQueue('complete-lesson', { lessonId: 'new', score: 73,
     xpReward: 50, targetLanguage: 'English', progressEpoch: 0, _lessonLanguageBound: true }, `registered_${A}`);
   pending.resolve(progress(0)); await refresh; await h.settle();
   assert.equal(h.value().progress.totalXp, 50); assert.deepEqual(copy(h.value().progress.completedLessonIds), ['new']);
@@ -704,7 +736,7 @@ test('Phase 4E: pending completions cannot cross account or language boundaries'
   h.language = 'German'; h.localStorage.setItem('linguaai_target_language', 'German'); h.child.render(); await h.settle();
   assert.equal(h.value().progress.totalXp, 0);
   await h.switchToB(); assert.equal(h.value().progress.totalXp, 0);
-  h.auth().logout(); h.login(A); h.language = 'English'; h.localStorage.setItem('linguaai_target_language', 'English');
+  await h.auth().logout(); await h.login(A); h.language = 'English'; h.localStorage.setItem('linguaai_target_language', 'English');
   h.child.render(); await h.settle(); assert.equal(h.value().progress.totalXp, 50);
 });
 
@@ -746,7 +778,7 @@ test('Phase 4E: reset waits behind active completion and cannot be undone by its
 });
 
 test('Phase 4E: owner-scoped legacy action lacking a score is retained without inventing 100', async () => {
-  const h = await offlineProgressHarness(); h.load('queue').pushToOfflineQueue('complete-lesson', { lessonId: 'unknown-score' }, `registered_${A}`);
+  const h = await offlineProgressHarness(); await h.load('queue').pushToOfflineQueue('complete-lesson', { lessonId: 'unknown-score' }, `registered_${A}`);
   await h.online(); assert.equal(h.sent.length, 0); assert.equal(h.load('queue').getOfflineQueue().length, 0);
   assert.equal(h.load('queue').getFailedOfflineActions().length, 1);
 });
@@ -755,7 +787,7 @@ test('Phase 4E: owner-scoped legacy action lacking a score is retained without i
 test('Phase 4E: valid legacy owned score gains cached lesson context without ID replacement', async () => {
   const h = await offlineProgressHarness();
   h.localStorage.setItem('linguaai_lessons_English', JSON.stringify([{ id: 'legacy', xpReward: 50, targetLanguage: 'English' }]));
-  h.load('queue').pushToOfflineQueue('complete-lesson', { lessonId: 'legacy', score: 73, progressEpoch: 0 }, `registered_${A}`);
+  await h.load('queue').pushToOfflineQueue('complete-lesson', { lessonId: 'legacy', score: 73, progressEpoch: 0 }, `registered_${A}`);
   const id = h.load('queue').getOfflineQueue()[0].id;
   await h.value().reloadProgress(); await h.settle();
   assert.equal(h.value().progress.totalXp, 50);
@@ -801,12 +833,12 @@ test('Phase 4E: deferred React updater checks session again before applying pend
   h.deferChildState = false; await h.settle();
   assert.equal(h.value().progress.totalXp, 0); assert.deepEqual(copy(h.value().progress.completedLessonIds), []);
   assert.equal(h.load('queue').getOfflineQueue().length, 0);
-  h.auth().logout(); h.login(A); h.child.render(); await h.settle();
+  await h.auth().logout(); await h.login(A); h.child.render(); await h.settle();
   assert.equal(h.value().progress.totalXp, 50);
 });
 
 async function onlineMutationHarness() {
-  const h = harness(); h.mountAuth(); h.login(A); h.isOffline = false;
+  const h = harness(); h.mountAuth(); await h.login(A); h.isOffline = false;
   h.mutations = [];
   h.transport = async (method, url, data, config) => {
     if (method === 'get') return { data: [card(A)] };
@@ -886,11 +918,12 @@ test('Phase 5C: changing a failed mutation payload creates a new operation key',
 });
 
 test('Phase 5C: web image posts allow clearing their caption, text-only posts do not', async () => {
-  const h = harness(); h.mountAuth(); h.login(A);
+  const h = harness(); h.mountAuth(); await h.login(A);
   h.communityPosts = [{ _id: 'image', userId: A, userName: 'Test', text: 'caption', imageUrl: '/image.png',
     learningLanguage: 'English', likes: [], likesCount: 0, createdAt: new Date().toISOString() },
     { _id: 'text', userId: A, userName: 'Test', text: 'caption', learningLanguage: 'English',
       likes: [], likesCount: 0, createdAt: new Date().toISOString() }];
+  h.isOffline = false;
   h.mount('community', 'CommunityPage'); await h.settle();
   h.child.exposed.startEditing(h.communityPosts[0]); h.child.render();
   h.child.exposed.setEditingText('  '); h.child.render();
@@ -920,7 +953,7 @@ for (const backendGuest of [false, true]) {
 test('Phase 5E: stale startup 401 cannot invalidate a replacement session', async () => {
   const h = harness({ linguaai_user: JSON.stringify(user(A)), linguaai_token: `test-${A}` });
   const pending = deferred(); h.api.fetchMe = () => pending.promise;
-  h.mountAuth(); h.login(B);
+  h.mountAuth(); await h.login(B);
   pending.reject({ response: { status: 401 } }); await h.settle();
   assert.equal(h.auth().user.id, B); assert.equal(h.auth().token, `test-${B}`);
 });
@@ -934,7 +967,7 @@ test('Phase 5E: local_guest restoration never sends a token validation request',
 });
 
 async function writingHarness() {
-  const h = harness(); h.mountAuth(); h.login(A); h.isOffline = false;
+  const h = harness(); h.mountAuth(); await h.login(A); h.isOffline = false;
   h.mount('writing', 'WritingPracticePage'); await h.settle();
   h.child.exposed.setTopic('Topic'); h.child.exposed.setText('A sufficiently long writing sample.');
   h.child.render(); return h;
@@ -962,7 +995,7 @@ test('Phase 5E: stale writing failure cannot change the replacement session UI',
   const h = await writingHarness(); const pending = deferred();
   h.checkWriting = () => pending.promise;
   const request = h.child.exposed.handleSubmit(); h.child.render();
-  h.login(B); h.child.render(); await h.settle();
+  await h.login(B); h.child.render(); await h.settle();
   pending.reject({ response: { status: 503, data: { message: 'Writing evaluation is temporarily unavailable. Please try again.' } } });
   await request; await h.settle();
   assert.equal(h.child.exposed.error, ''); assert.equal(h.child.exposed.loading, false);
@@ -971,7 +1004,7 @@ test('Phase 5E: stale writing failure cannot change the replacement session UI',
 });
 
 test('Phase 6B: successful pronunciation is feedback only, with no persistent XP or reward badge', async () => {
-  const h = harness(); h.mountAuth(); h.login(A); h.isOffline = false;
+  const h = harness(); h.mountAuth(); await h.login(A); h.isOffline = false;
   h.mount('pronunciation', 'PronunciationPracticePage'); await h.settle();
   h.child.exposed.setTargetText('Hello world'); h.child.render(); await h.settle();
   h.child.exposed.setAudioBlob({ recorded: true }); h.child.render();
@@ -1019,7 +1052,7 @@ test('Phase 6A: retry and quarantine preserve original epoch; legacy work never 
   await h.online();
   const failed = queue.getFailedOfflineActions()[0];
   assert.equal(failed.id, action.id); assert.equal(failed.payload.progressEpoch, 0);
-  queue.pushToOfflineQueue('complete-lesson', { lessonId: 'legacy', score: 73 }, owner);
+  await queue.pushToOfflineQueue('complete-lesson', { lessonId: 'legacy', score: 73 }, owner);
   h.saveProgress = async () => { throw new Error('legacy must not dispatch'); };
   await h.value().reloadProgress(); await h.settle();
   assert.equal(queue.getFailedOfflineActions()[1].payload.progressEpoch, undefined);
@@ -1132,7 +1165,7 @@ test('Phase 6C: GET failures preserve acknowledged progress and expose their exi
 test('Phase 6C: trusted cached lesson repairs old UI-language metadata without changing epoch or operation ID', async () => {
   const h = await offlineProgressHarness(), queue = h.load('queue');
   h.localStorage.setItem('linguaai_lessons_English', JSON.stringify([{ id: 'one', targetLanguage: 'en', xpReward: 50 }]));
-  queue.pushToOfflineQueue('complete-lesson', { lessonId: 'one', score: 73, xpReward: 50,
+  await queue.pushToOfflineQueue('complete-lesson', { lessonId: 'one', score: 73, xpReward: 50,
     targetLanguage: 'German', progressEpoch: 0 }, `registered_${A}`);
   const id = queue.getOfflineQueue()[0].id;
   h.language = 'German'; h.localStorage.setItem('linguaai_target_language', 'German'); h.child.render(); await h.settle();
@@ -1144,18 +1177,298 @@ test('Phase 6C: trusted cached lesson repairs old UI-language metadata without c
 test('Phase 6C: invalid newer snapshot cannot advance epoch or erase valid cache', async () => {
   const h = await offlineProgressHarness(), owner = `registered_${A}`, queue = h.load('queue'), store = h.load('storage');
   store.saveProgress(owner, 'en', { ...progress(50), completedLessonIds: ['one'] });
-  assert.equal(queue.saveServerProgress(owner, 'English', queue.getProgressQueueRevision(owner),
+  assert.equal(await queue.saveServerProgress(owner, 'English', queue.getProgressQueueRevision(owner),
     { ...progress(-1), progressEpoch: 1 }), false);
   assert.equal(store.getOwnerProgressEpoch(owner), 0);
   assert.equal(store.loadProgress(owner, 'en').totalXp, 50);
 });
 test('Phase 6C: unverified legacy language is not optimistic and authoritative acknowledgement supplies binding', async () => {
   const h = await offlineProgressHarness(), owner = `registered_${A}`;
-  h.load('queue').pushToOfflineQueue('complete-lesson', { lessonId: 'one', score: 73,
+  await h.load('queue').pushToOfflineQueue('complete-lesson', { lessonId: 'one', score: 73,
     xpReward: 50, targetLanguage: 'German', progressEpoch: 0 }, owner);
   h.language = 'German'; h.localStorage.setItem('linguaai_target_language', 'German'); h.child.render(); await h.settle();
   assert.equal(h.value().progress.completedLessonIds.length, 0);
   h.fetchProgress = async () => progress(0); await h.online();
   assert.equal(h.load('storage').loadProgress(owner, 'en').totalXp, 50);
   assert.equal(h.load('storage').loadProgress(owner, 'de').totalXp, 0);
+});
+const communityFeed = (owner = A, text = 'current', language = 'English') => ({ items: [{ _id: 'post', userId: owner,
+  userName: owner, text, learningLanguage: language, likes: [], likesCount: 0, likedByMe: false,
+  createdAt: '', updatedAt: '' }], page: 1, limit: 50, total: 1, hasMore: false });
+async function communityHarness() {
+  const h = harness(); h.mountAuth(); await h.settle(); await h.login(A); h.isOffline = false;
+  return h;
+}
+for (const boundary of ['account', 'language', 'language ABA', 'unmount']) {
+  test(`Community late response cannot update state/cache after ${boundary}`, async () => {
+    const h = await communityHarness(), old = deferred();
+    let count = 0;
+    h.fetchCommunity = async () => ++count === 1 ? old.promise : communityFeed(B, 'new feed');
+    h.mount('community', 'CommunityPage'); await h.settle();
+    if (boundary === 'account') await h.switchToB();
+    else if (boundary === 'unmount') h.child.unmount();
+    else {
+      h.child.exposed.setSelectedLanguage('German'); h.child.render(); await h.settle();
+      if (boundary === 'language ABA') { h.child.exposed.setSelectedLanguage('English'); h.child.render(); await h.settle(); }
+    }
+    const before = h.snapshot(), posts = copy(h.child.exposed.posts), writes = h.child.writes;
+    old.resolve(communityFeed(A, 'old feed')); await h.settle();
+    assert.deepEqual(h.snapshot(), before); assert.deepEqual(copy(h.child.exposed.posts), posts);
+    assert.equal(h.child.writes, writes, 'stale response schedules no state writes');
+  });
+}
+for (const failure of ['network', '401', 'server', 'malformed']) {
+  test(`Community ${failure} failure uses only authorized fallback policy`, async () => {
+    const h = await communityHarness(), cache = h.load('communityCache');
+    cache.writeCommunityFeed(cache.communityQuery(`registered_${A}`), communityFeed(A, 'own cache'));
+    h.fetchCommunity = async () => {
+      if (failure === 'malformed') return {};
+      throw failure === 'network' ? { code: 'ERR_NETWORK' } : { response: { status: failure === '401' ? 401 : 503 } };
+    };
+    h.mount('community', 'CommunityPage'); await h.settle();
+    assert.equal(h.child.exposed.posts.length, failure === 'network' ? 1 : 0);
+    assert.equal(h.child.exposed.error === null, failure === 'network');
+  });
+}
+test('tokenless Community makes no request and never reads a previous backend cache', async () => {
+  const h = await communityHarness(), cache = h.load('communityCache');
+  cache.writeCommunityFeed(cache.communityQuery(`registered_${A}`), communityFeed());
+  await h.auth().logout(); h.authRunner.render();
+  let calls = 0; h.fetchCommunity = async () => { calls++; return communityFeed(); };
+  h.mount('community', 'CommunityPage'); await h.settle();
+  assert.equal(calls, 0); assert.equal(h.child.exposed.posts.length, 0);
+});
+test('Community old draft callback cannot dispatch after silent atomic account replacement', async () => {
+  const h = await communityHarness(); h.fetchCommunity = async () => communityFeed();
+  h.mount('community', 'CommunityPage'); await h.settle();
+  h.child.exposed.setNewPostText('A draft'); h.child.render();
+  const oldSubmit = h.child.exposed.handleCreatePost;
+  await h.load('authStorage').replaceStoredSession(user(B), `test-${B}`);
+  await oldSubmit({ preventDefault() {} });
+  assert.equal(h.calls.filter(c => c[0] === 'community-create').length, 0);
+  h.authRunner.render(); h.child.render(); await h.settle();
+  assert.equal(h.child.exposed.newPostText, '');
+});
+for (const operation of ['send', 'clear']) for (const boundary of ['language', 'account', 'language ABA']) {
+  test(`AI ${operation} ignores callbacks after ${boundary} switch`, async () => {
+    const h = await communityHarness(), pending = deferred();
+    h.getChatHistory = async () => [{ role: 'assistant', message: 'current history' }];
+    h.sendMessage = () => pending.promise; h.clearChatHistory = () => pending.promise;
+    h.mount('coach', 'AiCoachPage'); await h.settle();
+    const work = operation === 'send' ? h.child.exposed.handleSend('old question') : h.child.exposed.handleClearChat();
+    if (boundary === 'account') await h.switchToB();
+    else {
+      h.language = 'German'; h.localStorage.setItem('linguaai_target_language', 'German'); h.child.render(); await h.settle();
+      if (boundary === 'language ABA') { h.language = 'English'; h.localStorage.setItem('linguaai_target_language', 'English'); h.child.render(); await h.settle(); }
+    }
+    const before = copy(h.child.exposed.messages), writes = h.child.writes;
+    pending.resolve({ reply: 'old reply' }); await work; await h.settle();
+    assert.deepEqual(copy(h.child.exposed.messages), before); assert.equal(h.child.writes, writes);
+    assert.equal(h.child.exposed.isTyping, false); assert.equal(h.child.exposed.historyLoading, false);
+  });
+}
+test('Community cannot read replacement owner cache before that session becomes visible', async () => {
+  const h = await communityHarness(), cache = h.load('communityCache');
+  cache.writeCommunityFeed(cache.communityQuery(`registered_${B}`), communityFeed(B, 'B private cache'));
+  h.fetchCommunity = async () => communityFeed(A, 'A feed');
+  h.mount('community', 'CommunityPage'); await h.settle();
+  h.child.exposed.setNewPostText('A draft'); h.child.render();
+  await h.load('authStorage').replaceStoredSession(user(B), `test-${B}`);
+  h.isOffline = true;
+  h.child.render(); // AuthProvider still renders A; atomic storage already holds B.
+  assert.equal(h.auth().user.id, A);
+  assert.equal(h.child.exposed.posts.some(post => post.text === 'B private cache'), false);
+  h.authRunner.render(); h.child.render(); await h.settle();
+  assert.equal(h.child.exposed.posts[0].text, 'B private cache');
+  assert.equal(h.child.exposed.newPostText, '');
+});
+for (const operation of ['create', 'edit', 'delete', 'like']) {
+  for (const boundary of ['account', 'language']) {
+    test(`Community ${operation} completion cannot mutate replacement ${boundary} state/cache`, async () => {
+      const h = await communityHarness(), pending = deferred();
+      h.fetchCommunity = async () => communityFeed(h.auth().user.id, 'visible feed');
+      h.communityMutation = () => pending.promise;
+      h.mount('community', 'CommunityPage'); await h.settle();
+      if (operation === 'create') { h.child.exposed.setNewPostText('A draft'); h.child.render(); }
+      if (operation === 'edit') { h.child.exposed.startEditing(h.child.exposed.posts[0]); h.child.render(); }
+      const work = operation === 'create' ? h.child.exposed.handleCreatePost({ preventDefault() {} })
+        : operation === 'edit' ? h.child.exposed.handleUpdatePost('post')
+        : operation === 'delete' ? h.child.exposed.handleDeletePost('post') : h.child.exposed.handleToggleLike('post');
+      if (boundary === 'account') await h.switchToB();
+      else { h.child.exposed.setSelectedLanguage('German'); h.child.render(); await h.settle(); }
+      const posts = copy(h.child.exposed.posts), writes = h.child.writes;
+      const cache = h.load('communityCache'), otherOwner = copy(cache.readCommunityFeed(cache.communityQuery(`registered_${B}`)) || null);
+      pending.resolve({ likesCount: 99, likedByMe: true }); await work; await h.settle();
+      assert.deepEqual(copy(h.child.exposed.posts), posts); assert.equal(h.child.writes, writes);
+      assert.deepEqual(copy(cache.readCommunityFeed(cache.communityQuery(`registered_${B}`)) || null), otherOwner);
+    });
+  }
+}
+test('older like response cannot overwrite a newer reaction result', async () => {
+  const h = await communityHarness(), old = deferred(), next = deferred(); let count = 0;
+  h.fetchCommunity = async () => communityFeed(); h.communityMutation = () => ++count === 1 ? old.promise : next.promise;
+  h.mount('community', 'CommunityPage'); await h.settle();
+  const first = h.child.exposed.handleToggleLike('post'); h.child.render();
+  const second = h.child.exposed.handleToggleLike('post');
+  next.resolve({ likesCount: 0, likedByMe: false }); await second; await h.settle();
+  old.resolve({ likesCount: 1, likedByMe: true }); await first; await h.settle();
+  assert.equal(h.child.exposed.posts[0].likesCount, 0); assert.equal(h.child.exposed.posts[0].likedByMe, false);
+});
+
+
+test('7E Community create retry retains logical key; acknowledged same-content action gets a fresh key', async () => {
+  const h = await communityHarness();
+  h.fetchCommunity = async () => communityFeed();
+  let attempts = 0;
+  h.communityMutation = async () => { if (++attempts === 1) throw new Error('Lost acknowledgement'); return {}; };
+  h.mount('community', 'CommunityPage'); await h.settle();
+  h.child.exposed.setNewPostText('draft'); h.child.render();
+  await h.child.exposed.handleCreatePost({ preventDefault() {} }); await h.settle();
+  await h.child.exposed.handleCreatePost({ preventDefault() {} }); await h.settle();
+  const calls = h.calls.filter(call => call[0] === 'community-create');
+  assert.equal(calls[0][2], calls[1][2]);
+  h.child.exposed.setNewPostText('draft'); h.child.render();
+  await h.child.exposed.handleCreatePost({ preventDefault() {} }); await h.settle();
+  assert.notEqual(h.calls.filter(call => call[0] === 'community-create').at(-1)[2], calls[0][2]);
+});
+
+test('7E AI lost clear ack -> later send -> clear retry reconciles later history with original clear ID', async () => {
+  const h = await communityHarness(), clearKeys = [];
+  let history = [{ role: 'assistant', message: 'old' }];
+  let clears = 0;
+  h.getChatHistory = async () => history;
+  h.clearChatHistory = async (_language, id) => {
+    clearKeys.push(id);
+    if (++clears === 1) { history = []; throw new Error('Lost acknowledgement'); }
+  };
+  h.sendMessage = async () => {
+    history = [{ role: 'user', message: 'later' }, { role: 'assistant', message: 'later reply' }];
+    return { userMessage: history[0], assistantMessage: history[1], reply: 'later reply' };
+  };
+  h.mount('coach', 'AiCoachPage'); await h.settle();
+  await h.child.exposed.handleClearChat(); await h.settle();
+  await h.child.exposed.handleSend('later'); await h.settle();
+  await h.child.exposed.handleClearChat(); await h.settle();
+  assert.equal(clearKeys[0], clearKeys[1]);
+  assert.deepEqual(copy(h.child.exposed.messages), history);
+});
+
+test('7E AI send retry retains key until acknowledged; independent intentional sends get fresh keys', async () => {
+  const h = await communityHarness(), keys = [];
+  h.getChatHistory = async () => [];
+  let sends = 0;
+  h.sendMessage = async (_data, key) => { keys.push(key); if (++sends === 1) throw new Error('Lost acknowledgement'); return { reply: 'reply' }; };
+  h.mount('coach', 'AiCoachPage'); await h.settle();
+  await h.child.exposed.handleSend('hello'); await h.settle();
+  await h.child.exposed.handleSend('hello'); await h.settle();
+  await h.child.exposed.handleSend('hello'); await h.settle();
+  assert.equal(keys[0], keys[1]); assert.notEqual(keys[1], keys[2]);
+});
+
+test('7E old Community acknowledgement cannot retire a newer unresolved create intent', async () => {
+  const h = await communityHarness(), older = deferred();
+  h.fetchCommunity = async () => communityFeed();
+  let attempts = 0;
+  h.communityMutation = () => ++attempts === 1 ? older.promise : Promise.reject(new Error('Lost acknowledgement'));
+  h.mount('community', 'CommunityPage'); await h.settle();
+  h.child.exposed.setNewPostText('older'); h.child.render();
+  const oldWork = h.child.exposed.handleCreatePost({ preventDefault() {} });
+  h.child.exposed.setNewPostText('newer'); h.child.render();
+  await h.child.exposed.handleCreatePost({ preventDefault() {} }); await h.settle();
+  older.resolve({}); await oldWork; await h.settle();
+  assert.equal(h.child.exposed.newPostText, 'newer');
+  await h.child.exposed.handleCreatePost({ preventDefault() {} });
+  const calls = h.calls.filter(call => call[0] === 'community-create');
+  assert.notEqual(calls[0][2], calls[1][2]);
+  assert.equal(calls[1][2], calls[2][2]);
+});
+
+test('7E newly selected images with identical metadata are distinct logical creates', async () => {
+  const h = await communityHarness();
+  h.fetchCommunity = async () => communityFeed();
+  h.communityMutation = async () => { throw new Error('Lost acknowledgement'); };
+  h.mount('community', 'CommunityPage'); await h.settle();
+  const { File } = require('node:buffer');
+  const first = new File(['one'], 'same.png', { type: 'image/png', lastModified: 100 });
+  const second = new File(['two'], 'same.png', { type: 'image/png', lastModified: 100 });
+  h.child.exposed.setNewPostImage(first); h.child.render();
+  await h.child.exposed.handleCreatePost({ preventDefault() {} }); await h.settle();
+  await h.child.exposed.handleCreatePost({ preventDefault() {} }); await h.settle();
+  h.child.exposed.setNewPostImage(second); h.child.render();
+  await h.child.exposed.handleCreatePost({ preventDefault() {} });
+  const keys = h.calls.filter(call => call[0] === 'community-create').map(call => call[2]);
+  assert.equal(keys[0], keys[1]); assert.notEqual(keys[1], keys[2]);
+});
+
+test('7E AI send retains unresolved ID across connectivity loss and recovery', async () => {
+  const h = await communityHarness(), keys = [];
+  h.getChatHistory = async () => [];
+  h.sendMessage = async (_payload, id) => { keys.push(id); if (keys.length === 1) throw new Error('Lost acknowledgement'); return { reply: 'reply' }; };
+  h.mount('coach', 'AiCoachPage'); await h.settle();
+  await h.child.exposed.handleSend('hello'); await h.settle();
+  h.isOffline = true; h.child.render(); await h.settle();
+  h.isOffline = false; h.child.render(); await h.settle();
+  await h.child.exposed.handleSend('hello');
+  assert.equal(keys.length, 2); assert.equal(keys[0], keys[1]);
+});
+
+test('7E connectivity recovery retains old clear receipt rather than erasing a later send', async () => {
+  const h = await communityHarness(), keys = [];
+  let history = [];
+  h.getChatHistory = async () => history;
+  h.clearChatHistory = async (_language, id) => { keys.push(id); if (keys.length === 1) throw new Error('Lost acknowledgement'); };
+  h.sendMessage = async () => { history = [{ role: 'user', message: 'later' }, { role: 'assistant', message: 'reply' }]; return { reply: 'reply' }; };
+  h.mount('coach', 'AiCoachPage'); await h.settle();
+  await h.child.exposed.handleClearChat(); await h.settle();
+  h.isOffline = true; h.child.render(); await h.settle();
+  h.isOffline = false; h.child.render(); await h.settle();
+  await h.child.exposed.handleSend('later'); await h.settle();
+  await h.child.exposed.handleClearChat(); await h.settle();
+  assert.equal(keys.length, 2); assert.equal(keys[0], keys[1]);
+  assert.deepEqual(copy(h.child.exposed.messages), history);
+});
+
+test('7E same-render duplicate AI send dispatch cannot duplicate the displayed pair', async () => {
+  const h = await communityHarness(), result = deferred();
+  h.getChatHistory = async () => [];
+  let calls = 0;
+  h.sendMessage = () => { calls++; return result.promise; };
+  h.mount('coach', 'AiCoachPage'); await h.settle();
+  const send = h.child.exposed.handleSend;
+  const first = send('hello'), second = send('hello');
+  assert.equal(calls, 1);
+  result.resolve({ reply: 'reply' }); await Promise.all([first, second]); await h.settle();
+  assert.equal(h.child.exposed.messages.length, 2);
+});
+
+test('7E delayed clear acknowledgement cannot retire a later unresolved send ID', async () => {
+  const h = await communityHarness(), keys = [];
+  h.getChatHistory = async () => [];
+  let clears = 0;
+  h.clearChatHistory = async () => { if (++clears === 1) throw new Error('Lost clear acknowledgement'); };
+  h.sendMessage = async (_payload, id) => { keys.push(id); if (keys.length === 1) throw new Error('Lost send acknowledgement'); return { reply: 'later reply' }; };
+  h.mount('coach', 'AiCoachPage'); await h.settle();
+  await h.child.exposed.handleClearChat(); await h.settle();
+  await h.child.exposed.handleSend('later'); await h.settle();
+  await h.child.exposed.handleClearChat(); await h.settle();
+  await h.child.exposed.handleSend('later');
+  assert.equal(keys.length, 2); assert.equal(keys[0], keys[1]);
+});
+
+test('7E receipt replay after history reconciliation applies the durable pair once', async () => {
+  const h = await communityHarness(), keys = [];
+  const pair = [{ _id: 'user-message', role: 'user', message: 'hello' }, { _id: 'assistant-message', role: 'assistant', message: 'reply' }];
+  let history = [];
+  h.getChatHistory = async () => history;
+  h.sendMessage = async (_payload, id) => {
+    keys.push(id);
+    if (keys.length === 1) { history = pair; throw new Error('Lost acknowledgement'); }
+    return { userMessage: pair[0], assistantMessage: pair[1], reply: 'reply' };
+  };
+  h.mount('coach', 'AiCoachPage'); await h.settle();
+  await h.child.exposed.handleSend('hello'); await h.settle();
+  h.isOffline = true; h.child.render(); await h.settle();
+  h.isOffline = false; h.child.render(); await h.settle();
+  await h.child.exposed.handleSend('hello'); await h.settle();
+  assert.equal(keys[0], keys[1]); assert.deepEqual(copy(h.child.exposed.messages), pair);
 });

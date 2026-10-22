@@ -15,6 +15,8 @@ import { useSessionGuard } from "../utils/useSessionGuard";
 import { getSessionRequestConfig } from "../utils/queueSession";
 import { createFlashcardOperationId, serializeFlashcardMutation } from "../utils/flashcardMutation";
 
+import { mutateLocalGuestCards } from '../utils/localGuestCards';
+
 interface CardData {
   _id: string;
   userId: string;
@@ -31,6 +33,32 @@ interface CardData {
     sentences: string[];
     mnemonic: string;
   };
+}
+
+function reviewedCard(card: CardData, score: number): CardData {
+  let easinessFactor = card.easinessFactor || 2.5;
+  let interval = card.interval || 0;
+  let reviewCount = card.reviewCount || 0;
+
+  if (score >= 3) {
+    if (reviewCount === 0) {
+      interval = 1;
+    } else if (reviewCount === 1) {
+      interval = 6;
+    } else {
+      interval = Math.round(interval * easinessFactor);
+    }
+    reviewCount += 1;
+  } else {
+    reviewCount = 0;
+    interval = 1;
+  }
+
+  easinessFactor = easinessFactor + (0.1 - (5 - score) * (0.08 + (5 - score) * 0.02));
+  if (easinessFactor < 1.3) easinessFactor = 1.3;
+
+  const nextReviewDate = new Date(Date.now() + interval * 24 * 60 * 60 * 1000).toISOString();
+  return { ...card, easinessFactor, interval, reviewCount, nextReviewDate };
 }
 
 const SCORE_KEYS = ["forgot", "hard", "okay", "easy", "very_easy", "perfect"];
@@ -151,9 +179,10 @@ export function FlashcardsPage() {
       if (localOnly) {
         const cachedAll = localStorage.getItem(`flashcards_all_${userId}_${targetLanguage}`);
         const cachedDue = localStorage.getItem(`flashcards_due_${userId}_${targetLanguage}`);
-        if (cachedAll) setAllCards(JSON.parse(cachedAll));
-        if (cachedDue) {
-          const cards = JSON.parse(cachedDue);
+        const all = cachedAll ? JSON.parse(cachedAll) as CardData[] : null;
+        if (all) setAllCards(all);
+        if (all || cachedDue) {
+          const cards = all ? all.filter(card => Date.parse(card.nextReviewDate) <= Date.now()) : JSON.parse(cachedDue!);
           setDueCards(cards);
           setOriginalDueCards(cards);
         }
@@ -213,9 +242,22 @@ export function FlashcardsPage() {
       return;
     }
 
-    if (localOnly || isOffline || (modal === 'edit' && selectedCard && isPendingBackendCard(selectedCard._id, queueOwner))) {
+    if (localOnly) {
+      try {
+        const newCard: CardData = { _id: `local_${createFlashcardOperationId()}`, userId, ...formData,
+          interval: 0, easinessFactor: 2.5, nextReviewDate: new Date().toISOString(), reviewCount: 0 };
+        const { all, due } = await mutateLocalGuestCards<CardData>(targetLanguage, latest => modal === 'add'
+          ? [newCard, ...latest] : latest.map(card => card._id === selectedCard?._id ? { ...card, ...formData } : card), isCurrent);
+        if (!isCurrent()) return;
+        setAllCards(all); setDueCards(due); setOriginalDueCards(due); setModal(null);
+        showSuccess(t(modal === 'add' ? 'flashcard_created' : 'flashcard_updated'));
+      } catch (error) { if (isCurrent()) setError((error as Error).message); }
+      return;
+    }
+
+    if (isOffline || (modal === 'edit' && selectedCard && isPendingBackendCard(selectedCard._id, queueOwner))) {
       if (modal === "add") {
-        const tempId = `local_${Date.now()}`;
+        const tempId = `local_${createFlashcardOperationId()}`;
         const newCard: CardData = {
           _id: tempId,
           userId,
@@ -228,9 +270,11 @@ export function FlashcardsPage() {
           nextReviewDate: new Date().toISOString(),
           reviewCount: 0,
         };
-        if (!localOnly) pushToOfflineQueue('create-flashcard', {
+        try { await pushToOfflineQueue('create-flashcard', {
           tempId, userId, targetLanguage, ...formData
-        }, queueOwner);
+        }, queueOwner); }
+        catch (error) { if (isCurrent()) setError((error as Error).message); return; }
+        if (!isCurrent()) return;
         const updatedAll = [newCard, ...allCards];
         setAllCards(updatedAll);
         
@@ -244,9 +288,11 @@ export function FlashcardsPage() {
         
         showSuccess(t("flashcard_created"));
       } else if (modal === "edit" && selectedCard) {
-        if (!localOnly) pushToOfflineQueue('update-flashcard', {
+        try { await pushToOfflineQueue('update-flashcard', {
           cardId: selectedCard._id, targetLanguage, ...formData
-        }, queueOwner);
+        }, queueOwner); }
+        catch (error) { if (isCurrent()) setError((error as Error).message); return; }
+        if (!isCurrent()) return;
         const updatedAll = allCards.map(c => c._id === selectedCard._id ? { ...c, ...formData } : c);
         const updatedDue = dueCards.map(c => c._id === selectedCard._id ? { ...c, ...formData } : c);
         setAllCards(updatedAll);
@@ -288,8 +334,19 @@ export function FlashcardsPage() {
   const handleDeleteCard = async (cardId: string) => {
     const isCurrent = captureContext();
     if (!isCurrent()) return;
-    if (localOnly || isOffline || isPendingBackendCard(cardId, queueOwner)) {
-      if (!localOnly) pushToOfflineQueue('delete-flashcard', { cardId }, queueOwner);
+    if (localOnly) {
+      try {
+        const { all, due } = await mutateLocalGuestCards<CardData>(targetLanguage, latest => latest.filter(card => card._id !== cardId), isCurrent);
+        if (!isCurrent()) return;
+        setAllCards(all); setDueCards(due); setOriginalDueCards(due);
+        showSuccess(t('flashcard_deleted')); setDeleteConfirmId(null);
+      } catch (error) { if (isCurrent()) setError((error as Error).message); }
+      return;
+    }
+    if (isOffline || isPendingBackendCard(cardId, queueOwner)) {
+      try { await pushToOfflineQueue('delete-flashcard', { cardId }, queueOwner); }
+      catch (error) { if (isCurrent()) setError((error as Error).message); return; }
+      if (!isCurrent()) return;
       const updatedAll = allCards.filter(c => c._id !== cardId);
       const updatedDue = dueCards.filter(c => c._id !== cardId);
       setAllCards(updatedAll);
@@ -344,39 +401,18 @@ export function FlashcardsPage() {
     if (!isCurrent()) return;
     const card = dueCards[currentStudyIndex];
     if (card) {
-      if (localOnly || isOffline || isPendingBackendCard(card._id, queueOwner)) {
-        if (!localOnly) pushToOfflineQueue('review-flashcard', { cardId: card._id, score }, queueOwner);
-        // Local SM-2 calculation
-        let easinessFactor = card.easinessFactor || 2.5;
-        let interval = card.interval || 0;
-        let reviewCount = card.reviewCount || 0;
-
-        if (score >= 3) {
-          if (reviewCount === 0) {
-            interval = 1;
-          } else if (reviewCount === 1) {
-            interval = 6;
-          } else {
-            interval = Math.round(interval * easinessFactor);
-          }
-          reviewCount += 1;
-        } else {
-          reviewCount = 0;
-          interval = 1;
-        }
-        
-        easinessFactor = easinessFactor + (0.1 - (5 - score) * (0.08 + (5 - score) * 0.02));
-        if (easinessFactor < 1.3) easinessFactor = 1.3;
-
-        const nextReviewDate = new Date(Date.now() + interval * 24 * 60 * 60 * 1000).toISOString();
-        
-        const updatedCard = {
-          ...card,
-          easinessFactor,
-          interval,
-          reviewCount,
-          nextReviewDate,
-        };
+      if (localOnly) {
+        try {
+          const { all } = await mutateLocalGuestCards<CardData>(targetLanguage,
+            latest => latest.map(current => current._id === card._id ? reviewedCard(current, score) : current), isCurrent);
+          if (!isCurrent()) return;
+          setAllCards(all);
+        } catch (error) { if (isCurrent()) setError((error as Error).message); return; }
+      } else if (isOffline || isPendingBackendCard(card._id, queueOwner)) {
+        try { await pushToOfflineQueue('review-flashcard', { cardId: card._id, score }, queueOwner); }
+        catch (error) { if (isCurrent()) setError((error as Error).message); return; }
+        if (!isCurrent()) return;
+        const updatedCard = reviewedCard(card, score);
 
         const updatedAll = allCards.map(c => c._id === card._id ? updatedCard : c);
         setAllCards(updatedAll);

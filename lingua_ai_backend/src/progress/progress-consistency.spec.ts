@@ -5,6 +5,7 @@ import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import { ProgressModule } from './progress.module';
 import { ProgressService } from './progress.service';
 import { Progress } from './schemas/progress.schema';
+import { ProgressReset } from './schemas/progress-reset.schema';
 import { User } from '../users/schemas/user.schema';
 import { Lesson } from '../lessons/schemas/lesson.schema';
 import { serializeUser } from '../users/user-response';
@@ -58,6 +59,28 @@ describe('Completion and XP consistency (real disposable transactions)', () => {
     expect((await progress.findOne({ lessonId: 'one' }))?.score).toBe(91);
     expect((await progress.findOne({ lessonId: 'one' }))?.awardedXp).toBe(50);
     expect((await users.findById(user._id))?.totalXp).toBe(50);
+  });
+
+  it('7D: decades-old completion/provenance prevents re-awarding XP within the epoch', async () => {
+    await complete();
+    await progress.collection.updateMany({}, { $set: { createdAt: new Date('2000-01-01'), updatedAt: new Date('2000-01-01') } });
+    expect((await complete())?.data.xpEarned).toBe(0);
+    expect((await users.findById(user._id))?.totalXp).toBe(50);
+    expect((await progress.findOne({ lessonId: 'one' }))?.awardedXp).toBe(50);
+    expect((await progress.collection.indexes()).some(index => index.expireAfterSeconds !== undefined)).toBe(false);
+  });
+
+  it('7D: old reset receipts reconcile a lost acknowledgement without deleting later epoch work; no TTL', async () => {
+    const id = user._id.toString();
+    await service.resetProgress(id, 0, 'retained-reset');
+    const resets = module.get<Model<ProgressReset>>(getModelToken(ProgressReset.name));
+    await resets.collection.updateMany({ userId: user._id }, { $set: { createdAt: new Date('2000-01-01') } });
+    await service.completeLesson(id, 'two', 80, 1);
+    expect((await service.resetProgress(id, 0, 'retained-reset'))?.progressEpoch).toBe(1);
+    expect(await service.getResetReceipt(id, 0, 'retained-reset')).toMatchObject({ expectedEpoch: 0, progressEpoch: 1 });
+    expect((await users.findById(user._id))?.totalXp).toBe(80);
+    expect(await progress.countDocuments({ userId: user._id })).toBe(1);
+    expect((await resets.collection.indexes()).some(index => index.expireAfterSeconds !== undefined)).toBe(false);
   });
   it('XP write failure rolls back the completion; retry can award XP', async () => {
     jest.spyOn(users, 'findOneAndUpdate').mockImplementationOnce(() => { throw new Error('XP save failed'); });

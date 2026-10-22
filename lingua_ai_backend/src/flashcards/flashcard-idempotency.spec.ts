@@ -259,6 +259,41 @@ describe('Queued flashcard idempotency', () => {
     expect((await cards.findById(cardA._id))?.reviewCount).toBe(1);
   });
 
+  it('7D: decades-old create receipts prevent recreating renamed/deleted cards', async () => {
+    const created = await create().expect(201);
+    await operations.collection.updateMany({}, { $set: { createdAt: new Date('2000-01-01'), updatedAt: new Date('2000-01-01') } });
+    await cards.updateOne({ _id: created.body._id }, { targetWord: 'renamed-late' });
+    expect((await create().expect(201)).body.targetWord).toBe('renamed-late');
+    await cards.deleteOne({ _id: created.body._id });
+    expect((await create().expect(201)).body._id).toBe(created.body._id);
+    expect(await cards.countDocuments({ userId: a._id })).toBe(0);
+    expect(ai.generateContext).toHaveBeenCalledTimes(1);
+    expect(await operations.countDocuments()).toBe(1);
+  });
+
+  it('7D: decades-old review replay cannot apply SRS/history a second time', async () => {
+    await review().expect(200);
+    await operations.collection.updateMany({}, { $set: { createdAt: new Date('2000-01-01') } });
+    const before = (await cards.findById(cardA._id))!.toObject();
+    await review().expect(200);
+    expect((await cards.findById(cardA._id))!.toObject()).toEqual(before);
+  });
+
+  it('7D: old update and delete receipts retain their operation keys after later mutations', async () => {
+    const update = (key: string, note: string) => request(app.getHttpServer()).put(`/flashcards/${cardA._id}`)
+      .auth(a._id.toString(), { type: 'bearer' }).set('X-Idempotency-Key', key)
+      .send({ targetWord: 'word', turkishTranslation: 'translation', note });
+    await update('old-edit', 'old').expect(200);
+    await operations.collection.updateMany({}, { $set: { createdAt: new Date('2000-01-01') } });
+    await update('new-edit', 'new').expect(200);
+    expect((await update('old-edit', 'old').expect(200)).body.note).toBe('new');
+    await remove('old-delete').expect(200);
+    await operations.collection.updateMany({}, { $set: { createdAt: new Date('2000-01-01') } });
+    await remove('old-delete').expect(200);
+    expect(await cards.findById(cardA._id)).toBeNull();
+    expect(await operations.countDocuments({ operationType: 'delete-flashcard' })).toBe(1);
+  });
+
   it('lesson completion natural key prevents duplicate XP on queued retries', async () => {
     await app.get<Model<Lesson>>(getModelToken(Lesson.name)).create({ id: 'lesson-1',
       targetLanguage: 'English', title: 'Lesson', description: 'Test', category: 'test',

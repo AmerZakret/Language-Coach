@@ -19,7 +19,8 @@ export function useSessionGuard(owner: string, language?: string): () => () => b
     };
   }, []);
   return useCallback(() => {
-    const captured = getOfflineQueueSession();
+    // Intent belongs to this render, including its token and generation.
+    const captured = session;
     const generation = lifecycle.current.generation;
     const storedLanguage = localStorage.getItem('linguaai_target_language');
     return () => lifecycle.current.mounted

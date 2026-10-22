@@ -16,10 +16,10 @@ function harness() {
     const module = { exports: {} }; modules.set(file, module);
     vm.runInNewContext(ts.transpileModule(readFileSync(file, 'utf8'), {
       compilerOptions: { module: ts.ModuleKind.CommonJS, esModuleInterop: true },
-    }).outputText, { module, exports: module.exports, FormData, Blob,
+    }).outputText, { module, exports: module.exports, crypto: require('node:crypto').webcrypto, FormData, Blob,
       require: name => {
         if (name.endsWith('/apiClient')) return { __esModule: true, default: client };
-        if (name.endsWith('/queueSession')) return { getSessionRequestConfig: () => ({ sessionSnapshot: { userId: 'owner' } }) };
+        if (name.endsWith('/queueSession')) return { isSessionCurrent: () => true, getSessionRequestConfig: () => ({ sessionSnapshot: { userId: 'owner' } }) };
         if (name === 'axios') return require('axios');
         const target = resolve(dirname(file), name) + '.ts';
         if (!existsSync(target)) throw new Error(`Unexpected import ${name}`);

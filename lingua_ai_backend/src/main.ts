@@ -3,7 +3,7 @@ import { AppModule } from './app.module';
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestExpressApplication } from '@nestjs/platform-express';
-import { join } from 'path';
+import { configureCommunityUploadServing } from './community/community-upload-serving';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
@@ -19,9 +19,7 @@ async function bootstrap() {
 
   app.enableCors();
 
-  app.useStaticAssets(join(process.cwd(), 'uploads'), {
-    prefix: '/uploads',
-  });
+  configureCommunityUploadServing(app);
 
   const port = configService.get<number>('PORT') || 3000;
   await app.listen(port, '0.0.0.0');

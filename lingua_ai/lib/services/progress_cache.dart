@@ -139,6 +139,34 @@ class ProgressSnapshot {
       lessonScores.entries.every(
           (entry) => lessonIds.contains(entry.key) && validScore(entry.value));
 
+  Map<String, dynamic> toCheckpoint() => {
+        'progressEpoch': progressEpoch,
+        'stats': {'totalXp': totalXp, 'streak': streak},
+        'completedLessons': lessonIds
+            .map((id) => {
+                  'lessonId': id,
+                  if (lessonScores.containsKey(id)) 'score': lessonScores[id]
+                })
+            .toList(),
+        'activity': activity,
+      };
+
+  factory ProgressSnapshot.fromCheckpoint(Map<String, dynamic> value) {
+    final progress = ProgressSnapshot.fromServer(value);
+    final activity = value['activity'];
+    if (activity is! List ||
+        activity.any((n) => n is! num || !n.isFinite || n < 0)) {
+      throw const FormatException('Invalid progress checkpoint activity');
+    }
+    return ProgressSnapshot(
+        totalXp: progress.totalXp,
+        progressEpoch: progress.progressEpoch,
+        streak: progress.streak,
+        lessonIds: progress.lessonIds,
+        lessonScores: progress.lessonScores,
+        activity: activity.map((n) => (n as num).toDouble()).toList());
+  }
+
   Future<void> save(
       SharedPreferences prefs, String owner, String language) async {
     if (!valid) {

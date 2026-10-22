@@ -9,6 +9,7 @@ import 'services/sound_service.dart';
 import 'services/theme_service.dart';
 import 'services/connectivity_service.dart';
 import 'services/sync_coordinator.dart';
+import 'services/offline_queue_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -18,6 +19,24 @@ void main() async {
   await LanguageService().init();
   await TargetLanguageService().init();
   await AuthService().init();
+  try {
+    // Migrate/check the active owner before progress or sync can consume it.
+    await OfflineQueueService().getQueue();
+  } catch (_) {
+    // Never turn unreadable pending work into an empty queue or start replay.
+    runApp(const MaterialApp(
+        home: Scaffold(
+            body: SafeArea(
+                child: Center(
+      child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Text(
+            'Offline work needs storage recovery. Existing files have been preserved.',
+            textAlign: TextAlign.center,
+          )),
+    )))));
+    return;
+  }
   await ProgressService().init();
   await SoundService().init();
   await FlashcardService().init();

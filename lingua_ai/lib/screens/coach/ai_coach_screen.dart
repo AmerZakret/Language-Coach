@@ -43,9 +43,20 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
     super.dispose();
   }
 
+  bool Function() _captureHistory() {
+    final session = AuthService().captureSession();
+    final languages = TargetLanguageService();
+    final language = languages.currentLanguage;
+    final languageRevision = languages.languageVersion;
+    final revision = _historyRequestRevision;
+    return () => mounted && session.isCurrent && revision == _historyRequestRevision &&
+        language == languages.currentLanguage && languageRevision == languages.languageVersion;
+  }
+
   Future<void> _loadHistory() async {
     if (!mounted) return;
     final requestRevision = ++_historyRequestRevision;
+    _messageController.clear();
     if (AuthService().token.isEmpty) {
       setState(() { _messages.clear(); _isHistoryLoading = false; _isLoading = false; });
       return;
@@ -62,6 +73,7 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
 
     setState(() {
       _isHistoryLoading = true;
+      _isLoading = false;
       _messages.clear();
     });
 
@@ -74,6 +86,7 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
         setState(() {
           for (var msg in history) {
             _messages.add({
+              '_id': msg['_id'],
               'text': msg['message'] ?? '',
               'isBot': msg['role'] == 'assistant',
             });
@@ -105,8 +118,12 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
 
   Future<void> _sendMessage() async {
     final text = _messageController.text.trim();
-    if (text.isEmpty) return;
+    if (text.isEmpty || _isLoading || _isHistoryLoading || AuthService().token.isEmpty) return;
     final session = AuthService().captureSession();
+    final isCurrent = _captureHistory();
+    final targetLanguageCode = TargetLanguageService().currentLanguage;
+    final languageRevision = TargetLanguageService().languageVersion;
+    final historyRevision = _historyRequestRevision;
 
     setState(() {
       _messages.add({
@@ -120,26 +137,43 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
 
     try {
       final language = LanguageService().currentLanguage;
-      final targetLanguageCode = TargetLanguageService().currentLanguage;
 
       final response = await _apiService.sendMessage(
         message: text,
         language: language,
         targetLanguage: targetLanguageCode,
+        intentContext: languageRevision,
       );
 
-      if (!mounted || !session.isCurrent) return;
+      if (!isCurrent()) return;
       setState(() {
-        _messages.add({
-          'text': response['reply'] ?? 'No reply received.',
-          'isBot': true,
-          'correction': response['correction'],
-        });
+        _messages.removeLast(); // This send's optimistic user entry.
+        final user = response['userMessage'] as Map?;
+        final assistant = response['assistantMessage'] as Map?;
+        for (final entry in [
+          {'_id': user?['_id'], 'text': user?['message'] ?? text, 'isBot': false},
+          {'_id': assistant?['_id'], 'text': assistant?['message'] ?? response['reply'] ?? 'No reply received.',
+            'isBot': true, 'correction': response['correction']},
+        ]) {
+          final index = entry['_id'] == null ? -1 : _messages.indexWhere((existing) => existing['_id'] == entry['_id']);
+          if (index == -1) {
+            _messages.add(entry);
+          } else {
+            _messages[index] = entry;
+          }
+        }
       });
     } catch (e) {
-      if (mounted && canHandleApiError(session, e)) {
+      // A current-token 401 may explain the immediate logout, but may never
+      // roll back another session/language's messages or a newer history load.
+      final sameLanguage = targetLanguageCode == TargetLanguageService().currentLanguage &&
+          languageRevision == TargetLanguageService().languageVersion;
+      final ownInvalidation = e is ApiException && e.sessionInvalidated &&
+          _historyRequestRevision == historyRevision + 1;
+      if (mounted && sameLanguage && canHandleApiError(session, e) && (isCurrent() || ownInvalidation)) {
         if (session.isCurrent && _messages.isNotEmpty) {
           setState(() => _messages.removeLast());
+          _messageController.text = text;
         }
         final errorMsg = e.toString().replaceAll('Exception: ', '');
         ScaffoldMessenger.of(context).showSnackBar(
@@ -152,7 +186,7 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
         );
       }
     } finally {
-      if (mounted) {
+      if (isCurrent()) {
         setState(() {
           _isLoading = false;
         });
@@ -163,7 +197,10 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
 
   Future<void> _clearChat() async {
     final lang = LanguageService();
-    final targetLang = TargetLanguageService();
+    final isCurrent = _captureHistory();
+    final targetLanguage = TargetLanguageService().currentLanguage;
+    final languageRevision = TargetLanguageService().languageVersion;
+    if (AuthService().token.isEmpty || _isLoading || _isHistoryLoading) return;
 
     final confirm = await showDialog<bool>(
       context: context,
@@ -193,19 +230,26 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
       },
     );
 
-    if (confirm == true) {
+    if (confirm == true && isCurrent()) {
       setState(() => _isLoading = true);
       try {
         await _apiService.clearHistory(
-          targetLanguage: targetLang.currentLanguage,
+          targetLanguage: targetLanguage,
+          intentContext: languageRevision,
         );
+        if (!isCurrent()) return;
+        final history = await _apiService.getHistory(targetLanguage: targetLanguage);
+        if (!isCurrent()) return;
         setState(() {
           _messages.clear();
+          for (final msg in history) {
+            _messages.add({'_id': msg['_id'], 'text': msg['message'] ?? '', 'isBot': msg['role'] == 'assistant'});
+          }
         });
       } catch (e) {
-        debugPrint('Failed to clear chat: $e');
+        if (isCurrent()) debugPrint('Failed to clear chat: $e');
       } finally {
-        if (mounted) {
+        if (isCurrent()) {
           setState(() => _isLoading = false);
         }
       }

@@ -1,212 +1,95 @@
-import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useLayoutEffect, useRef } from 'react';
 import type { User } from '../types/auth';
 import { fetchMe } from '../api/authApi';
-import { advanceOfflineQueueSession, ensureOfflineQueueSessionRevision, getOfflineQueueSession, isSessionCurrent, onSessionInvalidated, invalidateCurrentSession } from '../utils/queueSession';
-import { getUserProgressKey } from '../utils/userKey';
+import { getOfflineQueueSession, getSessionRequestConfig, isSessionCurrent, observeRenderedSession, invalidateCurrentSession } from '../utils/queueSession';
+import { readStoredSession, replaceStoredSession, initializeStoredSession, subscribeAuthSession, localGuestUser, isBackendGuestUser } from '../utils/authSessionStorage';
+import { coordinationAvailable, CoordinationUnavailable } from '../utils/browserCoordination';
 
 interface AuthContextType {
   user: User | null;
   token: string | null;
   isGuest: boolean;
   loading: boolean;
-  login: (user: User, token: string) => void;
+  login: (user: User, token: string) => Promise<void>;
+  updateUser: (user: User) => Promise<void>;
   loginAsGuest: () => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
 }
-
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
-
-const localGuestUser: User = {
-  id: 'guest', name: 'Guest User', email: 'guest@lingua.ai', isGuest: true,
-};
-
-function isBackendGuestUser(value: unknown): value is User {
-  if (!value || typeof value !== 'object') return false;
-  const guest = value as Partial<User>;
-  return guest.isGuest === true && typeof guest.id === 'string' && /^[a-f\d]{24}$/i.test(guest.id)
-    && typeof guest.name === 'string' && typeof guest.email === 'string'
-    && guest.email.toLowerCase().endsWith('@guest.lingua.local');
-}
-
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
-  const [token, setToken] = useState<string | null>(null);
-  const [isGuest, setIsGuest] = useState<boolean>(false);
-  const [loading, setLoading] = useState<boolean>(true);
+  const [record, setRecord] = useState(readStoredSession());
+  const [loading, setLoading] = useState(true);
   const lifecycle = useRef({ mounted: true, attempt: 0 });
-
+  // Commit the request identity with the UI, never during an interruptible render.
+  useLayoutEffect(() => observeRenderedSession(record), [record]);
   useEffect(() => {
     lifecycle.current.mounted = true;
     let cancelled = false;
-    const unsubscribe = onSessionInvalidated(() => {
+    const unsubscribe = subscribeAuthSession(() => {
       if (!lifecycle.current.mounted) return;
       lifecycle.current.attempt++;
-      setUser(null); setToken(null); setIsGuest(false); setLoading(false);
+      setRecord(readStoredSession()); setLoading(false);
     });
-    const initializeAuth = async () => {
-      ensureOfflineQueueSessionRevision();
-      const storedUser = localStorage.getItem('linguaai_user');
-      const storedToken = localStorage.getItem('linguaai_token');
-      const storedIsGuest = localStorage.getItem('linguaai_is_guest') === 'true';
-      const session = getOfflineQueueSession();
-      const attempt = lifecycle.current.attempt;
-      const sessionUnchanged = () => !cancelled && lifecycle.current.mounted
-        && lifecycle.current.attempt === attempt && isSessionCurrent(session);
-
-      if (storedIsGuest) {
-        setIsGuest(true);
-        let restoredGuest: unknown = null;
+    const initialize = async () => {
+      await initializeStoredSession();
+      if (cancelled) return;
+      const current = readStoredSession();
+      setRecord(current);
+      if (current.token) {
+        const session = getOfflineQueueSession();
         try {
-          restoredGuest = storedUser ? JSON.parse(storedUser) : null;
-        } catch {
-          // Incomplete guest state must never retain backend authorization.
-        }
-        if (storedToken?.trim() && isBackendGuestUser(restoredGuest)) {
-          setUser(restoredGuest);
-          setToken(storedToken);
-          try {
-            const me = await fetchMe();
-            if (!sessionUnchanged()) return;
-            setUser(me); setIsGuest(me.isGuest);
-            if (me.isGuest) localStorage.setItem('linguaai_is_guest', 'true');
-            else localStorage.removeItem('linguaai_is_guest');
-            localStorage.setItem('linguaai_user', JSON.stringify(me));
-          } catch (error) {
-            if (!sessionUnchanged()) return;
-            if ((error as { response?: { status?: number } }).response?.status === 401) {
-              invalidateCurrentSession(session); return;
-            }
-          }
-        } else {
-          localStorage.removeItem('linguaai_token');
-          localStorage.setItem('linguaai_user', JSON.stringify(localGuestUser));
-          setUser(localGuestUser);
-          setToken(null);
-        }
-      } else if (storedToken) {
-        setToken(storedToken);
-        try {
-          const me = await fetchMe();
-          // Never pair an old profile's owner ID with the new session's token.
-          if (!sessionUnchanged()) return;
-          const mergedUser = me;
-          setIsGuest(me.isGuest);
-          if (me.isGuest) localStorage.setItem('linguaai_is_guest', 'true');
-          else localStorage.removeItem('linguaai_is_guest');
-          setUser(mergedUser);
-          localStorage.setItem('linguaai_user', JSON.stringify(mergedUser));
-        } catch (e) {
-          if (!sessionUnchanged()) return;
-          if ((e as { response?: { status?: number } }).response?.status === 401) {
-            invalidateCurrentSession(session); return;
-          }
-          // Retain the cached owner only for non-authoritative failures.
-          if (storedUser) {
-            try {
-              setUser(JSON.parse(storedUser));
-            } catch {
-              localStorage.removeItem('linguaai_user');
-              localStorage.removeItem('linguaai_token');
-              setUser(null); setToken(null);
-            }
-          } else {
-            setUser(null); setToken(null);
-            localStorage.removeItem('linguaai_token');
-          }
-        }
-      } else if (storedUser) {
-        try {
-          setUser(JSON.parse(storedUser));
-        } catch (e) {
-          localStorage.removeItem('linguaai_user');
+          const me = await fetchMe(session);
+          if (!cancelled && isSessionCurrent(session)) await replaceStoredSession(me, current.token, current.revision);
+        } catch (error) {
+          if (!cancelled && isSessionCurrent(session) && (error as { response?: { status?: number } }).response?.status === 401)
+            await invalidateCurrentSession(session);
+          // An unverified legacy token never inherits its separately stored owner.
         }
       }
-      setLoading(false);
+      if (!cancelled) { setRecord(readStoredSession()); setLoading(false); }
     };
-
-    initializeAuth();
+    void initialize();
     return () => { unsubscribe(); cancelled = true; lifecycle.current.mounted = false; lifecycle.current.attempt++; };
   }, []);
-
-  const login = (newUser: User, newToken: string) => {
+  const login = async (user: User, token: string) => {
     if (!lifecycle.current.mounted) return;
-    const current = getOfflineQueueSession();
-    if (current.ownerNamespace !== getUserProgressKey(newUser, newUser.isGuest, newToken)
-      || current.token !== newToken) {
-      lifecycle.current.attempt++;
-      advanceOfflineQueueSession();
-    }
-    localStorage.setItem('linguaai_user', JSON.stringify(newUser));
-    localStorage.setItem('linguaai_token', newToken);
-    if (newUser.isGuest) localStorage.setItem('linguaai_is_guest', 'true');
-    else localStorage.removeItem('linguaai_is_guest');
-    setUser(newUser);
-    setToken(newToken);
-    setIsGuest(newUser.isGuest);
-    setLoading(false);
+    const installed = await replaceStoredSession(user, token, coordinationAvailable() ? record.revision : undefined);
+    if (!installed) throw new Error('Session changed before login completed');
   };
-
+  const updateUser = async (user: User) => {
+    if (!lifecycle.current.mounted) return;
+    if (!coordinationAvailable()) throw new CoordinationUnavailable();
+    if (user.id !== record.user?.id || user.isGuest !== record.isGuest || !record.token
+      || !await replaceStoredSession(user, record.token, record.revision))
+      throw new Error('Session changed before profile update completed');
+  };
   const loginAsGuest = async () => {
-    const session = getOfflineQueueSession();
+    const session = getSessionRequestConfig().sessionSnapshot;
     const attempt = ++lifecycle.current.attempt;
-    const isCurrent = () => lifecycle.current.mounted
-      && attempt === lifecycle.current.attempt && isSessionCurrent(session);
-    let guestUser: User = localGuestUser;
-    let guestToken: string | null = null;
-
-    // Try to get a real guest token from the backend
+    let user = localGuestUser;
+    let token: string | null = null;
     try {
-      const response = await fetch(
-        `${import.meta.env.VITE_API_URL || 'http://localhost:3000'}/auth/guest`,
-        { method: 'POST', headers: { 'Content-Type': 'application/json' } }
-      );
+      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:3000'}/auth/guest`,
+        { method: 'POST', headers: { 'Content-Type': 'application/json' } });
       if (!response.ok) throw new Error('Guest login failed');
       const data = await response.json();
-      if (!isBackendGuestUser(data.user)
-        || typeof data.access_token !== 'string' || !data.access_token.trim()) {
-        throw new Error('Guest login returned an incomplete session');
-      }
-      guestUser = data.user;
-      guestToken = data.access_token;
-    } catch {
-      // Backend unavailable or invalid response: use a local guest without a token.
-    }
-
-    if (!isCurrent()) return;
-    advanceOfflineQueueSession();
-    localStorage.setItem('linguaai_user', JSON.stringify(guestUser));
-    if (guestToken) {
-      localStorage.setItem('linguaai_token', guestToken);
-    } else {
-      localStorage.removeItem('linguaai_token');
-    }
-    localStorage.setItem('linguaai_is_guest', 'true');
-
-    setUser(guestUser);
-    setToken(guestToken);
-    setIsGuest(true);
-    setLoading(false);
+      if (!isBackendGuestUser(data.user) || typeof data.access_token !== 'string' || !data.access_token.trim()) throw new Error('Invalid guest session');
+      user = data.user; token = data.access_token;
+    } catch { /* Tokenless local guest when backend guest creation is unavailable. */ }
+    if (!lifecycle.current.mounted || attempt !== lifecycle.current.attempt || !isSessionCurrent(session)) return;
+    await replaceStoredSession(user, token, coordinationAvailable() ? session.revision : undefined);
   };
-
-  const logout = () => {
-    lifecycle.current.attempt++;
-    advanceOfflineQueueSession();
-    localStorage.removeItem('linguaai_user');
-    localStorage.removeItem('linguaai_token');
-    localStorage.removeItem('linguaai_is_guest');
-    setUser(null);
-    setToken(null);
-    setIsGuest(false);
-    setLoading(false);
+  const logout = async () => {
+    if (!lifecycle.current.mounted) return;
+    await replaceStoredSession(null, null, coordinationAvailable() ? record.revision : undefined);
   };
-
   return (
-    <AuthContext.Provider value={{ user, token, isGuest, loading, login, loginAsGuest, logout }}>
-      {children}
+    <AuthContext.Provider value={{ user: record.user, token: record.token, isGuest: record.isGuest, loading, login, updateUser, loginAsGuest, logout }}>
+      {/* Session changes remount old-session drafts and mutation closures. */}
+      <React.Fragment key={record.revision}>{children}</React.Fragment>
     </AuthContext.Provider>
   );
 };
-
 export const useAuth = () => {
   const context = useContext(AuthContext);
   if (!context) throw new Error('useAuth must be used within an AuthProvider');

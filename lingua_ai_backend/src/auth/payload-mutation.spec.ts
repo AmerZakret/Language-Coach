@@ -154,16 +154,16 @@ describe('Phase 5C validation and mutation contracts', () => {
     const image = await posts.create({ userId: owner._id.toString(), userName: owner.name,
       learningLanguage: 'English', text: 'caption', imageUrl: '/uploads/community/fixture.png' });
     const path = `/community/posts/${image._id}`;
-    await request(app.getHttpServer()).put(path).send({}).auth(token, { type: 'bearer' }).expect(200);
+    await request(app.getHttpServer()).put(path).set('X-Idempotency-Key', 'fixture-preserve').send({ expectedRevision: 0 }).auth(token, { type: 'bearer' }).expect(200);
     expect((await posts.findById(image._id))?.text).toBe('caption');
-    const cleared = await request(app.getHttpServer()).put(path).field('text', '').auth(token, { type: 'bearer' }).expect(200);
+    const cleared = await request(app.getHttpServer()).put(path).set('X-Idempotency-Key', 'fixture-clear-text').field('expectedRevision', '1').field('text', '').auth(token, { type: 'bearer' }).expect(200);
     expect(cleared.body.learningLanguage).toBe('en');
     expect((await posts.findById(image._id))?.text).toBe('');
     expect((await posts.findById(image._id))?.imageUrl).toBe(image.imageUrl);
     const textOnly = await posts.create({ userId: owner._id.toString(), userName: owner.name,
       learningLanguage: 'English', text: 'text only' });
-    await request(app.getHttpServer()).put(`/community/posts/${textOnly._id}`)
-      .field('text', '').auth(token, { type: 'bearer' }).expect(400);
+    await request(app.getHttpServer()).put(`/community/posts/${textOnly._id}`).set('X-Idempotency-Key', 'fixture-empty')
+      .field('expectedRevision', '0').field('text', '').auth(token, { type: 'bearer' }).expect(400);
     expect((await posts.findById(textOnly._id))?.text).toBe('text only');
   });
   it('pronunciation removes unused sourceId and retains active client metadata', async () => {
@@ -190,8 +190,8 @@ describe('Phase 5C validation and mutation contracts', () => {
       const lessons = await request(app.getHttpServer()).get('/lessons').query({ targetLanguage: value }).expect(200);
       expect(lessons.body.length).toBeGreaterThan(0);
       expect(lessons.body.every(lesson => lesson.targetLanguage === code)).toBe(true);
-      await request(app.getHttpServer()).post('/ai-coach/chat').send({ message: 'Hello', language: 'en', targetLanguage: value })
-        .auth(token, { type: 'bearer' }).expect(201);
+      await request(app.getHttpServer()).post('/ai-coach/chat').set('X-Idempotency-Key', 'fixture-chat').send({ message: 'Hello', language: 'en', targetLanguage: value })
+        .auth(token, { type: 'bearer' }).expect(503);
       await request(app.getHttpServer()).post('/ai-coach/writing-check')
         .send({ topic: 'Greeting', text: 'Hello', language: 'en', targetLanguage: value }).auth(token, { type: 'bearer' }).expect(503);
       await request(app.getHttpServer()).post('/pronunciation/assess').field('targetText', 'Hello')
@@ -204,7 +204,7 @@ describe('Phase 5C validation and mutation contracts', () => {
     await update({ targetLanguage: 'Italian' }).expect(400);
     await request(app.getHttpServer()).post('/flashcards').send({ targetWord: 'word', turkishTranslation: 'translation', targetLanguage: 'Italian' })
       .auth(token, { type: 'bearer' }).expect(400);
-    await request(app.getHttpServer()).post('/ai-coach/chat').send({ message: 'Hello', language: 'en', targetLanguage: 'Italian' })
+    await request(app.getHttpServer()).post('/ai-coach/chat').set('X-Idempotency-Key', 'fixture-chat').send({ message: 'Hello', language: 'en', targetLanguage: 'Italian' })
       .auth(token, { type: 'bearer' }).expect(400);
     await request(app.getHttpServer()).post('/ai-coach/writing-check').send({ topic: 'Greeting', text: 'Hello', language: 'en', targetLanguage: 'Italian' })
       .auth(token, { type: 'bearer' }).expect(400);
@@ -253,10 +253,10 @@ describe('Phase 5C validation and mutation contracts', () => {
     const history = await request(app.getHttpServer()).get('/ai-coach/history').query({ targetLanguage: 'de' }).auth(token, { type: 'bearer' }).expect(200);
     expect(history.body).toHaveLength(2);
     expect(history.body.every(message => message.targetLanguage === 'de')).toBe(true);
-    await request(app.getHttpServer()).delete('/ai-coach/clear').query({ targetLanguage: 'German' }).auth(token, { type: 'bearer' }).expect(200);
+    await request(app.getHttpServer()).delete('/ai-coach/clear').set('X-Idempotency-Key', 'fixture-clear').query({ targetLanguage: 'German' }).auth(token, { type: 'bearer' }).expect(200);
     expect(await messages.countDocuments()).toBe(1);
     await posts.create({ userId: owner._id.toString(), userName: owner.name, learningLanguage: 'German', text: 'old' });
-    const created = await request(app.getHttpServer()).post('/community/posts').field('learningLanguage', 'German').field('text', 'new')
+    const created = await request(app.getHttpServer()).post('/community/posts').set('X-Idempotency-Key', 'fixture-create').field('learningLanguage', 'German').field('text', 'new')
       .auth(token, { type: 'bearer' }).expect(201);
     expect(created.body.learningLanguage).toBe('de');
     const feed = await request(app.getHttpServer()).get('/community/posts').query({ language: 'de' }).auth(token, { type: 'bearer' }).expect(200);

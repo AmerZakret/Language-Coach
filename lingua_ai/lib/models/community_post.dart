@@ -1,5 +1,6 @@
 import '../core/localization/target_language.dart';
 class CommunityPost {
+  final int revision;
   final String id;
   final String userId;
   final String userName;
@@ -13,6 +14,7 @@ class CommunityPost {
   final String updatedAt;
 
   CommunityPost({
+    this.revision = 0,
     required this.id,
     required this.userId,
     required this.userName,
@@ -29,6 +31,7 @@ class CommunityPost {
   factory CommunityPost.fromJson(Map<String, dynamic> json) {
     return CommunityPost(
       id: json['_id'] ?? '',
+      revision: json['revision'] ?? 0,
       userId: json['userId'] ?? '',
       userName: json['userName'] ?? '',
       learningLanguage: TargetLanguage.tryCode(json['learningLanguage'] as String?) != null ? TargetLanguage.name(json['learningLanguage']) : (json['learningLanguage'] ?? ''),
