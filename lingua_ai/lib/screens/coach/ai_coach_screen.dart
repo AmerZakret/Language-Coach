@@ -86,6 +86,7 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
         setState(() {
           for (var msg in history) {
             _messages.add({
+              '_id': msg['_id'],
               'text': msg['message'] ?? '',
               'isBot': msg['role'] == 'assistant',
             });
@@ -141,15 +142,26 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
         message: text,
         language: language,
         targetLanguage: targetLanguageCode,
+        intentContext: languageRevision,
       );
 
       if (!isCurrent()) return;
       setState(() {
-        _messages.add({
-          'text': response['reply'] ?? 'No reply received.',
-          'isBot': true,
-          'correction': response['correction'],
-        });
+        _messages.removeLast(); // This send's optimistic user entry.
+        final user = response['userMessage'] as Map?;
+        final assistant = response['assistantMessage'] as Map?;
+        for (final entry in [
+          {'_id': user?['_id'], 'text': user?['message'] ?? text, 'isBot': false},
+          {'_id': assistant?['_id'], 'text': assistant?['message'] ?? response['reply'] ?? 'No reply received.',
+            'isBot': true, 'correction': response['correction']},
+        ]) {
+          final index = entry['_id'] == null ? -1 : _messages.indexWhere((existing) => existing['_id'] == entry['_id']);
+          if (index == -1) {
+            _messages.add(entry);
+          } else {
+            _messages[index] = entry;
+          }
+        }
       });
     } catch (e) {
       // A current-token 401 may explain the immediate logout, but may never
@@ -161,6 +173,7 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
       if (mounted && sameLanguage && canHandleApiError(session, e) && (isCurrent() || ownInvalidation)) {
         if (session.isCurrent && _messages.isNotEmpty) {
           setState(() => _messages.removeLast());
+          _messageController.text = text;
         }
         final errorMsg = e.toString().replaceAll('Exception: ', '');
         ScaffoldMessenger.of(context).showSnackBar(
@@ -186,6 +199,7 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
     final lang = LanguageService();
     final isCurrent = _captureHistory();
     final targetLanguage = TargetLanguageService().currentLanguage;
+    final languageRevision = TargetLanguageService().languageVersion;
     if (AuthService().token.isEmpty || _isLoading || _isHistoryLoading) return;
 
     final confirm = await showDialog<bool>(
@@ -221,10 +235,16 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
       try {
         await _apiService.clearHistory(
           targetLanguage: targetLanguage,
+          intentContext: languageRevision,
         );
+        if (!isCurrent()) return;
+        final history = await _apiService.getHistory(targetLanguage: targetLanguage);
         if (!isCurrent()) return;
         setState(() {
           _messages.clear();
+          for (final msg in history) {
+            _messages.add({'_id': msg['_id'], 'text': msg['message'] ?? '', 'isBot': msg['role'] == 'assistant'});
+          }
         });
       } catch (e) {
         if (isCurrent()) debugPrint('Failed to clear chat: $e');

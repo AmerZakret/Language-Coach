@@ -57,6 +57,22 @@ export function CommunityPage() {
   // Delete State
   const [deletingPostId, setDeletingPostId] = useState<string | null>(null);
 
+  const pendingMutations = useRef(new Map<string, { payload: string; id: string }>());
+  const imageIntents = useRef(new WeakMap<File, string>());
+  const operationFor = (slot: string, payload: string) => {
+    const key = `${session.revision}:${slot}`;
+    const previous = pendingMutations.current.get(key);
+    if (previous?.payload === payload) return previous.id;
+    const id = crypto.randomUUID();
+    pendingMutations.current.set(key, { payload, id });
+    return id;
+  };
+  const completeOperation = (slot: string, id: string) => {
+    const key = `${session.revision}:${slot}`;
+    if (pendingMutations.current.get(key)?.id !== id) return false;
+    return pendingMutations.current.delete(key);
+  };
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const backendBaseUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
@@ -164,8 +180,11 @@ export function CommunityPage() {
       }
 
       feedRevision.current++;
-      await createCommunityPost(formData);
-      if (isSessionCurrent(session)) invalidateCommunityFeed(query.ownerNamespace, { language: learningLanguage });
+      if (newPostImage && !imageIntents.current.has(newPostImage)) imageIntents.current.set(newPostImage, crypto.randomUUID());
+      const operationId = operationFor('create', JSON.stringify([learningLanguage, newPostText, newPostImage && imageIntents.current.get(newPostImage)]));
+      await createCommunityPost(formData, operationId);
+      if (!completeOperation('create', operationId)) return;
+      if (isCurrent() && isSessionCurrent(session)) invalidateCommunityFeed(query.ownerNamespace, { language: learningLanguage });
       if (!isCurrent()) return;
       setNewPostText("");
       clearImage();
@@ -202,14 +221,14 @@ export function CommunityPage() {
             return {
               ...post,
               likedByMe: liked,
-              likesCount: liked ? post.likesCount + 1 : post.likesCount - 1
+              likesCount: liked ? post.likesCount + 1 : Math.max(0, post.likesCount - 1)
             };
           }
           return post;
         })
       );
-      const result = await toggleLikeCommunityPost(postId);
-      if (isSessionCurrent(session)) invalidateCommunityFeed(query.ownerNamespace, { postId });
+      const result = await toggleLikeCommunityPost(postId, !posts.find(p => p._id === postId)?.likedByMe);
+      if (isCurrent() && isSessionCurrent(session)) invalidateCommunityFeed(query.ownerNamespace, { postId });
       if (!isCurrent()) return;
       setPosts(prev => !isCurrent() ? prev : prev.map(post => post._id === postId ? { ...post, ...result } : post));
     } catch (e) {
@@ -237,8 +256,11 @@ export function CommunityPage() {
       const formData = new FormData();
       formData.append("text", editingText.trim());
       feedRevision.current++;
-      await updateCommunityPost(postId, formData);
-      if (isSessionCurrent(session)) invalidateCommunityFeed(query.ownerNamespace, { postId, language: post?.learningLanguage });
+      formData.append('expectedRevision', String(post?.revision ?? 0));
+      const operationId = operationFor(`edit:${postId}`, JSON.stringify([editingText.trim(), post?.revision ?? 0]));
+      await updateCommunityPost(postId, formData, operationId);
+      if (!completeOperation(`edit:${postId}`, operationId)) return;
+      if (isCurrent() && isSessionCurrent(session)) invalidateCommunityFeed(query.ownerNamespace, { postId, language: post?.learningLanguage });
       if (!isCurrent()) return;
       setEditingPostId(null);
       fetchFeed();
@@ -258,11 +280,13 @@ export function CommunityPage() {
     feedRevision.current++;
     const post = posts.find(post => post._id === postId);
     try {
-      await deleteCommunityPost(postId);
-      if (isSessionCurrent(session)) invalidateCommunityFeed(query.ownerNamespace, { postId, language: post?.learningLanguage });
+      const operationId = operationFor(`delete:${postId}`, String(post?.revision ?? 0));
+      await deleteCommunityPost(postId, post?.revision ?? 0, operationId);
+      if (!completeOperation(`delete:${postId}`, operationId)) return;
+      if (isCurrent() && isSessionCurrent(session)) invalidateCommunityFeed(query.ownerNamespace, { postId, language: post?.learningLanguage });
       if (!isCurrent()) return;
       setDeletingPostId(null);
-      setPosts((prev: CommunityPost[]) => !isCurrent() ? prev : prev.filter((p: CommunityPost) => p._id !== postId));
+      await fetchFeed();
     } catch (e) {
       if (!isCurrent()) return;
       console.error("Failed to delete post", e);

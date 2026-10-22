@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { Model } from 'mongoose';
-import { MongoMemoryServer } from 'mongodb-memory-server';
+import { MongoMemoryReplSet } from 'mongodb-memory-server';
 import request from 'supertest';
 import sharp from 'sharp';
 import { AuthModule } from '../auth/auth.module';
@@ -25,7 +25,7 @@ import { configureCommunityUploadServing } from './community-upload-serving';
 describe('Phase 7B community image safety and lifecycle', () => {
   jest.setTimeout(120000);
   let app: INestApplication;
-  let mongo: MongoMemoryServer;
+  let mongo: MongoMemoryReplSet;
   let temporary: string;
   let uploadRoot: string;
   let previousRoot: string | undefined;
@@ -36,7 +36,7 @@ describe('Phase 7B community image safety and lifecycle', () => {
   let foreign: User;
   let token: string;
   let png: Buffer;
-  const create = () => request(app.getHttpServer()).post('/community/posts').auth(token, { type: 'bearer' });
+  const create = () => request(app.getHttpServer()).post('/community/posts').auth(token, { type: 'bearer' }).set('X-Idempotency-Key', crypto.randomUUID());
   const files = async () => fs.readdir(join(uploadRoot, 'community')).catch(error => {
     if (error.code === 'ENOENT') return [] as string[];
     throw error;
@@ -47,14 +47,14 @@ describe('Phase 7B community image safety and lifecycle', () => {
   const file = (buffer = png, originalname = 'client.png', mimetype = 'image/png') =>
     ({ buffer, originalname, mimetype, size: buffer.length }) as Express.Multer.File;
   const imagePost = async () => (await upload(png, 'client.png', 'image/png').expect(201)).body;
-  const edit = (id: string) => request(app.getHttpServer()).put(`/community/posts/${id}`).auth(token, { type: 'bearer' });
+  const edit = (id: string) => request(app.getHttpServer()).put(`/community/posts/${id}`).auth(token, { type: 'bearer' }).set('X-Idempotency-Key', crypto.randomUUID()).field('expectedRevision', '0');
 
   beforeAll(async () => {
     temporary = await fs.mkdtemp(join(tmpdir(), 'lingua-community-test-'));
     uploadRoot = join(temporary, 'uploads');
     previousRoot = process.env.UPLOAD_ROOT;
     process.env.UPLOAD_ROOT = uploadRoot;
-    mongo = await MongoMemoryServer.create();
+    mongo = await MongoMemoryReplSet.create({ replSet: { count: 1 } });
     const module = await Test.createTestingModule({ imports: [
       ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }),
       MongooseModule.forRoot(mongo.getUri()), AuthModule, CommunityModule,
@@ -183,7 +183,7 @@ describe('Phase 7B community image safety and lifecycle', () => {
     jest.spyOn(posts.prototype, 'save').mockImplementation(async () => {
       expect(await files()).toHaveLength(1); throw new Error('DB create failed');
     });
-    await upload(png, 'client.png', 'image/png').expect(500);
+    await upload(png, 'client.png', 'image/png').expect(503);
     expect(await files()).toEqual([]); expect(await posts.countDocuments()).toBe(0);
   });
 
@@ -193,7 +193,7 @@ describe('Phase 7B community image safety and lifecycle', () => {
     jest.spyOn(images, 'remove').mockRejectedValue(Object.assign(new Error('cleanup'), { code: 'EACCES' }));
     const log = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
     const service = app.get(require('./community.service').CommunityService);
-    await expect(service.create(owner._id.toString(), owner.name, 'en', undefined, file())).rejects.toBe(original);
+    await expect(service.create(owner._id.toString(), owner.name, 'en', undefined, file(), crypto.randomUUID())).rejects.toMatchObject({ status: 503 });
     expect(log).toHaveBeenCalledWith(expect.stringContaining('EACCES'));
     expect(await files()).toHaveLength(1);
   });
@@ -204,7 +204,7 @@ describe('Phase 7B community image safety and lifecycle', () => {
     jest.spyOn(posts, 'exists').mockImplementation(() => ({ exec: async () => { throw new Error('DB unavailable'); } }) as any);
     const log = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
     const service = app.get(require('./community.service').CommunityService);
-    await expect(service.create(owner._id.toString(), owner.name, 'en', undefined, file())).rejects.toBe(original);
+    await expect(service.create(owner._id.toString(), owner.name, 'en', undefined, file(), crypto.randomUUID())).rejects.toMatchObject({ status: 503 });
     expect(log).toHaveBeenCalledWith(expect.stringContaining('DB state unavailable'));
     expect(await files()).toHaveLength(1);
   });
@@ -222,10 +222,11 @@ describe('Phase 7B community image safety and lifecycle', () => {
   });
 
   it('lost DB create acknowledgement preserves the image referenced by the committed post', async () => {
-    const save = posts.prototype.save;
-    jest.spyOn(posts.prototype, 'save').mockImplementation(async function (this: any, ...args: any[]) {
-      await (save as any).apply(this, args); throw new Error('Lost DB acknowledgement');
-    } as any);
+    const receipts = app.get(require('../common/mutation-receipt').MutationReceipts);
+    const execute = receipts.execute.bind(receipts);
+    jest.spyOn(receipts, 'execute').mockImplementation(async (...args: any[]) => {
+      await execute(...args); throw new Error('Lost committed acknowledgement');
+    });
     await upload(png, 'client.png', 'image/png').expect(500);
     const saved = await posts.findOne().exec(); expect(saved).not.toBeNull();
     expect(await fs.readFile(disk(saved!.imageUrl!))).toBeDefined();
@@ -246,16 +247,18 @@ describe('Phase 7B community image safety and lifecycle', () => {
 
   it('failed replacement preserves old DB reference and file; new file is compensated', async () => {
     const post = await imagePost(); jest.spyOn(posts.prototype, 'save').mockRejectedValue(new Error('Update failed'));
-    await edit(post._id).attach('image', png, 'replacement.png').expect(500);
+    await edit(post._id).attach('image', png, 'replacement.png').expect(503);
     expect((await posts.findById(post._id))!.imageUrl).toBe(post.imageUrl);
     await fs.access(disk(post.imageUrl)); expect(await files()).toHaveLength(1);
   });
 
   it('lost update acknowledgement preserves the committed new reference and its file', async () => {
-    const post = await imagePost(), save = posts.prototype.save;
-    jest.spyOn(posts.prototype, 'save').mockImplementation(async function (this: any, ...args: any[]) {
-      await (save as any).apply(this, args); throw new Error('Lost update acknowledgement');
-    } as any);
+    const post = await imagePost();
+    const receipts = app.get(require('../common/mutation-receipt').MutationReceipts);
+    const execute = receipts.execute.bind(receipts);
+    jest.spyOn(receipts, 'execute').mockImplementation(async (...args: any[]) => {
+      await execute(...args); throw new Error('Lost committed acknowledgement');
+    });
     await edit(post._id).attach('image', png, 'replacement.png').expect(500);
     const saved = await posts.findById(post._id);
     expect(saved!.imageUrl).not.toBe(post.imageUrl);
@@ -279,13 +282,13 @@ describe('Phase 7B community image safety and lifecycle', () => {
 
   it('delete ownership failure preserves the post and image', async () => {
     const post = await imagePost(), otherToken = app.get(JwtService).sign({ sub: foreign._id.toString() });
-    await request(app.getHttpServer()).delete(`/community/posts/${post._id}`).auth(otherToken, { type: 'bearer' }).expect(403);
+    await request(app.getHttpServer()).delete(`/community/posts/${post._id}`).auth(otherToken, { type: 'bearer' }).set('X-Idempotency-Key', crypto.randomUUID()).set('X-Resource-Revision', '0').expect(403);
     expect(await posts.findById(post._id)).not.toBeNull(); await fs.access(disk(post.imageUrl));
   });
 
   it('failed DB deletion keeps the referenced file', async () => {
-    const post = await imagePost(); jest.spyOn(posts, 'findByIdAndDelete').mockImplementation(() => ({ exec: async () => { throw new Error('DB deletion failed'); } }) as any);
-    await request(app.getHttpServer()).delete(`/community/posts/${post._id}`).auth(token, { type: 'bearer' }).expect(500);
+    const post = await imagePost(); jest.spyOn(posts, 'deleteOne').mockImplementation(() => ({ exec: async () => { throw new Error('DB deletion failed'); } }) as any);
+    await request(app.getHttpServer()).delete(`/community/posts/${post._id}`).auth(token, { type: 'bearer' }).set('X-Idempotency-Key', crypto.randomUUID()).set('X-Resource-Revision', '0').expect(503);
     expect(await posts.findById(post._id)).not.toBeNull(); await fs.access(disk(post.imageUrl));
   });
 
@@ -294,30 +297,37 @@ describe('Phase 7B community image safety and lifecycle', () => {
     jest.spyOn(images, 'remove').mockImplementation(async url => {
       expect(await posts.findById(post._id)).toBeNull(); return remove(url);
     });
-    await request(app.getHttpServer()).delete(`/community/posts/${post._id}`).auth(token, { type: 'bearer' }).expect(200);
+    await request(app.getHttpServer()).delete(`/community/posts/${post._id}`).auth(token, { type: 'bearer' }).set('X-Idempotency-Key', crypto.randomUUID()).set('X-Resource-Revision', '0').expect(200);
     expect(await files()).toEqual([]);
   });
 
-  it('delete cleans the actually removed document when an image changed after the ownership read', async () => {
+  it('delete rechecks transaction snapshot/revision when an image changes after ownership read', async () => {
     const post = await imagePost(), replacement = await images.store(file());
-    const findByIdAndDelete = posts.findByIdAndDelete.bind(posts);
-    jest.spyOn(posts, 'findByIdAndDelete').mockImplementation((id: any) => ({ exec: async () => {
-      await posts.updateOne({ _id: id }, { imageUrl: replacement });
-      return findByIdAndDelete(id).exec();
-    } }) as any);
-    await request(app.getHttpServer()).delete(`/community/posts/${post._id}`).auth(token, { type: 'bearer' }).expect(200);
-    expect(await posts.findById(post._id)).toBeNull();
-    await expect(fs.access(disk(replacement))).rejects.toMatchObject({ code: 'ENOENT' });
-    // The older reference is retained: this operation only cleans the image of
-    // the document actually removed, never an obsolete ownership-read snapshot.
-    await fs.access(disk(post.imageUrl));
+    const deleteOne = posts.deleteOne.bind(posts);
+    let changed = false;
+    jest.spyOn(posts, 'deleteOne').mockImplementation((...args: any[]) => {
+      const query = (deleteOne as any)(...args);
+      const execute = query.exec.bind(query);
+      query.exec = async () => {
+        if (!changed) {
+          changed = true;
+          await posts.updateOne({ _id: post._id }, { $set: { imageUrl: replacement, revision: 1 } });
+        }
+        return execute();
+      };
+      return query;
+    });
+    await request(app.getHttpServer()).delete(`/community/posts/${post._id}`).auth(token, { type: 'bearer' })
+      .set('X-Idempotency-Key', crypto.randomUUID()).set('X-Resource-Revision', '0').expect(409);
+    expect((await posts.findById(post._id))!.imageUrl).toBe(replacement);
+    await fs.access(disk(replacement)); await fs.access(disk(post.imageUrl));
   });
 
   it('failed deletion cleanup preserves successful DB deletion and logs the orphan', async () => {
     const post = await imagePost();
     jest.spyOn(images, 'remove').mockRejectedValue(Object.assign(new Error('cleanup'), { code: 'EACCES' }));
     const log = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
-    await request(app.getHttpServer()).delete(`/community/posts/${post._id}`).auth(token, { type: 'bearer' }).expect(200);
+    await request(app.getHttpServer()).delete(`/community/posts/${post._id}`).auth(token, { type: 'bearer' }).set('X-Idempotency-Key', crypto.randomUUID()).set('X-Resource-Revision', '0').expect(200);
     expect(await posts.findById(post._id)).toBeNull(); await fs.access(disk(post.imageUrl));
     expect(log).toHaveBeenCalledWith(expect.stringContaining('EACCES'));
   });
@@ -325,18 +335,18 @@ describe('Phase 7B community image safety and lifecycle', () => {
   it('unique backend guests can upload their own image, and another guest cannot replace it', async () => {
     const first = (await request(app.getHttpServer()).post('/auth/guest').expect(201)).body;
     const second = (await request(app.getHttpServer()).post('/auth/guest').expect(201)).body;
-    const post = (await request(app.getHttpServer()).post('/community/posts').auth(first.access_token, { type: 'bearer' })
+    const post = (await request(app.getHttpServer()).post('/community/posts').auth(first.access_token, { type: 'bearer' }).set('X-Idempotency-Key', crypto.randomUUID())
       .field('learningLanguage', 'en').attach('image', png, 'guest.png').expect(201)).body;
     expect(post.userId).toBe(first.user.id); expect(first.user.id).not.toBe(second.user.id);
     const store = jest.spyOn(images, 'store');
-    await request(app.getHttpServer()).put(`/community/posts/${post._id}`).auth(second.access_token, { type: 'bearer' })
+    await request(app.getHttpServer()).put(`/community/posts/${post._id}`).auth(second.access_token, { type: 'bearer' }).set('X-Idempotency-Key', crypto.randomUUID()).field('expectedRevision', '0')
       .attach('image', png, 'foreign.png').expect(403);
     expect(store).not.toHaveBeenCalled(); await fs.access(disk(post.imageUrl)); expect(await files()).toHaveLength(1);
   });
 
   it('cleanup does not delete an image still referenced by another historical post', async () => {
     const post = await imagePost(); await posts.create({ userId: foreign._id.toString(), userName: foreign.name, learningLanguage: 'en', imageUrl: post.imageUrl });
-    await request(app.getHttpServer()).delete(`/community/posts/${post._id}`).auth(token, { type: 'bearer' }).expect(200);
+    await request(app.getHttpServer()).delete(`/community/posts/${post._id}`).auth(token, { type: 'bearer' }).set('X-Idempotency-Key', crypto.randomUUID()).set('X-Resource-Revision', '0').expect(200);
     await fs.access(disk(post.imageUrl));
   });
 

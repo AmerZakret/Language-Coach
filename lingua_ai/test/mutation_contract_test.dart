@@ -107,14 +107,14 @@ void main() {
   test('community update serializes empty text as a clear and null as omission', () async {
     final requests = <http.Request>[];
     await http.runWithClient(() async {
-      await CommunityService().updatePost(postId: 'image-post', text: '   ');
-      await CommunityService().updatePost(postId: 'image-post');
+      await CommunityService().updatePost(expectedRevision: 0, postId: 'image-post', text: '   ');
+      await CommunityService().updatePost(expectedRevision: 0, postId: 'image-post');
     }, () => MockClient((request) async {
       requests.add(request);
       return http.Response('{"_id":"image-post","learningLanguage":"en","text":"","imageUrl":"/image.png"}', 200);
     }));
     expect(requests[0].body, contains('name="text"'));
-    expect(requests[0].body.split('\r\n\r\n')[1], startsWith('\r\n--'));
+    expect(requests[0].body.substring(requests[0].body.indexOf('name="text"')).split('\r\n\r\n')[1], startsWith('\r\n--'));
     expect(requests[1].body, isNot(contains('name="text"')));
   });
 }

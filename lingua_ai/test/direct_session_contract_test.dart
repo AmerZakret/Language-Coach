@@ -69,9 +69,9 @@ void main() {
     'community create': () =>
         community.createPost(learningLanguage: 'en', text: 'Hello'),
     'community update': () =>
-        community.updatePost(postId: 'post', text: 'Hello'),
-    'community delete': () => community.deletePost(postId: 'post'),
-    'community like': () => community.toggleLike(postId: 'post'),
+        community.updatePost(expectedRevision: 0, postId: 'post', text: 'Hello'),
+    'community delete': () => community.deletePost(expectedRevision: 0, postId: 'post'),
+    'community like': () => community.toggleLike(liked: true, postId: 'post'),
   };
   final unauthorized = isA<ApiException>()
       .having((e) => e.kind, 'kind', ApiFailure.unauthorized)

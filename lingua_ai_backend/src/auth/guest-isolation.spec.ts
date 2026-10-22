@@ -1,3 +1,4 @@
+import { MutationReceipts } from '../common/mutation-receipt';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtModule, JwtService } from '@nestjs/jwt';
@@ -73,6 +74,7 @@ describe('Guest session isolation', () => {
       controllers: [AuthController, UsersController, ProgressController,
         AiCoachController, FlashcardsController, CommunityController],
       providers: [AuthService, UsersService, JwtStrategy, FlashcardsService, CommunityService,
+        { provide: MutationReceipts, useValue: { execute: (_user, _key, _type, _input, work) => work(undefined) } },
         { provide: ConfigService, useValue: new ConfigService({ JWT_SECRET: secret }) },
         { provide: getModelToken(User.name), useValue: UserModel },
         { provide: getModelToken(Flashcard.name), useValue: flashcardModel },
@@ -108,7 +110,7 @@ describe('Guest session isolation', () => {
     progress.resetProgress.mockImplementation(async userId => ({ userId }));
     coach.getHistory.mockImplementation(async userId => [{ userId }]);
     coach.sendMessage.mockImplementation(async userId => ({ userId }));
-    postModel.findById.mockReturnValue({ exec: async () => ({
+    postModel.findById.mockReturnValue({ session() { return this; }, exec: async () => ({
       userId: guestB.user.id, text: 'Guest B post', save: jest.fn(),
     }) });
   });
@@ -208,9 +210,9 @@ describe('Guest session isolation', () => {
 
   it('forbids Guest A from editing or deleting Guest B community posts', async () => {
     const path = `/community/posts/${new Types.ObjectId()}`;
-    await request(app.getHttpServer()).put(path).send({ text: 'changed' })
+    await request(app.getHttpServer()).put(path).set('X-Idempotency-Key', 'guest-edit').send({ text: 'changed', expectedRevision: 0 })
       .auth(guestA.access_token, { type: 'bearer' }).expect(403);
-    await request(app.getHttpServer()).delete(path)
+    await request(app.getHttpServer()).delete(path).set('X-Idempotency-Key', 'guest-delete').set('X-Resource-Revision', '0')
       .auth(guestA.access_token, { type: 'bearer' }).expect(403);
     expect(postModel.findByIdAndDelete).not.toHaveBeenCalled();
   });

@@ -159,7 +159,7 @@ describe('Phase 5A JWT domain identity', () => {
     await request(api).post(`/progress/${b.user.id}/complete-lesson`)
       .send({ lessonId: 'identity-lesson', score: 73, progressEpoch: 0 }).auth(a.access_token, { type: 'bearer' }).expect(201);
     expect((await progress.findOne())?.userId.toString()).toBe(a.user.id);
-    const chat = await request(api).post('/ai-coach/chat').send(chatBody)
+    const chat = await request(api).post('/ai-coach/chat').set('X-Idempotency-Key', 'fixture-chat').send(chatBody)
       .auth(a.access_token, { type: 'bearer' }).expect(201);
     expect(chat.body.userMessage.userId).toBe(a.user.id);
     await request(api).post('/ai-coach/writing-check').send(writingBody)
@@ -183,8 +183,8 @@ describe('Phase 5A JWT domain identity', () => {
       { userId: a, role: 'user', message: 'A German', targetLanguage: 'German' },
       { userId: b, role: 'user', message: 'B English', targetLanguage: 'English' },
     ]);
-    await request(app.getHttpServer()).delete('/ai-coach/clear').query({ targetLanguage: 'en' }).expect(401);
-    const cleared = await request(app.getHttpServer()).delete('/ai-coach/clear')
+    await request(app.getHttpServer()).delete('/ai-coach/clear').set('X-Idempotency-Key', 'fixture-clear').query({ targetLanguage: 'en' }).expect(401);
+    const cleared = await request(app.getHttpServer()).delete('/ai-coach/clear').set('X-Idempotency-Key', 'fixture-clear')
       .query({ userId: b, targetLanguage: 'en' }).auth(token, { type: 'bearer' }).expect(200);
     expect(cleared.body.deletedCount).toBe(1);
     expect(await messages.countDocuments()).toBe(2);

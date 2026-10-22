@@ -1,8 +1,10 @@
+import { mutationRequest, newMutationId } from './mutationRequest';
 import { targetLanguageCode } from '../utils/targetLanguage';
 import apiClient from './apiClient';
 import type { TargetLanguage, TargetLanguageCode, InterfaceLanguage } from '../types/language';
 
 export interface ChatMessage {
+  _id?: string;
   role: 'user' | 'assistant';
   message: string;
   createdAt?: string;
@@ -21,8 +23,8 @@ interface ChatResponse {
   assistantMessage?: ChatMessage;
 }
 
-export const sendMessage = async (data: ChatRequest): Promise<ChatResponse> => {
-  const response = await apiClient.post<ChatResponse>('/ai-coach/chat', { ...data, targetLanguage: targetLanguageCode(data.targetLanguage) });
+export const sendMessage = async (data: ChatRequest, operationId = newMutationId()): Promise<ChatResponse> => {
+  const response = await mutationRequest(operationId, config => apiClient.post<ChatResponse>('/ai-coach/chat', { ...data, targetLanguage: targetLanguageCode(data.targetLanguage) }, config));
   return response.data;
 };
 
@@ -33,10 +35,10 @@ export const getChatHistory = async (targetLanguage: TargetLanguage | TargetLang
   return response.data;
 };
 
-export const clearChatHistory = async (targetLanguage: TargetLanguage | TargetLanguageCode): Promise<void> => {
-  await apiClient.delete(`/ai-coach/clear`, {
+export const clearChatHistory = async (targetLanguage: TargetLanguage | TargetLanguageCode, operationId = newMutationId()): Promise<void> => {
+  await mutationRequest(operationId, config => apiClient.delete(`/ai-coach/clear`, { ...config,
     params: { targetLanguage: targetLanguageCode(targetLanguage) }
-  });
+  }));
 };
 
 export interface WritingCorrectionRequest {

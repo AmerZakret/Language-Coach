@@ -23,6 +23,9 @@ export class CommunityPost extends Document {
 
   @Prop({ default: 0 })
   likesCount: number;
+
+  @Prop({ default: 0 })
+  revision: number;
 }
 
 export const CommunityPostSchema = SchemaFactory.createForClass(CommunityPost);

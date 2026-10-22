@@ -161,6 +161,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
         text: text.isNotEmpty ? text : null,
         imagePath: _selectedImage?.path,
         expectedSession: session,
+        isCurrent: isCurrent,
       );
 
       if (!isCurrent()) return;
@@ -212,6 +213,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
       final index = _posts.indexWhere((p) => p.id == postId);
       if (index != -1) {
         _posts[index] = CommunityPost(
+          revision: post.revision,
           id: post.id,
           userId: post.userId,
           userName: post.userName,
@@ -219,7 +221,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
           text: post.text,
           imageUrl: post.imageUrl,
           likes: post.likes,
-          likesCount: previouslyLiked ? previousCount - 1 : previousCount + 1,
+          likesCount: previouslyLiked ? (previousCount - 1).clamp(0, previousCount) : previousCount + 1,
           likedByMe: !previouslyLiked,
           createdAt: post.createdAt,
           updatedAt: post.updatedAt,
@@ -228,7 +230,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
     });
 
     try {
-      await _communityService.toggleLike(postId: postId, expectedSession: session);
+      await _communityService.toggleLike(postId: postId, liked: !previouslyLiked, expectedSession: session, isCurrent: isCurrent);
       if (isCurrent()) _loadFeed();
     } catch (e) {
       if (!isCurrent()) return;
@@ -306,9 +308,11 @@ class _CommunityScreenState extends State<CommunityScreen> {
                           setDialogState(() => isSaving = true);
                           try {
                             await _communityService.updatePost(
+                              expectedRevision: post.revision,
                               postId: post.id,
                               text: text,
                               expectedSession: session,
+                              isCurrent: isCurrent,
                             );
                             if (!dialogContext.mounted || !isCurrent()) return;
                             Navigator.pop(dialogContext);
@@ -366,7 +370,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
               onPressed: () async {
                 try {
                   if (!isCurrent()) return;
-                  await _communityService.deletePost(postId: post.id, learningLanguage: post.learningLanguage, expectedSession: session);
+                  await _communityService.deletePost(postId: post.id, expectedRevision: post.revision, learningLanguage: post.learningLanguage, expectedSession: session, isCurrent: isCurrent);
                   if (!dialogContext.mounted || !isCurrent()) return;
                   Navigator.pop(dialogContext);
                   

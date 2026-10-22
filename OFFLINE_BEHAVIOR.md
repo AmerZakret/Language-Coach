@@ -122,3 +122,51 @@ reports current-owner action/failed/map/started-create counts without payloads;
 no public endpoint or production sweep is introduced. Storage grows with retained
 receipts, failures and mappings; replacing old *snapshot copies* never expires
 logical records. Flutter web and the separate web application are not migrated.
+
+## Phase 7E: online mutation replay and session ordering
+
+Community mutations and AI send/clear remain online-only. There is no existing
+Community/AI offline dispatch path to migrate; no new offline feature is added.
+The existing flashcard/progress queues keep their original durable operation IDs.
+
+Flutter and web generate an operation ID once for each Community/AI logical
+mutation and send it as `X-Idempotency-Key`. An uncertain transport/server failure
+gets one bounded retry with the original payload, key and captured credentials.
+Unacknowledged create/edit/delete/send/clear intents keep their keys for a retry
+in the current form/service; changed intent or acknowledged intentional repeat
+gets a new key. Explicit API callers may supply an operation ID for cross-device
+replay. These online intents are not a newly introduced durable offline outbox:
+form/service disposal or browser/app restart does not restore them. Broad failed
+action recovery and an online outbox are deferred.
+
+Flutter captures multipart image bytes and rebuilds requests, including an
+explicit retry after the original temporary local file disappears. Web retains
+its FormData/File. Backend replay uses durable receipt results and a bytes-based
+fingerprint, with no dependence on a server staging path. Unacknowledged Flutter
+upload snapshots remain in that service's memory until acknowledged/disposed.
+
+Reactions set explicit desired `liked` state. Same-device requests for a post
+dispatch in intent order. UI count acknowledgements use authoritative backend
+values or a refetched feed; replay never adds another local count delta. Edits
+and deletes carry the displayed post revision. Community cache invalidation
+retains existing owner keys and additionally checks the captured view before
+changing relevant entries. Old owner/language/view acknowledgements cannot
+invalidate the replacement view's cache or mutate its UI.
+
+AI owner/language/revision response guards remain active through send, clear,
+history reconciliation and session/language ABA switches. A clear acknowledgement
+loads current authoritative history rather than blindly clearing the UI again.
+Server receipt/barrier transactions preserve sends committed after an earlier
+clear, even when the clear response was lost. An acknowledged clear ends the old
+local send retry intent captured when that clear was created; it never retires
+a later send's unresolved key. Connectivity changes retain unresolved web AI
+send/clear IDs. Receipt acknowledgements merge history by durable message ID,
+so replay after history reload cannot append the same displayed pair twice.
+Web synchronous dispatch guards also exclude same-render duplicate AI sends.
+Flutter's language-view generation scopes unresolved local AI intents: a new
+action after an X-to-Y-to-X switch gets a fresh ID, while same-view retries keep
+the original ID. Explicit caller-supplied IDs still permit cross-device replay.
+Community acknowledgements retire only their own pending intent; selecting a
+different image creates a distinct intent even if file metadata matches.
+Current-session 401 invalidation still preserves owner queues and caches; stale
+401s cannot invalidate replacement credentials.

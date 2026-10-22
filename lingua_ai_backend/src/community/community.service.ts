@@ -1,10 +1,13 @@
 import { targetLanguageCode, targetLanguageQuery, tryTargetLanguage } from '../common/target-language';
-import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Optional, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Optional, Logger, ConflictException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
+import { ClientSession, Model, Types } from 'mongoose';
 import { CommunityPost, CommunityPostDocument } from './schemas/community-post.schema';
 import { User } from '../users/schemas/user.schema';
 import { CommunityImageStorage } from './community-image.storage';
+
+import { createHash } from 'node:crypto';
+import { MutationReceipts } from '../common/mutation-receipt';
 
 @Injectable()
 export class CommunityService {
@@ -14,6 +17,7 @@ export class CommunityService {
     private readonly communityPostModel: Model<CommunityPostDocument>,
     @InjectModel(User.name)
     private readonly userModel: Model<User>,
+    private readonly receipts: MutationReceipts,
     @Optional() private readonly images: CommunityImageStorage = new CommunityImageStorage(),
   ) {}
 
@@ -31,27 +35,26 @@ export class CommunityService {
     await this.images.cleanup(imageUrl, operation);
   }
 
-  async create(
-    userId: string,
-    userName: string,
-    learningLanguage: string,
-    text?: string,
-    image?: Express.Multer.File,
-  ): Promise<CommunityPost> {
-    if (!text && !image) {
-      throw new BadRequestException('Post must contain either text or an image');
-    }
+  private fingerprint(image?: Express.Multer.File) {
+    return image ? { imageHash: createHash('sha256').update(image.buffer).digest('hex'),
+      imageMime: image.mimetype, imageExtension: image.originalname.split('.').pop()?.toLowerCase() } : {};
+  }
 
+  async create(userId: string, userName: string, learningLanguage: string,
+    text?: string, image?: Express.Multer.File, operationId?: string) {
+    if (!text && !image) throw new BadRequestException('Post must contain either text or an image');
     const language = targetLanguageCode(learningLanguage);
-    const imageUrl = image ? await this.images.store(image) : undefined;
+    let imageUrl: string | undefined;
     try {
-      const newPost = new this.communityPostModel({ userId, userName, learningLanguage: language,
-        text, imageUrl, likes: [], likesCount: 0 });
-      return await newPost.save();
-    } catch (error) {
-      await this.cleanupUnreferenced(imageUrl, 'failed create');
-      throw error;
-    }
+      return await this.receipts.execute(userId, operationId, 'community-create',
+        { language, text, ...this.fingerprint(image) }, async session => {
+          // The unique transaction claim precedes file allocation. Reuse the file
+          // on a transaction callback retry; a completed replay never stores one.
+          if (image && !imageUrl) imageUrl = await this.images.store(image);
+          return new this.communityPostModel({ userId, userName, learningLanguage: language,
+            text, imageUrl, likes: [], likesCount: 0, revision: 0 }).save({ session });
+        });
+    } finally { await this.cleanupUnreferenced(imageUrl, 'create reconciliation'); }
   }
 
   async findAll(
@@ -112,67 +115,69 @@ export class CommunityService {
     return post;
   }
 
-  async update(
-    id: string,
-    userId: string,
-    text?: string,
-    removeImage?: boolean,
-    image?: Express.Multer.File,
-  ): Promise<CommunityPost> {
-    const post = await this.findOne(id);
-    if (post.userId !== userId) {
-      throw new ForbiddenException('Cannot edit another user\'s post');
-    }
-
-    const oldImageUrl = post.imageUrl;
-    const nextText = text === undefined ? post.text : text;
-    if (!nextText && !image && (removeImage || !oldImageUrl))
-      throw new BadRequestException('Post cannot be updated to be completely empty');
-
-    const newImageUrl = image ? await this.images.store(image) : undefined;
-    if (text !== undefined) post.text = text;
-    if (newImageUrl || removeImage) post.imageUrl = newImageUrl;
-    let saved: CommunityPost;
-    try { saved = await post.save(); }
-    catch (error) {
-      await this.cleanupUnreferenced(newImageUrl, 'failed update');
-      throw error;
-    }
-    // Commit the new reference before removing the old image. Cleanup failure
-    // leaves an orphan, never a broken live post reference.
-    if (newImageUrl || removeImage) await this.cleanupUnreferenced(oldImageUrl, 'replaced image');
-    return saved;
+  private async owned(id: string, userId: string, session: ClientSession) {
+    if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid post ID');
+    const post = await this.communityPostModel.findById(id).session(session).exec();
+    if (!post) throw new NotFoundException('Community post not found');
+    if (post.userId !== userId) throw new ForbiddenException('Cannot mutate another user\'s post');
+    return post;
   }
 
-  async delete(id: string, userId: string): Promise<{ success: boolean }> {
-    const post = await this.findOne(id);
-    if (post.userId !== userId) {
-      throw new ForbiddenException('Cannot delete another user\'s post');
+  async update(id: string, userId: string, text?: string, removeImage?: boolean,
+    image?: Express.Multer.File, operationId?: string, expectedRevision?: number) {
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision! < 0)
+      throw new BadRequestException({ code: 'INVALID_RESOURCE_REVISION', message: 'Expected revision is required' });
+    let newImageUrl: string | undefined, oldImageUrl: string | undefined;
+    let committed = false;
+    try {
+      const result = await this.receipts.execute(userId, operationId, 'community-update',
+        { id, text, removeImage: !!removeImage, expectedRevision, ...this.fingerprint(image) }, async session => {
+          const post = await this.owned(id, userId, session);
+          if ((post.revision ?? 0) !== expectedRevision) throw new ConflictException({ code: 'STALE_RESOURCE_REVISION', message: 'Post changed. Refresh before editing.' });
+          oldImageUrl = post.imageUrl;
+          const nextText = text === undefined ? post.text : text;
+          if (!nextText && !image && (removeImage || !oldImageUrl)) throw new BadRequestException('Post cannot be empty');
+          if (image && !newImageUrl) newImageUrl = await this.images.store(image);
+          if (text !== undefined) post.text = text;
+          if (newImageUrl || removeImage) post.imageUrl = newImageUrl;
+          post.revision = expectedRevision! + 1;
+          return post.save({ session });
+        });
+      committed = true;
+      return result;
+    } finally {
+      await this.cleanupUnreferenced(newImageUrl, 'update reconciliation');
+      if (committed && (newImageUrl || removeImage)) await this.cleanupUnreferenced(oldImageUrl, 'replaced image');
     }
-
-    // A failed DB deletion retains the referenced file. Clean the document
-    // actually removed, including a replacement committed after the first read.
-    const deleted = await this.communityPostModel.findByIdAndDelete(id).exec();
-    if (deleted) await this.cleanupUnreferenced(deleted.imageUrl, 'deleted post');
-    return { success: true };
   }
 
-  async toggleLike(id: string, userId: string): Promise<{ likesCount: number; likedByMe: boolean }> {
-    const post = await this.findOne(id);
-    const index = post.likes.indexOf(userId);
+  async delete(id: string, userId: string, operationId?: string, expectedRevision?: number) {
+    if (!Number.isSafeInteger(expectedRevision) || expectedRevision! < 0)
+      throw new BadRequestException({ code: 'INVALID_RESOURCE_REVISION', message: 'Expected revision is required' });
+    let imageUrl: string | undefined;
+    const result = await this.receipts.execute(userId, operationId, 'community-delete',
+      { id, expectedRevision }, async session => {
+        const post = await this.owned(id, userId, session);
+        if ((post.revision ?? 0) !== expectedRevision) throw new ConflictException({ code: 'STALE_RESOURCE_REVISION', message: 'Post changed. Refresh before deleting.' });
+        imageUrl = post.imageUrl;
+        await this.communityPostModel.deleteOne({ _id: id, userId }, { session }).exec();
+        return { success: true };
+      });
+    await this.cleanupUnreferenced(imageUrl, 'deleted post');
+    return result;
+  }
 
-    if (index === -1) {
-      post.likes.push(userId);
-    } else {
-      post.likes.splice(index, 1);
-    }
-
-    post.likesCount = post.likes.length;
-    await post.save();
-
-    return {
-      likesCount: post.likesCount,
-      likedByMe: post.likes.includes(userId),
-    };
+  async setLike(id: string, userId: string, liked: boolean, operationId?: string) {
+    if (typeof liked !== 'boolean') throw new BadRequestException('liked must be a boolean');
+    return this.receipts.execute(userId, operationId, 'community-reaction', { id, liked }, async session => {
+      if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid post ID');
+      const post = await this.communityPostModel.findByIdAndUpdate(id, [
+        { $set: { likes: liked ? { $setUnion: [{ $ifNull: ['$likes', []] }, [userId]] }
+          : { $setDifference: [{ $ifNull: ['$likes', []] }, [userId]] } } },
+        { $set: { likesCount: { $size: '$likes' } } },
+      ], { session, returnDocument: 'after', updatePipeline: true }).exec();
+      if (!post) throw new NotFoundException('Community post not found');
+      return { likesCount: post.likesCount, likedByMe: post.likes.includes(userId) };
+    });
   }
 }

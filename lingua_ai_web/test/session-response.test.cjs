@@ -101,7 +101,7 @@ function harness(initial = {}) {
     profile: 'handleSave, setName, saved, resetConfirm, setResetConfirm',
     writing: 'handleSubmit, setTopic, setText, feedback, error, loading',
     pronunciation: 'handleSubmitAssessment, setAudioBlob, setTargetText, result, error',
-    community: 'startEditing, setEditingText, handleUpdatePost, handleCreatePost, handleToggleLike, handleDeletePost, setSelectedLanguage, setNewPostText, fetchFeed, posts, loading, error, newPostText, isPosting',
+    community: 'startEditing, setEditingText, handleUpdatePost, handleCreatePost, handleToggleLike, handleDeletePost, setSelectedLanguage, setNewPostText, setNewPostImage, fetchFeed, posts, loading, error, newPostText, isPosting',
     coach: 'messages, historyLoading, handleSend, handleClearChat, isTyping',
   };
   function load(name) {
@@ -121,7 +121,7 @@ function harness(initial = {}) {
       esModuleInterop: true, target: ts.ScriptTarget.ES2020,
     } }).outputText;
     vm.runInNewContext(compiled, {
-      module, exports: module.exports, localStorage, AbortController, FormData, alert: message => h.calls.push(['alert', message]), __capture: value => { activeRunner.exposed = value; },
+      module, exports: module.exports, crypto: require('node:crypto').webcrypto, localStorage, AbortController, FormData, alert: message => h.calls.push(['alert', message]), __capture: value => { activeRunner.exposed = value; },
       fetch: (...args) => h.fetchGuest(...args), console: { log() {}, error() {} },
       setTimeout: fn => { timers.push(fn); return timers.length; }, clearTimeout() {},
       setInterval: () => 1, clearInterval() {},
@@ -154,7 +154,7 @@ function harness(initial = {}) {
           createCommunityPost: async (...args) => { h.calls.push(['community-create', ...args]); return h.communityMutation?.(...args); },
           deleteCommunityPost: async (...args) => { h.calls.push(['community-delete', ...args]); return h.communityMutation?.(...args); },
           toggleLikeCommunityPost: async (...args) => { h.calls.push(['community-like', ...args]); return h.communityMutation ? h.communityMutation(...args) : { likesCount: 1, likedByMe: true }; },
-          updateCommunityPost: async (id, body) => { h.calls.push(['community-update', id, body]); return h.communityMutation?.(id, body); },
+          updateCommunityPost: async (id, body, ...args) => { h.calls.push(['community-update', id, body, ...args]); return h.communityMutation?.(id, body, ...args); },
         };
         if (path.endsWith('/syncRetryPolicy')) return load('policy');
         if (path.endsWith('/SyncContext')) return { useSync: () => ({ syncRevision: h.syncRevision || 0, lastDrainSucceeded: true }) };
@@ -1313,4 +1313,162 @@ test('older like response cannot overwrite a newer reaction result', async () =>
   next.resolve({ likesCount: 0, likedByMe: false }); await second; await h.settle();
   old.resolve({ likesCount: 1, likedByMe: true }); await first; await h.settle();
   assert.equal(h.child.exposed.posts[0].likesCount, 0); assert.equal(h.child.exposed.posts[0].likedByMe, false);
+});
+
+
+test('7E Community create retry retains logical key; acknowledged same-content action gets a fresh key', async () => {
+  const h = await communityHarness();
+  h.fetchCommunity = async () => communityFeed();
+  let attempts = 0;
+  h.communityMutation = async () => { if (++attempts === 1) throw new Error('Lost acknowledgement'); return {}; };
+  h.mount('community', 'CommunityPage'); await h.settle();
+  h.child.exposed.setNewPostText('draft'); h.child.render();
+  await h.child.exposed.handleCreatePost({ preventDefault() {} }); await h.settle();
+  await h.child.exposed.handleCreatePost({ preventDefault() {} }); await h.settle();
+  const calls = h.calls.filter(call => call[0] === 'community-create');
+  assert.equal(calls[0][2], calls[1][2]);
+  h.child.exposed.setNewPostText('draft'); h.child.render();
+  await h.child.exposed.handleCreatePost({ preventDefault() {} }); await h.settle();
+  assert.notEqual(h.calls.filter(call => call[0] === 'community-create').at(-1)[2], calls[0][2]);
+});
+
+test('7E AI lost clear ack -> later send -> clear retry reconciles later history with original clear ID', async () => {
+  const h = await communityHarness(), clearKeys = [];
+  let history = [{ role: 'assistant', message: 'old' }];
+  let clears = 0;
+  h.getChatHistory = async () => history;
+  h.clearChatHistory = async (_language, id) => {
+    clearKeys.push(id);
+    if (++clears === 1) { history = []; throw new Error('Lost acknowledgement'); }
+  };
+  h.sendMessage = async () => {
+    history = [{ role: 'user', message: 'later' }, { role: 'assistant', message: 'later reply' }];
+    return { userMessage: history[0], assistantMessage: history[1], reply: 'later reply' };
+  };
+  h.mount('coach', 'AiCoachPage'); await h.settle();
+  await h.child.exposed.handleClearChat(); await h.settle();
+  await h.child.exposed.handleSend('later'); await h.settle();
+  await h.child.exposed.handleClearChat(); await h.settle();
+  assert.equal(clearKeys[0], clearKeys[1]);
+  assert.deepEqual(copy(h.child.exposed.messages), history);
+});
+
+test('7E AI send retry retains key until acknowledged; independent intentional sends get fresh keys', async () => {
+  const h = await communityHarness(), keys = [];
+  h.getChatHistory = async () => [];
+  let sends = 0;
+  h.sendMessage = async (_data, key) => { keys.push(key); if (++sends === 1) throw new Error('Lost acknowledgement'); return { reply: 'reply' }; };
+  h.mount('coach', 'AiCoachPage'); await h.settle();
+  await h.child.exposed.handleSend('hello'); await h.settle();
+  await h.child.exposed.handleSend('hello'); await h.settle();
+  await h.child.exposed.handleSend('hello'); await h.settle();
+  assert.equal(keys[0], keys[1]); assert.notEqual(keys[1], keys[2]);
+});
+
+test('7E old Community acknowledgement cannot retire a newer unresolved create intent', async () => {
+  const h = await communityHarness(), older = deferred();
+  h.fetchCommunity = async () => communityFeed();
+  let attempts = 0;
+  h.communityMutation = () => ++attempts === 1 ? older.promise : Promise.reject(new Error('Lost acknowledgement'));
+  h.mount('community', 'CommunityPage'); await h.settle();
+  h.child.exposed.setNewPostText('older'); h.child.render();
+  const oldWork = h.child.exposed.handleCreatePost({ preventDefault() {} });
+  h.child.exposed.setNewPostText('newer'); h.child.render();
+  await h.child.exposed.handleCreatePost({ preventDefault() {} }); await h.settle();
+  older.resolve({}); await oldWork; await h.settle();
+  assert.equal(h.child.exposed.newPostText, 'newer');
+  await h.child.exposed.handleCreatePost({ preventDefault() {} });
+  const calls = h.calls.filter(call => call[0] === 'community-create');
+  assert.notEqual(calls[0][2], calls[1][2]);
+  assert.equal(calls[1][2], calls[2][2]);
+});
+
+test('7E newly selected images with identical metadata are distinct logical creates', async () => {
+  const h = await communityHarness();
+  h.fetchCommunity = async () => communityFeed();
+  h.communityMutation = async () => { throw new Error('Lost acknowledgement'); };
+  h.mount('community', 'CommunityPage'); await h.settle();
+  const { File } = require('node:buffer');
+  const first = new File(['one'], 'same.png', { type: 'image/png', lastModified: 100 });
+  const second = new File(['two'], 'same.png', { type: 'image/png', lastModified: 100 });
+  h.child.exposed.setNewPostImage(first); h.child.render();
+  await h.child.exposed.handleCreatePost({ preventDefault() {} }); await h.settle();
+  await h.child.exposed.handleCreatePost({ preventDefault() {} }); await h.settle();
+  h.child.exposed.setNewPostImage(second); h.child.render();
+  await h.child.exposed.handleCreatePost({ preventDefault() {} });
+  const keys = h.calls.filter(call => call[0] === 'community-create').map(call => call[2]);
+  assert.equal(keys[0], keys[1]); assert.notEqual(keys[1], keys[2]);
+});
+
+test('7E AI send retains unresolved ID across connectivity loss and recovery', async () => {
+  const h = await communityHarness(), keys = [];
+  h.getChatHistory = async () => [];
+  h.sendMessage = async (_payload, id) => { keys.push(id); if (keys.length === 1) throw new Error('Lost acknowledgement'); return { reply: 'reply' }; };
+  h.mount('coach', 'AiCoachPage'); await h.settle();
+  await h.child.exposed.handleSend('hello'); await h.settle();
+  h.isOffline = true; h.child.render(); await h.settle();
+  h.isOffline = false; h.child.render(); await h.settle();
+  await h.child.exposed.handleSend('hello');
+  assert.equal(keys.length, 2); assert.equal(keys[0], keys[1]);
+});
+
+test('7E connectivity recovery retains old clear receipt rather than erasing a later send', async () => {
+  const h = await communityHarness(), keys = [];
+  let history = [];
+  h.getChatHistory = async () => history;
+  h.clearChatHistory = async (_language, id) => { keys.push(id); if (keys.length === 1) throw new Error('Lost acknowledgement'); };
+  h.sendMessage = async () => { history = [{ role: 'user', message: 'later' }, { role: 'assistant', message: 'reply' }]; return { reply: 'reply' }; };
+  h.mount('coach', 'AiCoachPage'); await h.settle();
+  await h.child.exposed.handleClearChat(); await h.settle();
+  h.isOffline = true; h.child.render(); await h.settle();
+  h.isOffline = false; h.child.render(); await h.settle();
+  await h.child.exposed.handleSend('later'); await h.settle();
+  await h.child.exposed.handleClearChat(); await h.settle();
+  assert.equal(keys.length, 2); assert.equal(keys[0], keys[1]);
+  assert.deepEqual(copy(h.child.exposed.messages), history);
+});
+
+test('7E same-render duplicate AI send dispatch cannot duplicate the displayed pair', async () => {
+  const h = await communityHarness(), result = deferred();
+  h.getChatHistory = async () => [];
+  let calls = 0;
+  h.sendMessage = () => { calls++; return result.promise; };
+  h.mount('coach', 'AiCoachPage'); await h.settle();
+  const send = h.child.exposed.handleSend;
+  const first = send('hello'), second = send('hello');
+  assert.equal(calls, 1);
+  result.resolve({ reply: 'reply' }); await Promise.all([first, second]); await h.settle();
+  assert.equal(h.child.exposed.messages.length, 2);
+});
+
+test('7E delayed clear acknowledgement cannot retire a later unresolved send ID', async () => {
+  const h = await communityHarness(), keys = [];
+  h.getChatHistory = async () => [];
+  let clears = 0;
+  h.clearChatHistory = async () => { if (++clears === 1) throw new Error('Lost clear acknowledgement'); };
+  h.sendMessage = async (_payload, id) => { keys.push(id); if (keys.length === 1) throw new Error('Lost send acknowledgement'); return { reply: 'later reply' }; };
+  h.mount('coach', 'AiCoachPage'); await h.settle();
+  await h.child.exposed.handleClearChat(); await h.settle();
+  await h.child.exposed.handleSend('later'); await h.settle();
+  await h.child.exposed.handleClearChat(); await h.settle();
+  await h.child.exposed.handleSend('later');
+  assert.equal(keys.length, 2); assert.equal(keys[0], keys[1]);
+});
+
+test('7E receipt replay after history reconciliation applies the durable pair once', async () => {
+  const h = await communityHarness(), keys = [];
+  const pair = [{ _id: 'user-message', role: 'user', message: 'hello' }, { _id: 'assistant-message', role: 'assistant', message: 'reply' }];
+  let history = [];
+  h.getChatHistory = async () => history;
+  h.sendMessage = async (_payload, id) => {
+    keys.push(id);
+    if (keys.length === 1) { history = pair; throw new Error('Lost acknowledgement'); }
+    return { userMessage: pair[0], assistantMessage: pair[1], reply: 'reply' };
+  };
+  h.mount('coach', 'AiCoachPage'); await h.settle();
+  await h.child.exposed.handleSend('hello'); await h.settle();
+  h.isOffline = true; h.child.render(); await h.settle();
+  h.isOffline = false; h.child.render(); await h.settle();
+  await h.child.exposed.handleSend('hello'); await h.settle();
+  assert.equal(keys[0], keys[1]); assert.deepEqual(copy(h.child.exposed.messages), pair);
 });

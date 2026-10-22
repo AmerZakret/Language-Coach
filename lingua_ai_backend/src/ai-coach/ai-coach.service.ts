@@ -1,9 +1,11 @@
 import { targetLanguageCode, targetLanguageQuery, TARGET_LANGUAGE_NAMES, languageResponse } from '../common/target-language';
-import { Injectable, Logger, NotFoundException, HttpException, HttpStatus } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, HttpException, HttpStatus, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
+import { ClientSession, Model, Types } from 'mongoose';
 import { ChatMessage } from './schemas/chat-message.schema';
+import { MutationReceipts } from '../common/mutation-receipt';
+import { ChatBarrier } from './schemas/chat-barrier.schema';
 import { User } from '../users/schemas/user.schema';
 
 interface GeminiResponse {
@@ -30,7 +32,11 @@ export class AiCoachService {
     private chatMessageModel: Model<ChatMessage>,
     @InjectModel(User.name)
     private userModel: Model<User>,
+    private readonly receipts: MutationReceipts,
+    @InjectModel(ChatBarrier.name) private readonly barriers: Model<ChatBarrier>,
   ) {}
+
+  async onModuleInit() { await this.barriers.createIndexes(); }
 
   /**
    * Resolve only the MongoDB identity supplied by an authenticated controller.
@@ -56,28 +62,53 @@ export class AiCoachService {
     message: string,
     language: string,
     targetLanguage?: string,
+    operationId?: string,
   ) {
     const user = await this.findUser(userId);
 
-    // Retrieve secret variables securely from NestJS config provider (protects key from client bundles)
     const targetCode = targetLanguageCode(targetLanguage ?? 'en');
+    await this.ensureBarrier(userId, targetCode);
+    let generated: ParsedAIResponse | undefined;
+    return this.receipts.execute(userId, operationId, 'ai-send',
+      { message, language, targetLanguage: targetCode }, async session => {
+        // Every send and clear writes the same owner/language barrier. MongoDB
+        // retries conflicting transactions, giving committed operations a total
+        // order. A completed receipt bypasses both provider and history writes.
+        await this.advanceBarrier(userId, targetCode, session);
+        generated ??= await this.generateReply(message, language, targetCode);
+        const savedUserMsg = new this.chatMessageModel({ userId: user._id.toString(), targetLanguage: targetCode, role: 'user', message });
+        const savedAssistantMsg = new this.chatMessageModel({ userId: user._id.toString(), targetLanguage: targetCode, role: 'assistant', message: generated.reply });
+        await savedUserMsg.save({ session });
+        await savedAssistantMsg.save({ session });
+        return { userMessage: savedUserMsg, assistantMessage: savedAssistantMsg,
+          reply: generated.reply, correction: generated.correction, saved: true };
+      });
+  }
+
+  private async ensureBarrier(userId: string, targetLanguage: string) {
+    try { await this.barriers.updateOne({ userId, targetLanguage }, { $setOnInsert: { revision: 0 } }, { upsert: true, writeConcern: { w: 'majority' } }).exec(); }
+    catch (error) {
+      if (error?.code !== 11000) throw new ServiceUnavailableException({ code: 'RETRYABLE_SERVER_FAILURE', message: 'History ordering could not be acknowledged. Retry the same operation.' });
+    }
+  }
+
+  private async advanceBarrier(userId: string, targetLanguage: string, session: ClientSession) {
+    const result = await this.barriers.updateOne({ userId, targetLanguage }, { $inc: { revision: 1 } }, { session }).exec();
+    if (result.matchedCount !== 1) throw new ServiceUnavailableException({ code: 'RETRYABLE_SERVER_FAILURE', message: 'History ordering could not be acknowledged. Retry the same operation.' });
+  }
+
+  private async generateReply(message: string, language: string, targetCode: ReturnType<typeof targetLanguageCode>): Promise<ParsedAIResponse> {
+    // Retrieve secret variables securely from NestJS config provider (protects key from client bundles)
     const targetLangName = TARGET_LANGUAGE_NAMES[targetCode];
     const apiKey = this.configService.get<string>('GEMINI_API_KEY')?.trim();
     const model = (
       this.configService.get<string>('GEMINI_MODEL') || 'gemini-2.5-flash'
     ).trim();
 
-    // Configuration guard: return clean unconfigured warning instead of crashing if key is missing
+    // Configuration failures remain retryable and never create history or a receipt.
     if (!apiKey || apiKey === 'your_gemini_api_key') {
       this.logger.warn('GEMINI_API_KEY is not configured');
-      return {
-        reply:
-          language === 'tr'
-            ? 'YZ Koç henüz yapılandırılmadı.'
-            : 'AI Coach is not configured yet.',
-        correction: message,
-        saved: false,
-      };
+      throw new ServiceUnavailableException({ code: 'PROVIDER_UNAVAILABLE', message: 'AI Coach is temporarily unavailable. Please try again.' });
     }
 
     // Convert interface and target language codes to human-readable names for prompt construction
@@ -107,6 +138,7 @@ Do not include markdown code block formatting like \`\`\`json. Return pure JSON.
         `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
         {
           method: 'POST',
+          signal: AbortSignal.timeout(35000),
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             system_instruction: {
@@ -126,13 +158,12 @@ Do not include markdown code block formatting like \`\`\`json. Return pure JSON.
 
       // Handle raw network/API error codes (intercept quota limits securely)
       if (!response.ok) {
-        const errorText = await response.text();
-        this.logger.error(`Gemini API error: ${response.status} ${errorText}`);
+        this.logger.warn(`AI provider returned HTTP ${response.status}`);
         if (response.status === 429) {
           throw new Error('QUOTA_EXCEEDED');
         }
         throw new Error(
-          `Failed to fetch from Gemini: ${response.status} ${errorText}`,
+          `AI provider HTTP ${response.status}`,
         );
       }
 
@@ -143,71 +174,13 @@ Do not include markdown code block formatting like \`\`\`json. Return pure JSON.
         throw new Error('Invalid response from Gemini API');
       }
 
-      // Safe JSON parsing wrapper: fall back to plain message instead of breaking the chat
-      let parsedResponse: ParsedAIResponse;
-      try {
-        parsedResponse = JSON.parse(textResponse) as ParsedAIResponse;
-      } catch {
-        this.logger.error(`Failed to parse Gemini response: ${textResponse}`);
-        parsedResponse = {
-          reply:
-            'I understood your message, but had trouble formatting my response. Keep practicing!',
-          correction: message,
-        };
-      }
-
-      // 1. Save user's message document to MongoDB
-      const savedUserMsg = await new this.chatMessageModel({
-        userId: user._id.toString(),
-        targetLanguage: targetCode,
-        role: 'user',
-        message,
-      }).save();
-
-      // 2. Save coach's reply document to MongoDB
-      const savedAssistantMsg = await new this.chatMessageModel({
-        userId: user._id.toString(),
-        targetLanguage: targetCode,
-        role: 'assistant',
-        message: parsedResponse.reply,
-      }).save();
-
-      return {
-        userMessage: {
-          _id: savedUserMsg._id.toString(),
-          userId: savedUserMsg.userId,
-          role: savedUserMsg.role,
-          message: savedUserMsg.message,
-          targetLanguage: savedUserMsg.targetLanguage,
-          createdAt: savedUserMsg.createdAt,
-        },
-        assistantMessage: {
-          _id: savedAssistantMsg._id.toString(),
-          userId: savedAssistantMsg.userId,
-          role: savedAssistantMsg.role,
-          message: savedAssistantMsg.message,
-          targetLanguage: savedAssistantMsg.targetLanguage,
-          createdAt: savedAssistantMsg.createdAt,
-        },
-        reply: parsedResponse.reply,
-        correction: parsedResponse.correction,
-        saved: true,
-      };
-    } catch (error) {
-      // Catch-all block: intercept errors and return friendly localized feedback (avoids stack leaks)
-      this.logger.error('Error communicating with AI Coach', error);
-      const isQuotaError =
-        error instanceof Error &&
-        (error.message.includes('429') || error.message === 'QUOTA_EXCEEDED');
-      const fallbackReply = isQuotaError
-        ? language === 'tr'
-          ? 'Üzgünüm, günlük Gemini yapay zeka kotam doldu. Lütfen biraz sonra tekrar deneyin!'
-          : "I'm sorry, my Gemini API quota limit is currently exceeded. Please try again in a minute!"
-        : language === 'tr'
-        ? 'Yapay zeka koçu ile iletişim kurarken bir hata oluştu. Lütfen tekrar deneyin.'
-        : 'An error occurred while communicating with the AI Coach. Please try again.';
-      
-      throw new HttpException(fallbackReply, HttpStatus.INTERNAL_SERVER_ERROR);
+      const parsedResponse = JSON.parse(textResponse) as ParsedAIResponse;
+      if (!parsedResponse || typeof parsedResponse.reply !== 'string' || !parsedResponse.reply.trim()
+        || typeof parsedResponse.correction !== 'string') throw new Error('Invalid provider response');
+      return parsedResponse;
+    } catch {
+      this.logger.warn('AI chat provider unavailable');
+      throw new ServiceUnavailableException({ code: 'PROVIDER_UNAVAILABLE', message: 'AI Coach is temporarily unavailable. Please try again.' });
     }
   }
 
@@ -351,12 +324,14 @@ Return ONLY this JSON. Do not include markdown formatting like \`\`\`json.`;
   /**
    * Deletes all chat history log mappings for a user.
    */
-  async clearHistory(userId: string, targetLanguage: string) {
+  async clearHistory(userId: string, targetLanguage: string, operationId?: string) {
     const user = await this.findUser(userId);
-
     const targetCode = targetLanguageCode(targetLanguage ?? 'en');
-    return this.chatMessageModel
-      .deleteMany({ userId: user._id.toString(), targetLanguage: targetLanguageQuery(targetCode) })
-      .exec();
+    await this.ensureBarrier(userId, targetCode);
+    return this.receipts.execute(userId, operationId, 'ai-clear', { targetLanguage: targetCode }, async session => {
+      await this.advanceBarrier(userId, targetCode, session);
+      const deleted = await this.chatMessageModel.deleteMany({ userId: user._id.toString(), targetLanguage: targetLanguageQuery(targetCode) }, { session }).exec();
+      return { success: true, deletedCount: deleted.deletedCount };
+    });
   }
 }

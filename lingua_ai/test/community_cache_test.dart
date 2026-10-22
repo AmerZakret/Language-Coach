@@ -218,11 +218,11 @@ void main() {
           case 'create':
             await service.createPost(learningLanguage: 'en', text: 'new');
           case 'edit':
-            await service.updatePost(postId: 'post', text: 'edit');
+            await service.updatePost(expectedRevision: 0, postId: 'post', text: 'edit');
           case 'delete':
-            await service.deletePost(postId: 'post');
+            await service.deletePost(expectedRevision: 0, postId: 'post');
           case 'like':
-            await service.toggleLike(postId: 'post');
+            await service.toggleLike(liked: true, postId: 'post');
         }
         expect(CommunityFeedCache.read(prefs, affected), isNull);
         expect(CommunityFeedCache.read(prefs, all), isNull);

@@ -1,4 +1,6 @@
 import { tryTargetLanguage } from '../common/target-language';
+import { ReactionDto } from './dto/reaction.dto';
+
 import {
   Controller,
   Get,
@@ -12,6 +14,7 @@ import {
   Req,
   UseInterceptors,
   UploadedFile,
+  Headers,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -51,6 +54,7 @@ export class CommunityController {
   async createPost(
     @Body() dto: CreateCommunityPostDto,
     @Req() req: any,
+    @Headers('x-idempotency-key') operationId?: string,
     @UploadedFile() file?: Express.Multer.File,
   ) {
     const userId = req.user.id;
@@ -62,6 +66,7 @@ export class CommunityController {
       dto.learningLanguage,
       dto.text,
       file,
+      operationId,
     );
   }
 
@@ -71,6 +76,7 @@ export class CommunityController {
     @Param('id') id: string,
     @Body() dto: UpdateCommunityPostDto,
     @Req() req: any,
+    @Headers('x-idempotency-key') operationId?: string,
     @UploadedFile() file?: Express.Multer.File,
   ) {
     const userId = req.user.id;
@@ -84,19 +90,21 @@ export class CommunityController {
       dto.text,
       removeImageVal,
       file,
+      operationId,
+      dto.expectedRevision,
     );
-    return { ...post.toObject(), learningLanguage: tryTargetLanguage(post.learningLanguage) ?? post.learningLanguage };
+    return { ...post, learningLanguage: tryTargetLanguage(post.learningLanguage) ?? post.learningLanguage };
   }
 
   @Delete(':id')
-  async deletePost(@Param('id') id: string, @Req() req: any) {
+  async deletePost(@Param('id') id: string, @Req() req: any, @Headers('x-idempotency-key') operationId: string, @Headers('x-resource-revision') revision: string) {
     const userId = req.user.id;
-    return this.communityService.delete(id, userId);
+    return this.communityService.delete(id, userId, operationId, revision === undefined ? undefined : Number(revision));
   }
 
   @Post(':id/like')
-  async toggleLike(@Param('id') id: string, @Req() req: any) {
+  async setLike(@Param('id') id: string, @Req() req: any, @Body() dto: ReactionDto, @Headers('x-idempotency-key') operationId: string) {
     const userId = req.user.id;
-    return this.communityService.toggleLike(id, userId);
+    return this.communityService.setLike(id, userId, dto.liked, operationId);
   }
 }

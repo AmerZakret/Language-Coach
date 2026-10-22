@@ -80,7 +80,7 @@ function origin() {
       const module={exports:{}};modules.set(full,module);
       const code=readFileSync(full,'utf8').replaceAll('import.meta.env.VITE_API_URL','undefined');
       const compiled=ts.transpileModule(code,{fileName:full,compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.React,esModuleInterop:true,target:ts.ScriptTarget.ES2022}}).outputText;
-      vm.runInNewContext(compiled,{module,exports:module.exports,localStorage:tab.localStorage,navigator:tab.navigator,window:tab.window,
+      vm.runInNewContext(compiled,{module,exports:module.exports,crypto:require('node:crypto').webcrypto,FormData,Blob,localStorage:tab.localStorage,navigator:tab.navigator,window:tab.window,
         AbortController,Date,console:{error(){},log(){}},fetch:()=>tab.fetchGuest(),
         setTimeout:(fn,ms)=>{const timer=setTimeout(()=>{tab.timers.delete(timer);if(!tab.closed)fn();},ms);tab.timers.add(timer);return timer;},
         clearTimeout:timer=>{clearTimeout(timer);tab.timers.delete(timer);},

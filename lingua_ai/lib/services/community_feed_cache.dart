@@ -93,7 +93,7 @@ class CommunityFeedCache {
   }
 
   static Future<void> invalidate(SharedPreferences prefs, String owner,
-      {String? postId, String? language}) async {
+      {String? postId, String? language, bool Function()? isCurrent}) async {
     final prefix = 'community_feed_v2_${Uri.encodeComponent(owner)}_';
     final code = language == null ? null : TargetLanguage.code(language);
     for (final key in prefs.getKeys().where((key) => key.startsWith(prefix))) {
@@ -111,6 +111,7 @@ class CommunityFeedCache {
                 (postId != null &&
                     (feed['items'] as List)
                         .any((post) => post['_id'] == postId)))) {
+          if (isCurrent?.call() == false) return;
           await prefs.remove(key);
         }
       } catch (_) {/* Malformed entries are unavailable, never re-owned. */}

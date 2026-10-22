@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Post, Query, UseGuards, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Post, Query, UseGuards, Req, Headers } from '@nestjs/common';
 import { AiCoachService } from './ai-coach.service';
 import { ChatDto } from './dto/chat.dto';
 import { WritingDto } from './dto/writing.dto';
@@ -10,13 +10,14 @@ export class AiCoachController {
   constructor(private readonly aiCoachService: AiCoachService) {}
 
   @Post('chat')
-  async chat(@Body() chatDto: ChatDto, @Req() req: any) {
+  async chat(@Body() chatDto: ChatDto, @Req() req: any, @Headers('x-idempotency-key') operationId: string) {
     const userId = req.user._id.toString();
     return this.aiCoachService.sendMessage(
       userId,
       chatDto.message,
       chatDto.language,
       chatDto.targetLanguage,
+      operationId,
     );
   }
 
@@ -43,11 +44,12 @@ export class AiCoachController {
 
   @Delete('clear')
   async clearHistory(
+    @Headers('x-idempotency-key') operationId: string,
     @Query('targetLanguage') targetLanguage: string,
     @Req() req: any,
   ) {
     const userId = req.user._id.toString();
-    return this.aiCoachService.clearHistory(userId, targetLanguage);
+    return this.aiCoachService.clearHistory(userId, targetLanguage, operationId);
   }
 
 }

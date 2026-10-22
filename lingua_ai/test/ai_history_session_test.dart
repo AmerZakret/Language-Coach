@@ -163,6 +163,69 @@ void main() {
             ? pending.future
             : Future.value(progress())));
   });
+  testWidgets('AI replay acknowledgement does not duplicate an already loaded durable pair', (tester) async {
+    final pair = [
+      {'_id': 'user-message', 'role': 'user', 'message': 'hello'},
+      {'_id': 'assistant-message', 'role': 'assistant', 'message': 'reply'},
+    ];
+    await http.runWithClient(() async {
+      await login(a);
+      await tester.pumpWidget(const MaterialApp(home: AiCoachScreen()));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), 'hello');
+      await tester.tap(find.byIcon(Icons.send_rounded));
+      await tester.pumpAndSettle();
+      expect(find.text('hello'), findsOneWidget);
+      expect(find.text('reply'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    }, () => MockClient((request) async {
+      if (request.url.path.endsWith('/history')) {
+        return http.Response(jsonEncode(pair), 200);
+      }
+      if (request.url.path.endsWith('/chat')) {
+        return http.Response(jsonEncode({
+          'userMessage': pair[0], 'assistantMessage': pair[1], 'reply': 'reply',
+        }), 201);
+      }
+      return progress();
+    }));
+  });
+
+  testWidgets('AI language ABA starts a new send intent after an uncertain old send', (tester) async {
+    final keys = <String>[];
+    await http.runWithClient(() async {
+      await login(a);
+      await tester.pumpWidget(const MaterialApp(home: AiCoachScreen()));
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), 'hello');
+      await tester.tap(find.byIcon(Icons.send_rounded));
+      await tester.pumpAndSettle();
+      expect(keys, hasLength(2));
+      ScaffoldMessenger.of(tester.element(find.byType(TextField))).hideCurrentSnackBar();
+      await tester.pumpAndSettle();
+      await languages.setLanguage('de', syncToBackend: false);
+      await languages.setLanguage('en', syncToBackend: false);
+      await tester.pumpAndSettle();
+      await tester.enterText(find.byType(TextField), 'hello');
+      await tester.tap(find.byIcon(Icons.send_rounded));
+      await tester.pumpAndSettle();
+      expect(keys, hasLength(3));
+      expect(keys[0], keys[1]); expect(keys[2], isNot(keys[0]));
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    }, () => MockClient((request) async {
+      if (request.url.path.endsWith('/history')) {
+        return http.Response('[]', 200);
+      }
+      if (request.url.path.endsWith('/chat')) {
+        keys.add(request.headers['X-Idempotency-Key']!);
+        return http.Response('{"reply":"reply"}', keys.length <= 2 ? 503 : 201);
+      }
+      return progress();
+    }));
+  });
+
   for (final operation in ['send', 'clear']) {
     for (final boundary in ['language', 'account', 'language ABA']) {
       testWidgets('AI $operation ignores late completion after $boundary', (tester) async {
