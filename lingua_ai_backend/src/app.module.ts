@@ -11,11 +11,14 @@ import { AiCoachModule } from './ai-coach/ai-coach.module';
 import { FlashcardsModule } from './flashcards/flashcards.module';
 import { PronunciationModule } from './pronunciation/pronunciation.module';
 import { CommunityModule } from './community/community.module';
+import { validateEnvironment } from './config/runtime-config';
 
 @Module({
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
+      ignoreEnvFile: process.env.NODE_ENV === 'production',
+      validate: validateEnvironment,
     }),
     MongooseModule.forRootAsync({
       imports: [ConfigModule],

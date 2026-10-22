@@ -1,5 +1,9 @@
 # React + TypeScript + Vite
 
+Production builds require explicit `VITE_API_URL`; localhost fallback is development
+only. See [Production configuration](../PRODUCTION_CONFIGURATION.md) for endpoint
+validation and the deliberate self-hosted override.
+
 This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
 
 Currently, two official plugins are available:

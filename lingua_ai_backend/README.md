@@ -4,6 +4,11 @@ A clean NestJS backend for the LinguaAI English learning application.
 
 ## Getting Started
 
+Production requirements, offline preflight, credential rotation and client release
+configuration are documented in [Production configuration](../PRODUCTION_CONFIGURATION.md).
+Build first, inject `NODE_ENV=production` and the required configuration, then run
+`npm run validate:prod` and `npm run start:prod`. Production ignores local `.env`.
+
 1.  **Install dependencies**:
     ```bash
     npm install
@@ -49,8 +54,8 @@ A clean NestJS backend for the LinguaAI English learning application.
 
 ## Community image storage
 
-Community images use `UPLOAD_ROOT` (absolute or relative to the backend working
-directory), defaulting to `<backend working directory>/uploads`. Writing,
+Community images require an explicit absolute `UPLOAD_ROOT` in production.
+Development accepts relative paths and defaults to `<backend working directory>/uploads`. Writing,
 serving and cleanup use the same resolved root. Keep this directory on persistent
 writable storage owned by the backend service; multiple backend instances must
 share that storage. Unshared instance disks and ephemeral deployment filesystems

@@ -1,9 +1,10 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { ValidationPipe } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { configureCommunityUploadServing } from './community/community-upload-serving';
+import { corsOptions, safeConfigSummary } from './config/runtime-config';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
@@ -17,15 +18,16 @@ async function bootstrap() {
     }),
   );
 
-  app.enableCors();
+  app.enableCors(corsOptions(configService));
 
   configureCommunityUploadServing(app);
 
-  const port = configService.get<number>('PORT') || 3000;
+  const port = configService.getOrThrow<number>('PORT');
+  Logger.log(JSON.stringify(safeConfigSummary(configService)), 'Configuration');
   await app.listen(port, '0.0.0.0');
-  console.log(`Application is running on: http://localhost:${port} (accessible on local network)`);
+  Logger.log(`Application listening on port ${port}`, 'Bootstrap');
 }
-bootstrap().catch((err) => {
-  console.error(err);
+bootstrap().catch(() => {
+  console.error('Backend startup failed. Check configuration and dependency availability.');
   process.exit(1);
 });

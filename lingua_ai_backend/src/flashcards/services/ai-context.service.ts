@@ -1,6 +1,7 @@
 import { targetLanguageCode, TARGET_LANGUAGE_NAMES } from '../../common/target-language';
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { featureEnabled } from '../../config/runtime-config';
 
 @Injectable()
 export class AiContextService {
@@ -13,8 +14,8 @@ export class AiContextService {
     const apiKey = this.configService.get<string>('GEMINI_API_KEY')?.trim();
     const model = (this.configService.get<string>('GEMINI_MODEL') || 'gemini-2.5-flash').trim();
 
-    if (!apiKey) {
-      this.logger.warn('GEMINI_API_KEY not found, returning placeholder context');
+    if (!featureEnabled(this.configService, 'AI_ENABLED') || !apiKey) {
+      this.logger.warn('AI context is disabled or not configured; returning fallback context');
       return { 
         sentences: [`Example sentence for ${word}`], 
         mnemonic: 'Mnemonic not available without API key' 

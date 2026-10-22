@@ -7,6 +7,7 @@ import { ChatMessage } from './schemas/chat-message.schema';
 import { MutationReceipts } from '../common/mutation-receipt';
 import { ChatBarrier } from './schemas/chat-barrier.schema';
 import { User } from '../users/schemas/user.schema';
+import { featureEnabled } from '../config/runtime-config';
 
 interface GeminiResponse {
   candidates?: Array<{
@@ -98,6 +99,7 @@ export class AiCoachService {
   }
 
   private async generateReply(message: string, language: string, targetCode: ReturnType<typeof targetLanguageCode>): Promise<ParsedAIResponse> {
+    if (!featureEnabled(this.configService, 'AI_ENABLED')) throw new ServiceUnavailableException({ code: 'FEATURE_DISABLED', message: 'AI features are disabled.' });
     // Retrieve secret variables securely from NestJS config provider (protects key from client bundles)
     const targetLangName = TARGET_LANGUAGE_NAMES[targetCode];
     const apiKey = this.configService.get<string>('GEMINI_API_KEY')?.trim();
@@ -198,6 +200,8 @@ Do not include markdown code block formatting like \`\`\`json. Return pure JSON.
     targetLanguage: string,
   ) {
     await this.findUser(userId);
+
+    if (!featureEnabled(this.configService, 'AI_ENABLED')) throw new ServiceUnavailableException({ code: 'FEATURE_DISABLED', message: 'AI features are disabled.' });
 
     const targetCode = targetLanguageCode(targetLanguage ?? 'en');
     const targetLangName = TARGET_LANGUAGE_NAMES[targetCode];

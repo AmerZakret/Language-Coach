@@ -2,6 +2,7 @@ import { targetLanguageCode, TARGET_LANGUAGE_NAMES } from '../common/target-lang
 import { Injectable, Logger, HttpException, HttpStatus } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AssessPronunciationDto } from './dto/assess-pronunciation.dto';
+import { featureEnabled } from '../config/runtime-config';
 
 @Injectable()
 export class PronunciationService {
@@ -10,6 +11,9 @@ export class PronunciationService {
   constructor(private readonly configService: ConfigService) {}
 
   async assess(file: Express.Multer.File, dto: AssessPronunciationDto) {
+    if (!featureEnabled(this.configService, 'PRONUNCIATION_ENABLED')) {
+      throw new HttpException({ code: 'FEATURE_DISABLED', message: 'Pronunciation is disabled.' }, HttpStatus.SERVICE_UNAVAILABLE);
+    }
     if (!file) {
       throw new HttpException('Audio file is required', HttpStatus.BAD_REQUEST);
     }
@@ -167,8 +171,8 @@ export class PronunciationService {
       try_again: 'Keep practicing! Focus on each word slowly and try again.',
     };
 
-    if (!apiKey) {
-      this.logger.warn('GEMINI_API_KEY not configured, using fallback feedback.');
+    if (!featureEnabled(this.configService, 'AI_ENABLED') || !apiKey) {
+      this.logger.warn('AI feedback is disabled or not configured; using fallback feedback.');
       return fallbackMessages[result];
     }
 

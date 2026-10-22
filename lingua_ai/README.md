@@ -1,5 +1,9 @@
 # lingua_ai
 
+See [Production configuration](../PRODUCTION_CONFIGURATION.md) for mandatory
+release `API_URL`, Android signing, and platform permission requirements. Release
+startup rejects development endpoints; debug builds retain local convenience.
+
 A new Flutter project.
 
 ## Getting Started
