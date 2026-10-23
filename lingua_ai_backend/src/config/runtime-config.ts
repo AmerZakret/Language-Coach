@@ -18,6 +18,12 @@ export interface RuntimeConfig extends Record<string, unknown> {
   READINESS_RECHECK_MS: number;
   SHUTDOWN_GRACE_MS: number;
   TRUST_PROXY: string;
+  PROVIDER_CHAT_TIMEOUT_MS: number;
+  PROVIDER_WRITING_TIMEOUT_MS: number;
+  PROVIDER_FLASHCARD_TIMEOUT_MS: number;
+  PROVIDER_FEEDBACK_TIMEOUT_MS: number;
+  PROVIDER_PRONUNCIATION_TIMEOUT_MS: number;
+  PROVIDER_MAX_RETRIES: number;
 }
 
 // Never interpolate supplied values or parser errors: URIs may contain secrets.
@@ -90,8 +96,9 @@ export function corsOptions(config: Pick<ConfigService, 'get'>): CorsOptions {
       'Content-Type',
       'X-Idempotency-Key',
       'X-Resource-Revision',
+      'X-Request-ID',
     ],
-    exposedHeaders: ['Retry-After'],
+    exposedHeaders: ['Retry-After', 'X-Request-ID'],
     origin: (origin, done) => done(null, originAllowed(config, origin)),
   };
 }
@@ -314,6 +321,37 @@ export function validateEnvironment(
     CORS_ORIGINS: [...new Set(origins)].join(','),
     UPLOAD_ROOT: root,
     TRUST_PROXY: String(proxy),
+    PROVIDER_CHAT_TIMEOUT_MS: boundedMilliseconds(
+      'PROVIDER_CHAT_TIMEOUT_MS',
+      35000,
+      500,
+      60000,
+    ),
+    PROVIDER_WRITING_TIMEOUT_MS: boundedMilliseconds(
+      'PROVIDER_WRITING_TIMEOUT_MS',
+      30000,
+      500,
+      60000,
+    ),
+    PROVIDER_FLASHCARD_TIMEOUT_MS: boundedMilliseconds(
+      'PROVIDER_FLASHCARD_TIMEOUT_MS',
+      15000,
+      500,
+      60000,
+    ),
+    PROVIDER_FEEDBACK_TIMEOUT_MS: boundedMilliseconds(
+      'PROVIDER_FEEDBACK_TIMEOUT_MS',
+      8000,
+      500,
+      60000,
+    ),
+    PROVIDER_PRONUNCIATION_TIMEOUT_MS: boundedMilliseconds(
+      'PROVIDER_PRONUNCIATION_TIMEOUT_MS',
+      45000,
+      500,
+      90000,
+    ),
+    PROVIDER_MAX_RETRIES: boundedMilliseconds('PROVIDER_MAX_RETRIES', 0, 0, 1),
     READINESS_TIMEOUT_MS: boundedMilliseconds(
       'READINESS_TIMEOUT_MS',
       5000,

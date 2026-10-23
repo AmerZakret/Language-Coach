@@ -1,6 +1,5 @@
 import {
   Injectable,
-  Logger,
   OnApplicationBootstrap,
   OnModuleDestroy,
 } from '@nestjs/common';
@@ -8,6 +7,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectConnection } from '@nestjs/mongoose';
 import { Connection } from 'mongoose';
 import { CommunityImageStorage } from '../community/community-image.storage';
+import { telemetry } from './telemetry';
 import {
   pendingChecks,
   ReadinessChecks,
@@ -18,7 +18,26 @@ import {
 export class ReadinessService
   implements OnApplicationBootstrap, OnModuleDestroy
 {
-  private readonly logger = new Logger(ReadinessService.name);
+  private diagnosticState = 'not_ready';
+  private failureReason?: string;
+  private transition(state: string, reason: string) {
+    if (this.diagnosticState !== state) {
+      telemetry.emit('readiness.transition', {
+        from: this.diagnosticState,
+        to: state,
+        reason,
+      });
+      this.diagnosticState = state;
+    }
+    if (state === 'not_ready' && this.failureReason !== reason)
+      telemetry.emit(
+        'readiness.check_failed',
+        { failureCategory: reason },
+        'warn',
+      );
+    this.failureReason = state === 'not_ready' ? reason : undefined;
+  }
+  private lastDiagnostics = '';
   private checks = pendingChecks();
   private stopped = false;
   private generation = 0;
@@ -34,6 +53,7 @@ export class ReadinessService
     this.checkedAt = 0;
     this.checks = pendingChecks();
     this.controller?.abort();
+    if (!this.stopped) this.transition('not_ready', 'mongo_disconnected');
   };
   private readonly reconnect = () => {
     this.invalidate();
@@ -63,23 +83,42 @@ export class ReadinessService
   }
   snapshot(): { status: 'ready' | 'not_ready'; checks: ReadinessChecks } {
     const checks = { ...this.checks };
+    const expired =
+      !this.checkedAt ||
+      Date.now() - this.checkedAt > this.interval + this.timeout;
     if (this.connection.readyState !== 1)
       checks.database = checks.transactions = checks.indexes = 'failed';
-    if (
-      this.stopped ||
-      !this.checkedAt ||
-      Date.now() - this.checkedAt > this.interval + this.timeout
-    ) {
+    if (this.stopped || expired) {
       for (const key of Object.keys(checks) as Array<keyof ReadinessChecks>)
         if (checks[key] === 'ok') checks[key] = 'pending';
     }
-    return {
+    const result = {
       status:
         !this.stopped && Object.values(checks).every((value) => value === 'ok')
-          ? 'ready'
-          : 'not_ready',
+          ? ('ready' as const)
+          : ('not_ready' as const),
       checks,
     };
+    if (!this.stopped)
+      this.transition(
+        result.status,
+        result.status === 'ready'
+          ? 'checks_passed'
+          : this.connection.readyState !== 1
+            ? 'mongo_disconnected'
+            : expired
+              ? 'verification_expired'
+              : checks.database !== 'ok'
+                ? 'database_check_failed'
+                : checks.transactions !== 'ok'
+                  ? 'transaction_probe_failed'
+                  : checks.indexes !== 'ok'
+                    ? 'critical_index_unavailable'
+                    : checks.uploads !== 'ok'
+                      ? 'upload_storage_unavailable'
+                      : 'verification_expired',
+      );
+    return result;
   }
   refresh(): Promise<void> {
     if (this.stopped) return Promise.resolve();
@@ -98,7 +137,7 @@ export class ReadinessService
             uploads: 'failed',
           };
           this.checkedAt = Date.now();
-          this.logger.warn('READINESS_CHECK_TIMEOUT');
+          this.transition('not_ready', 'readiness_timeout');
         }
         resolve();
       }, this.timeout);
@@ -121,8 +160,22 @@ export class ReadinessService
         this.checks = result.checks;
         this.checkedAt = Date.now();
         if (result.realRoot) this.realRoot = result.realRoot;
-        if (result.diagnostics.length)
-          this.logger.warn(JSON.stringify(result.diagnostics));
+        this.snapshot();
+        const codes = [...new Set(result.diagnostics.map((item) => item.code))]
+          .sort()
+          .join(',');
+        if (codes && codes !== this.lastDiagnostics)
+          telemetry.emit('readiness.diagnostic', { code: codes }, 'warn');
+        if (
+          result.checks.uploads === 'failed' &&
+          codes !== this.lastDiagnostics
+        )
+          telemetry.emit(
+            'upload.storage_unavailable',
+            { failureCategory: 'upload_check_failed' },
+            'warn',
+          );
+        this.lastDiagnostics = codes;
       })
       .catch(() => {
         if (!this.stopped && generation === this.generation) {
@@ -133,6 +186,7 @@ export class ReadinessService
             uploads: 'failed',
           };
           this.checkedAt = Date.now();
+          this.transition('not_ready', 'probe_failed');
         }
       })
       .finally(() => {
@@ -158,6 +212,7 @@ export class ReadinessService
     if (this.stopped) return;
     this.stopped = true;
     this.invalidate();
+    this.transition('shutting_down', 'shutdown');
     clearInterval(this.timer);
     for (const event of ['disconnected', 'disconnecting', 'close', 'error'])
       this.connection.removeListener(event, this.invalidate);

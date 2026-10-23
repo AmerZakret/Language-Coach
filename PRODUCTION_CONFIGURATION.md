@@ -368,3 +368,132 @@ and Retry-After seconds, never bucket details. No broad request logging is added
 
 Focused tests: `npm test -- --runInBand security` use disposable replica-set MongoDB,
 signed JWT fixtures, temporary images and mocked providers only.
+
+## Phase 8D: structured diagnostics and bounded providers
+
+### Logging and correlation
+
+Production application/framework logs use JSON lines through the internal
+`operations/telemetry.ts` abstraction. Records have timestamp, level and stable
+event name, plus applicable request ID, method, route template, status, duration,
+owner category, dependency and safe failure category. Framework errors intentionally
+omit arbitrary exception arguments. No monitoring vendor or public metrics route
+is introduced. Existing development-only schema/seeding policy is unchanged.
+
+Every request reaching the application middleware gets X-Request-ID in its response,
+including CORS/rate-limit/parser/readiness failures. A supplied ID is accepted only
+if it is 1-64 ASCII letters/digits/underscore/dot/colon/hyphen, starts alphanumeric,
+and passes secret redaction unchanged. Otherwise a server UUID is generated. This
+is a correlator, not authentication, a uniqueness guarantee, or a mutation key.
+CORS permits/exposes the header. Async request context makes it available to
+services and events. Only the internal pronunciation HTTP request forwards it;
+Gemini receives neither owner identity nor application correlation headers.
+
+Completion emits once on finish/disconnect; aborted responses use status 499.
+Route templates replace parameters; unmatched URLs and query strings are omitted.
+Public images use a fixed upload-route label. Successful auth requests are still
+anonymous at the pre-auth boundary; authenticated activities distinguish registered
+and backend_guest profiles. Owner and operation values use salted HMAC fingerprints,
+stable within a process, with no email/raw ID/raw IP/raw key in emitted records.
+Fingerprints intentionally change across restarts/replicas. Request IDs provide
+cross-service correlation when supplied; they never change receipt ownership.
+
+Health completion lines are suppressed while counters still advance. Readiness
+state-transition events occur only on actual state changes. Classified failure
+diagnostics are repeated only when their category set changes. No provider calls
+or new database/storage operations are added to health endpoints.
+
+The logger excludes request bodies, queries, prompts, audio/image bytes and full
+provider responses. Central redaction covers known secret environment/config
+values, Mongo URIs, bearer/JWT values, API keys and password/cookie/token labels.
+Fields are allowlisted scalars: no automatic object/error dumps. Strings are
+redacted before truncation (normally 160 characters; framework messages 512,
+stack summaries 800), and control characters cannot inject log lines. Unexpected
+errors strip the complete exception message before extracting at most six function,
+source basename and line/column frames. Unrecognized stack formats fall back to
+the handling site. Raw exception messages/stacks and filesystem paths are excluded;
+remaining fields still pass central redaction. Operators must still protect logs.
+
+### Stable operational categories and counters
+
+| Events | Meaning |
+|---|---|
+| `application.configured`, `application.started`, `application.startup_failed` | Safe startup summary and startup outcome |
+| `http.completed`, `http.failed`, `http.rejected`, `input.rejected` | Completion, safe failure/rejection, input type/size bucket |
+| `readiness.transition`, `readiness.check_failed`, `readiness.diagnostic` | Actual state change and classified DB/transaction/index/storage diagnostics |
+| `provider.started`, `provider.completed`, `provider.failed`, `provider.retry` | Attempt, duration, dependency, deadline, input bucket/output cap and classified result |
+| `provider.configuration`, `provider.disabled`, `provider.invalid_response`, `provider.fallback` | Configuration/feature gating and supplementary fallback |
+| `rate_limit.rejected`, `concurrency.rejected` | Fixed policy name and owner/IP/process scope; no bucket identities |
+| `receipt.created`, `receipt.replay`, `receipt.conflict`, `reset.recovered` | Committed creation, replay, payload conflict and lost-ack recovery; no stored result |
+| `transaction.retry`, `transaction.failed` | Existing driver callback retry and final DB failure; no added transaction retries |
+| `progress.epoch_conflict` | Safe stale/future/missing epoch code |
+| `upload.cleanup_failed`, `upload.storage_unavailable` | Cleanup/reference-check failure or local readiness failure; no filename/path |
+| `shutdown.requested`, `shutdown.drain_started`, `shutdown.drain_completed`, `shutdown.drain_timeout`, `shutdown.watchdog` | Coalesced shutdown and bounded drain/watchdog outcome |
+
+Creation events follow transaction completion, not the uncommitted receipt claim.
+The transaction observer retains MongoDB's existing retry semantics and never
+logs documents. A losing uniqueness race can emit a classified transaction failure
+followed by receipt replay. Read-only reset recovery never re-executes the reset.
+Cleanup events preserve best-effort behavior; selected fixed filesystem errno codes
+are safe diagnostics. Shutdown performs no new file or domain cleanup.
+
+Internal bounded counters count event categories, HTTP outcomes and provider
+timeouts. There are no owner/IP/operation labels, no durable/billing claim, and no
+public endpoint. Counts reset on process restart and are local to each replica.
+Central collection, retention, alerting and service-wide metrics remain deployment
+work. Tests suppress the default sink and capture structured events explicitly.
+
+### Provider deadlines and retries
+
+All five outbound paths use one transport helper. The total monotonic deadline
+includes connection, response parsing, optional backoff and all attempts; it is not
+reset per retry. Native fetch receives AbortSignal. Client disconnect also aborts
+active provider work where supported. Timers/listeners are removed on settlement;
+8C permits release on success/failure/timeout, including hung response bodies.
+Late promises cannot persist a result after deadline failure. Cancellation cannot
+prove that a remote inference stopped or was not billed.
+Native JSON response streams are also capped at 256 KiB before parsing; oversized
+or malformed responses are rejected/cancelled without reflecting their contents.
+
+| Path | Environment variable | Default | Allowed range | Output-token cap |
+|---|---|---:|---:|---:|
+| Chat | `PROVIDER_CHAT_TIMEOUT_MS` | 35,000 ms | 500-60,000 | 2,048 |
+| Writing | `PROVIDER_WRITING_TIMEOUT_MS` | 30,000 ms | 500-60,000 | 4,096 |
+| Flashcard context | `PROVIDER_FLASHCARD_TIMEOUT_MS` | 15,000 ms | 500-60,000 | 1,024 |
+| Pronunciation feedback | `PROVIDER_FEEDBACK_TIMEOUT_MS` | 8,000 ms | 500-60,000 | 256 |
+| Pronunciation HTTP | `PROVIDER_PRONUNCIATION_TIMEOUT_MS` | 45,000 ms | 500-90,000 | Existing 10 MiB audio / bounded text |
+
+`PROVIDER_MAX_RETRIES` is 0 by default; only 0 or 1 is accepted. No automatic
+retry by default avoids extra paid work after uncertain acknowledgements. If an
+operator enables one retry, only transport failures and HTTP 429/500/502/503/504
+qualify. Timeouts, client cancellation, local 8C limits, configuration/permanent
+HTTP rejection and invalid JSON/schema never automatically retry. There is no
+second service-layer retry loop. Every actual attempt consumes 8C provider budget.
+
+Backoff is 200-300 ms jitter unless usable Retry-After overrides it. A retry only
+waits up to 1 second and only when time remains in the original deadline. Longer
+hints immediately return a retryable failure; hints up to 60 seconds may be exposed
+as Retry-After, while longer hints are omitted rather than shortened. No request
+sleeps for unbounded provider instructions. Retrying a generation after a failed
+transaction may incur provider cost but cannot create duplicate durable pairs.
+
+| Public code | Meaning / policy |
+|---|---|
+| `PROVIDER_TIMEOUT` | Retryable 503, no durable successful pair/result |
+| `PROVIDER_UNAVAILABLE` | Retryable transport/outage 503; writing retains its upstream-failure 502 compatibility |
+| `PROVIDER_RATE_LIMITED` | Retryable 503; never confuse upstream quota with local 429 or client authentication |
+| `PROVIDER_CONFIGURATION` | 503, non-retryable until operator configuration is corrected |
+| `PROVIDER_REJECTED` | 502, permanent upstream rejection; no automatic retry |
+| `PROVIDER_INVALID_RESPONSE` | 502, malformed response/schema; no automatic retry |
+
+New provider codes expose a safe retryable boolean; the existing unavailable
+contract remains compatible. 401 behavior is unchanged. No raw error body is read
+or reflected. Supplementary flashcard context/feedback retain their existing
+deterministic fallbacks; core chat/writing/transcription failures remain explicit.
+Completed durable replay bypasses providers entirely, even after budgets expire
+or history/resources change. Provider cancellation never cancels a committed DB
+effect. Disconnect after generation may still leave a committed receipt to recover.
+
+8B's process shutdown deadline remains authoritative if an in-flight call exceeds
+the drain window. Python authentication, inference concurrency/audio validation,
+distributed rate storage, backups and actual credential rotation are not added.

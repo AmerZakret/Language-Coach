@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { createHmac, randomBytes } from 'node:crypto';
 import type { Rule } from './abuse-policy';
+import { telemetry } from '../operations/telemetry';
 
 export class RateLimitError extends HttpException {
   constructor(readonly retryAfter: number) {
@@ -49,10 +50,23 @@ export class AbuseControls implements OnModuleDestroy {
     // unrelated buckets. Active buckets are never evicted to make room for abuse.
     for (const item of entries) {
       const bucket = this.buckets.get(item.key);
-      if (bucket && bucket.end > now && bucket.count >= item.limit)
+      if (bucket && bucket.end > now && bucket.count >= item.limit) {
+        telemetry.emit(
+          'rate_limit.rejected',
+          {
+            policy: item.name,
+            scope: item.name.includes('ip')
+              ? 'ip'
+              : item.name.includes('owner')
+                ? 'owner'
+                : 'process',
+          },
+          'warn',
+        );
         throw new RateLimitError(
           Math.max(1, Math.ceil((bucket.end - now) / 1000)),
         );
+      }
     }
     if (
       this.buckets.size +
@@ -84,8 +98,24 @@ export class AbuseControls implements OnModuleDestroy {
       ...item,
       key: this.key(item.name, item.identity),
     }));
-    if (entries.some((item) => (this.permits.get(item.key) || 0) >= item.max))
+    if (entries.some((item) => (this.permits.get(item.key) || 0) >= item.max)) {
+      const denied = entries.find(
+        (item) => (this.permits.get(item.key) || 0) >= item.max,
+      )!;
+      telemetry.emit(
+        'concurrency.rejected',
+        {
+          policy: denied.name,
+          scope: denied.name.includes('owner')
+            ? 'owner'
+            : denied.name.includes('ip')
+              ? 'ip'
+              : 'process',
+        },
+        'warn',
+      );
       throw new RateLimitError(1);
+    }
     for (const item of entries)
       this.permits.set(item.key, (this.permits.get(item.key) || 0) + 1);
     let released = false;

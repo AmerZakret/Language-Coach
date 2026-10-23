@@ -1,8 +1,9 @@
-import { BadRequestException, Injectable, Logger, PayloadTooLargeException, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, Injectable, PayloadTooLargeException, ServiceUnavailableException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { open, mkdir, realpath, lstat, unlink, readFile } from 'node:fs/promises';
 import { extname, join, resolve, relative, isAbsolute, dirname, basename, sep } from 'node:path';
 import sharp from 'sharp';
+import { telemetry } from '../operations/telemetry';
 
 export const COMMUNITY_IMAGE_LIMIT = 5 * 1024 * 1024;
 export const COMMUNITY_PIXEL_LIMIT = 16_000_000;
@@ -30,7 +31,6 @@ function detectedFormat(buffer: Buffer): RasterFormat | undefined {
 @Injectable()
 export class CommunityImageStorage {
   readonly root = resolveUploadRoot();
-  private readonly logger = new Logger(CommunityImageStorage.name);
   private readonly verified = new Map<string, string>();
 
   async normalize(file: Express.Multer.File): Promise<{ buffer: Buffer; extension: string }> {
@@ -129,7 +129,9 @@ export class CommunityImageStorage {
     catch (error) {
       // Cleanup is best effort. Preserve the original application error or the
       // successful DB result; do not log arbitrary stored paths or file bytes.
-      this.logger.error(`Community image cleanup failed (${operation}): ${(error as NodeJS.ErrnoException).code || 'unsafe_path'}`);
+      const code = (error as NodeJS.ErrnoException).code;
+      telemetry.emit('upload.cleanup_failed', { domain: operation, failureCategory: 'filesystem_or_containment',
+        code: code && ['EACCES', 'EPERM', 'ENOSPC', 'EROFS', 'ENOENT', 'EIO', 'EXDEV'].includes(code) ? code : 'UNCLASSIFIED' }, 'warn');
     }
   }
 }

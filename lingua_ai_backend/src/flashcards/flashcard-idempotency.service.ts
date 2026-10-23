@@ -1,3 +1,5 @@
+import { observedTransaction } from '../operations/observed-transaction';
+import { receiptEvent } from '../operations/telemetry';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, OnModuleInit } from '@nestjs/common';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import { createHash } from 'node:crypto';
@@ -36,8 +38,10 @@ export class FlashcardIdempotencyService implements OnModuleInit {
     const identity = { userId, operationId, operationType };
     const replay = async (receipt: FlashcardOperation) => {
       if (receipt.requestHash !== requestHash) {
+        receiptEvent('receipt.conflict', operationType, userId, operationId);
         throw new ConflictException('Idempotency key was used for a different request');
       }
+      receiptEvent('receipt.replay', operationType, userId, operationId);
       const card = await this.cards.findById(receipt.resourceId).exec();
       if (card && card.userId.toString() !== userId) {
         throw new ForbiddenException('Access denied: Flashcard owner changed');
@@ -56,7 +60,7 @@ export class FlashcardIdempotencyService implements OnModuleInit {
 
     const session = await this.connection.startSession();
     try {
-      return await session.withTransaction(async () => {
+      return await observedTransaction(session, 'flashcard', async () => {
         const receipt = await this.operations.findOne(identity).session(session).exec();
         if (receipt) {
           // Resolve the result after committing this read-only transaction.
@@ -75,7 +79,11 @@ export class FlashcardIdempotencyService implements OnModuleInit {
         }
         return { result };
       }, { readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' } })
-        .then(outcome => outcome!.receipt ? replay(outcome!.receipt) : outcome!.result);
+        .then(outcome => {
+          if (outcome!.receipt) return replay(outcome!.receipt);
+          receiptEvent('receipt.created', operationType, userId, operationId);
+          return outcome!.result;
+        });
     } catch (error) {
       // Concurrent requests can race on the unique receipt index. The loser's
       // entire mutation rolls back; only the committed winner may be replayed.

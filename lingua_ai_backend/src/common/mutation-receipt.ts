@@ -1,3 +1,5 @@
+import { observedTransaction } from '../operations/observed-transaction';
+import { receiptEvent } from '../operations/telemetry';
 import { BadRequestException, ConflictException, Injectable, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
 import { InjectConnection, InjectModel, MongooseModule, Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Module } from '@nestjs/common';
@@ -40,14 +42,20 @@ export class MutationReceipts implements OnModuleInit {
       Object.fromEntries(Object.entries(input).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)))).digest('hex');
     const identity = { userId, operationType, operationId };
     const replay = (receipt: MutationReceipt) => {
-      if (receipt.requestHash !== requestHash) throw new ConflictException({ code: 'IDEMPOTENCY_CONFLICT', message: 'Operation key payload changed' });
+      if (receipt.requestHash !== requestHash) {
+        receiptEvent('receipt.conflict', operationType, userId, operationId);
+        throw new ConflictException({ code: 'IDEMPOTENCY_CONFLICT', message: 'Operation key payload changed' });
+      }
+      receiptEvent('receipt.replay', operationType, userId, operationId);
       return receipt.result;
     };
     const completed = await this.receipts.findOne(identity).exec();
     if (completed) return replay(completed);
     const session = await this.connection.startSession();
+    let created = false;
     try {
-      return await session.withTransaction(async () => {
+      const outcome = await observedTransaction(session, 'community_ai', async () => {
+        created = false;
         const existing = await this.receipts.findOne(identity).session(session).exec();
         if (existing) return replay(existing);
         const [claim] = await this.receipts.create([{ ...identity, requestHash }], { session });
@@ -55,8 +63,11 @@ export class MutationReceipts implements OnModuleInit {
         // Store a detached JSON result, including IDs/dates, as durable replay evidence.
         const durableResult = JSON.parse(JSON.stringify(result));
         await this.receipts.updateOne({ _id: claim._id }, { $set: { result: durableResult } }, { session }).exec();
+        created = true;
         return durableResult;
       }, { readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' } });
+      if (created) receiptEvent('receipt.created', operationType, userId, operationId);
+      return outcome;
     } catch (error) {
       if (error?.code === 11000) {
         const winner = await this.receipts.findOne(identity).exec();

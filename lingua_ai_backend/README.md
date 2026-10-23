@@ -101,6 +101,11 @@ and [output options](https://sharp.pixelplumbing.com/api-output/).
 
 ## Durable sync receipt retention
 
+Phase 8D provides JSON operational events, X-Request-ID correlation, safe log
+redaction and bounded provider transport. See the
+[production diagnostics contract](../PRODUCTION_CONFIGURATION.md#phase-8d-structured-diagnostics-and-bounded-providers)
+for deadlines, explicit retry policy, counters and lifecycle event names.
+
 Production abuse limits, trusted proxy policy, CORS enforcement, headers, error
 redaction and input limits are documented in
 [PRODUCTION_CONFIGURATION.md](../PRODUCTION_CONFIGURATION.md#phase-8c-http-abuse-and-browser-boundary).

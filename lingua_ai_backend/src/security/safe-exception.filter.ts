@@ -3,10 +3,12 @@ import {
   Catch,
   ExceptionFilter,
   HttpException,
-  Logger,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { RateLimitError } from './abuse-controls';
+import { telemetry } from '../operations/telemetry';
+import { ProviderFailure } from '../operations/provider-client';
+import { normalizedRoute } from '../operations/request-diagnostics';
 
 // Only fixed messages/statuses are reflected, even if an exception carries a
 // familiar code alongside an unsafe provider body or internal error object.
@@ -24,6 +26,14 @@ const known: Record<string, [number, string]> = {
   RESET_IDEMPOTENCY_CONFLICT: [409, 'Reset operation payload changed.'],
   RESET_NOT_COMMITTED: [404, 'No committed reset receipt found.'],
   PROVIDER_UNAVAILABLE: [503, 'Provider is temporarily unavailable.'],
+  PROVIDER_TIMEOUT: [503, 'Provider deadline exceeded. Please retry.'],
+  PROVIDER_RATE_LIMITED: [503, 'Provider is temporarily rate limited.'],
+  PROVIDER_CONFIGURATION: [
+    503,
+    'Provider configuration requires operator attention.',
+  ],
+  PROVIDER_INVALID_RESPONSE: [502, 'Provider returned an invalid response.'],
+  PROVIDER_REJECTED: [502, 'Provider could not accept this operation.'],
   RETRYABLE_SERVER_FAILURE: [
     503,
     'Operation could not be acknowledged. Retry the same operation.',
@@ -58,7 +68,6 @@ const standard: Record<number, [string, string]> = {
 };
 @Catch()
 export class SafeExceptionFilter implements ExceptionFilter {
-  private readonly logger = new Logger(SafeExceptionFilter.name);
   catch(error: any, host: ArgumentsHost) {
     const response = host.switchToHttp().getResponse<Response>();
     if (response.headersSent || response.destroyed) return;
@@ -85,19 +94,57 @@ export class SafeExceptionFilter implements ExceptionFilter {
         ? body.code
         : '';
     const safe = Object.hasOwn(known, code) ? known[code] : undefined;
+    const request = host.switchToHttp().getRequest();
+    const diagnostic = telemetry.context.getStore();
+    if (diagnostic) diagnostic.route = normalizedRoute(request);
+    if (status === 413 || code === 'VALIDATION_FAILED')
+      telemetry.emit(
+        'input.rejected',
+        {
+          inputType: diagnostic?.inputType,
+          inputBucket: diagnostic?.inputBucket,
+          failureCategory: status === 413 ? 'oversized' : 'validation',
+        },
+        'warn',
+      );
+    else if (safe && code.includes('EPOCH'))
+      telemetry.emit('progress.epoch_conflict', { code }, 'warn');
+    else if (status >= 500 && !(error instanceof ProviderFailure))
+      telemetry.error(
+        'http.failed',
+        {
+          statusCode: status,
+          failureCategory:
+            error instanceof HttpException
+              ? 'application_failure'
+              : 'unexpected_failure',
+        },
+        error,
+      );
+    else if (status >= 400)
+      telemetry.emit(
+        'http.rejected',
+        { statusCode: status, code: safe ? code : undefined },
+        'warn',
+      );
+    if (error instanceof ProviderFailure && error.retryAfter)
+      response.setHeader('Retry-After', String(error.retryAfter));
     if (safe && safe[0] === status) {
       response.status(status).setHeader('Cache-Control', 'no-store');
-      response.json({ statusCode: status, code, message: safe[1] });
+      response.json({
+        statusCode: status,
+        code,
+        message: safe[1],
+        ...(error instanceof ProviderFailure && code !== 'PROVIDER_UNAVAILABLE'
+          ? { retryable: error.retryable }
+          : {}),
+      });
       return;
     }
     if (error instanceof RateLimitError)
       response.setHeader('Retry-After', String(error.retryAfter));
     if (!Object.hasOwn(standard, status))
       status = status >= 400 && status < 500 ? 400 : 500;
-    if (status >= 500)
-      this.logger.error(
-        `HTTP_FAILURE status=${status} category=${error instanceof HttpException ? 'application' : 'unhandled'}`,
-      );
     const [publicCode, message] = standard[status];
     response.setHeader('Cache-Control', 'no-store');
     response

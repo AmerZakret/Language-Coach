@@ -11,6 +11,8 @@ import { Observable, finalize } from 'rxjs';
 import { isIP } from 'node:net';
 import { AbuseControls } from './abuse-controls';
 import { ProviderBudget } from './provider-budget';
+import { telemetry } from '../operations/telemetry';
+import { normalizedRoute } from '../operations/request-diagnostics';
 import {
   ABUSE_POLICY,
   RoutePolicy,
@@ -37,6 +39,8 @@ export class RequestPolicyGuard implements CanActivate {
       context.getClass(),
     ]);
     const request = context.switchToHttp().getRequest();
+    const diagnostic = telemetry.context.getStore();
+    if (diagnostic) diagnostic.route = normalizedRoute(request);
     const ip = resolvedIp(request);
     if (policy === 'login')
       this.controls.consume([
@@ -80,6 +84,13 @@ export class OwnerPolicyInterceptor implements NestInterceptor {
       context.getHandler(),
       context.getClass(),
     ]);
+    const diagnostic = telemetry.context.getStore();
+    if (diagnostic) {
+      diagnostic.ownerType =
+        user.isGuest === true ? 'backend_guest' : 'registered';
+      diagnostic.ownerFingerprint = telemetry.fingerprint('owner', owner);
+      diagnostic.route = normalizedRoute(request);
+    }
     const rules = [rule('general-owner', owner, 180)];
     if (policy === 'community-write') {
       rules.push(

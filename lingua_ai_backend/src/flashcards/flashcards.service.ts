@@ -8,6 +8,7 @@ import { User } from '../users/schemas/user.schema';
 import { SrsCalculatorService } from './services/srs-calculator.service';
 import { AiContextService } from './services/ai-context.service';
 import { developmentSchemaChangesAllowed } from '../operations/schema-startup';
+import { telemetry } from '../operations/telemetry';
 
 @Injectable()
 export class FlashcardsService implements OnModuleInit {
@@ -29,7 +30,7 @@ export class FlashcardsService implements OnModuleInit {
     try {
       // Drop the old index if it exists to avoid conflicts when creating the new index
       await this.flashcardModel.collection.dropIndex('userId_1_targetWord_1');
-      console.log('Successfully dropped old flashcard unique index.');
+      telemetry.emit('index.legacy_removed', { domain: 'flashcard' });
     } catch (e) {
       if (e?.code !== 26 && e?.code !== 27) throw new Error('Development schema initialization failed for flashcards');
     }

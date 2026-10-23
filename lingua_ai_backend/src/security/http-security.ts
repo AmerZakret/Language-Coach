@@ -13,6 +13,8 @@ import {
 import { AbuseControls, RateLimitError } from './abuse-controls';
 import { isHealth, rule } from './abuse-policy';
 import { resolvedIp } from './security-pipeline';
+import { telemetry } from '../operations/telemetry';
+import { requestDiagnostics } from '../operations/request-diagnostics';
 
 @Injectable()
 export class HttpSecurity {
@@ -21,6 +23,8 @@ export class HttpSecurity {
     private readonly controls: AbuseControls,
   ) {}
   install(app: NestExpressApplication) {
+    telemetry.configure(this.config);
+    app.use(requestDiagnostics);
     const express = app.getHttpAdapter().getInstance();
     express.disable('x-powered-by');
     express.set(

@@ -17,6 +17,7 @@ import { SecurityModule } from './security.module';
 import { HttpSecurity } from './http-security';
 import { FlashcardsModule } from '../flashcards/flashcards.module';
 import { Flashcard } from '../flashcards/schemas/flashcard.schema';
+import { telemetry } from '../operations/telemetry';
 
 describe('8C provider budget with 7E durable transactions (disposable replica set)', () => {
   jest.setTimeout(120000);
@@ -105,6 +106,7 @@ describe('8C provider budget with 7E durable transactions (disposable replica se
     await replica?.stop();
   });
   test('a committed replay remains available after provider exhaustion without extra inference/pairs', async () => {
+    const events = jest.spyOn(telemetry, 'emit');
     const a = await token('guest-a', true),
       b = await token('guest-b', true);
     const key = randomUUID();
@@ -122,6 +124,7 @@ describe('8C provider budget with 7E durable transactions (disposable replica se
       );
     expect(provider).toHaveBeenCalledTimes(5);
     expect(await messages.countDocuments()).toBe(10);
+    for (const event of ['receipt.created', 'receipt.replay', 'receipt.conflict']) expect(events.mock.calls.some(([name]) => name === event)).toBe(true);
     await call(b, key).expect(201);
     expect(provider).toHaveBeenCalledTimes(6);
     expect(await messages.countDocuments()).toBe(12);

@@ -12,6 +12,7 @@ import type { Request, Response, NextFunction } from 'express';
 import type { Server } from 'node:http';
 import { finalize } from 'rxjs';
 import { ReadinessService } from './readiness.service';
+import { telemetry } from './telemetry';
 
 type ActiveRequest = {
   responseDone: boolean;
@@ -114,12 +115,14 @@ export class TrafficLifecycle implements NestInterceptor, OnModuleDestroy {
   }
   beginShutdown(): Promise<void> {
     if (this.drain) return this.drain;
+    telemetry.emit('shutdown.requested');
     this.stopping = true;
     this.readiness.stop();
+    telemetry.emit('shutdown.drain_started', { activeRequests: this.active.size });
     // Keep health visible while rejecting new work, then let Nest close HTTP.
     this.server?.closeIdleConnections();
     if (this.hardExit) {
-      this.hardDeadline = setTimeout(this.hardExit, this.grace);
+      this.hardDeadline = setTimeout(() => { telemetry.error('shutdown.watchdog', { activeRequests: this.active.size }); this.hardExit?.(); }, this.grace);
       this.hardDeadline.unref();
     }
     this.drain = new Promise<void>((resolve) => {
@@ -128,11 +131,13 @@ export class TrafficLifecycle implements NestInterceptor, OnModuleDestroy {
         if (finished) return;
         finished = true;
         clearTimeout(deadline);
+        telemetry.emit('shutdown.drain_completed', { activeRequests: this.active.size });
         resolve();
       };
       // Reserve part of the total window for Nest HTTP/Mongoose disposal.
       const deadline = setTimeout(
         () => {
+          telemetry.emit('shutdown.drain_timeout', { activeRequests: this.active.size }, 'warn');
           this.server?.closeAllConnections();
           done();
         },

@@ -35,6 +35,7 @@ import { ProgressResetSchema } from '../progress/schemas/progress-reset.schema';
 import { MutationReceiptSchema } from '../common/mutation-receipt';
 import { ChatBarrierSchema } from '../ai-coach/schemas/chat-barrier.schema';
 import { validateEnvironment } from '../config/runtime-config';
+import { telemetry } from './telemetry';
 
 async function provisionTestIndexes(connection: Connection) {
   for (const index of CRITICAL_INDEXES)
@@ -109,8 +110,8 @@ describe('8B readiness with disposable MongoDB and temporary storage only', () =
     await provisionTestIndexes(connection);
     service = makeService();
     logs.length = 0;
-    jest.spyOn(Logger.prototype, 'warn').mockImplementation((message) => {
-      logs.push(String(message));
+    jest.spyOn(telemetry, 'emit').mockImplementation((event, fields) => {
+      logs.push(JSON.stringify({ event, ...fields }));
     });
   });
   afterEach(async () => {

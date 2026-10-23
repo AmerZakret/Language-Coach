@@ -1,15 +1,15 @@
+import { providerJson, ProviderFailure } from '../operations/provider-client';
+import { telemetry } from '../operations/telemetry';
 import { targetLanguageCode, TARGET_LANGUAGE_NAMES } from '../common/target-language';
-import { Injectable, Logger, HttpException, HttpStatus, Optional } from '@nestjs/common';
+import { Injectable, HttpException, HttpStatus, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AssessPronunciationDto } from './dto/assess-pronunciation.dto';
 import { featureEnabled } from '../config/runtime-config';
-import { ProviderBudget, withProviderBudget } from '../security/provider-budget';
+import { ProviderBudget } from '../security/provider-budget';
 import { OUTPUT_TOKENS } from '../security/abuse-policy';
 
 @Injectable()
 export class PronunciationService {
-  private readonly logger = new Logger(PronunciationService.name);
-
   constructor(private readonly configService: ConfigService, @Optional() private readonly budget?: ProviderBudget) {}
 
   async assess(file: Express.Multer.File, dto: AssessPronunciationDto) {
@@ -37,44 +37,29 @@ export class PronunciationService {
     let detectedLanguage: string = targetCode;
     let languageProbability = 1.0;
 
-    await withProviderBudget(this.budget, 'pronunciation', async () => {
-      try {
-        const whisperLanguage = targetCode;
+    try {
+      const whisperLanguage = targetCode;
 
-        const formData = new FormData();
-        // Create a Blob from the file buffer to upload via native fetch
-        const fileBlob = new Blob([file.buffer as any], { type: file.mimetype });
-        formData.append('audio', fileBlob, file.originalname || 'audio.wav');
-        formData.append('language', whisperLanguage);
+      const formData = new FormData();
+      // Create a Blob from the file buffer to upload via native fetch
+      const fileBlob = new Blob([file.buffer as any], { type: file.mimetype });
+      formData.append('audio', fileBlob, file.originalname || 'audio.wav');
+      formData.append('language', whisperLanguage);
 
-        const response = await fetch(`${whisperUrl}/transcribe`, {
-          method: 'POST',
-          body: formData,
-        });
+      const data = await providerJson(this.configService, this.budget, 'pronunciation',`${whisperUrl}/transcribe`, {
+        method: 'POST',
+        body: formData,
+      });
 
-        if (!response.ok) {
-          this.logger.warn(`Pronunciation provider returned HTTP ${response.status}`);
-          throw new Error('Pronunciation provider unavailable');
-        }
-
-        const data = (await response.json()) as {
-          recognizedText: string;
-          detectedLanguage: string;
-          languageProbability: number;
-        };
-
-        if (typeof data.recognizedText !== 'string' || data.recognizedText.length > 4000) throw new Error('Invalid transcription response');
-        recognizedText = data.recognizedText;
-        detectedLanguage = data.detectedLanguage || targetCode;
-        languageProbability = data.languageProbability ?? 1.0;
-      } catch {
-        this.logger.warn('Pronunciation provider unavailable');
-        throw new HttpException(
-          { code: 'PROVIDER_UNAVAILABLE', message: 'Pronunciation is temporarily unavailable.' },
-          HttpStatus.SERVICE_UNAVAILABLE,
-        );
-      }
-    });
+      if (typeof data.recognizedText !== 'string' || data.recognizedText.length > 4000) throw new Error('Invalid transcription response');
+      recognizedText = data.recognizedText;
+      detectedLanguage = data.detectedLanguage || targetCode;
+      languageProbability = data.languageProbability ?? 1.0;
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      telemetry.emit('provider.invalid_response', { dependency: 'pronunciation' }, 'warn');
+      throw new ProviderFailure('PROVIDER_INVALID_RESPONSE', false);
+    }
 
     // 2. Normalize and compute similarity
     const score = this.calculateSimilarity(dto.targetText, recognizedText);
@@ -176,7 +161,7 @@ export class PronunciationService {
     };
 
     if (!featureEnabled(this.configService, 'AI_ENABLED') || !apiKey) {
-      this.logger.warn('AI feedback is disabled or not configured; using fallback feedback.');
+      telemetry.emit('provider.disabled', { dependency: 'feedback' });
       return fallbackMessages[result];
     }
 
@@ -192,32 +177,26 @@ export class PronunciationService {
     - Do not claim phoneme-level accuracy.
     - Keep it under 2 short sentences.`;
 
-    return withProviderBudget(this.budget, 'feedback', async () => {
-      try {
-        const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              contents: [{ parts: [{ text: prompt }] }],
-              generationConfig: { maxOutputTokens: OUTPUT_TOKENS.feedback },
-            }),
-          },
-        );
+    try {
+      const data = await providerJson(this.configService, this.budget, 'feedback',
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { maxOutputTokens: OUTPUT_TOKENS.feedback },
+          }),
+        },
+      );
+      const aiResponse = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
 
-        if (!response.ok) {
-          throw new Error(`Gemini status code: ${response.status}`);
-        }
-
-        const data = await response.json();
-        const aiResponse = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-
-        return aiResponse || fallbackMessages[result];
-      } catch {
-        this.logger.warn('Pronunciation feedback provider unavailable; using fallback feedback');
-        return fallbackMessages[result];
-      }
-    }).catch(() => fallbackMessages[result]); // Optional feedback never discards successful transcription.
+      if (!aiResponse) throw new ProviderFailure('PROVIDER_INVALID_RESPONSE', false);
+      return aiResponse;
+    } catch (error) {
+      telemetry.emit('provider.fallback', { dependency: 'feedback', code: error instanceof ProviderFailure ? error.code
+        : error instanceof HttpException ? (error.getStatus() === 429 ? 'RATE_LIMITED' : 'LOCAL_PROVIDER_CONTROL') : 'PROVIDER_INVALID_RESPONSE' }, 'warn');
+      return fallbackMessages[result];
+    }
   }
 }
