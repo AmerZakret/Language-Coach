@@ -495,5 +495,69 @@ or history/resources change. Provider cancellation never cancels a committed DB
 effect. Disconnect after generation may still leave a committed receipt to recover.
 
 8B's process shutdown deadline remains authoritative if an in-flight call exceeds
-the drain window. Python authentication, inference concurrency/audio validation,
-distributed rate storage, backups and actual credential rotation are not added.
+the drain window. Distributed rate storage, backups and actual credential rotation
+remain operator/later-phase work. Python service controls are defined in 8E below.
+
+## Phase 8E: internal pronunciation production boundary
+
+The [service production guide](lingua_ai_pronunciation_service/README.md) is the
+authoritative configuration, runtime and test contract. Set the same dedicated
+random `PRONUNCIATION_SERVICE_TOKEN` in Nest and Python (never JWT_SECRET). Nest
+production validation requires it when pronunciation is enabled; Python requires
+it unless explicitly running insecure loopback-only development mode. No secret
+is included in client bundles, startup summaries or telemetry. Nest registers the
+token for centralized log redaction and sends X-Service-Token only to /transcribe.
+Redirect following is disabled for this call. Constant-time service verification
+occurs before multipart parsing/capacity admission. Health remains unauthenticated
+with minimal process/model state only.
+
+Deploy the token-enabled backend first, then the authenticated internal service
+with matching credentials and pre-provisioned model artifacts. Existing old
+backends cannot call the authenticated service without updating credentials/code;
+do not roll the service out first. Flutter/web keep their current backend JWT flow
+and response shape. No client service credential or direct browser CORS is added.
+Network policy must keep the service private; use TLS if crossing an untrusted
+network. A token does not encrypt plaintext HTTP.
+
+Defaults: <=10 MiB audio, <=30 seconds actually decoded, mono/stereo 8-48 kHz,
+one active request/inference worker per process. Supported real codecs/containers
+cover existing AAC/M4A and WebM/Opus recordings, plus bounded PCM WAV, Ogg and MP3.
+Byte-detected format plus decode is authoritative; filenames never select a parser
+or filesystem path. Invalid declared audio MIME is rejected; generic Flutter MIME
+still requires successful validation. Normalization is bounded mono float32 at
+16 kHz. PyAV uses no shell and disallows external media references. Raw audio,
+transcription, filenames, decoder errors and model paths are omitted from events.
+
+Upload/decode/inference share a 35-second service deadline, configured maximum 40;
+keep the backend HTTP deadline greater (45-second default). Service busy429 maps
+to PROVIDER_RATE_LIMITED503, service timeout504 to PROVIDER_TIMEOUT503 (never
+automatically retried), auth401/403 to non-retryable PROVIDER_CONFIGURATION503,
+and model unavailable503 to PROVIDER_UNAVAILABLE503. These do not become an
+end-user session 401. Invalid-audio downstream 4xx retains the generic permanent
+PROVIDER_REJECTED502 boundary; no raw downstream body is read. 8D bounded
+transport retry is unchanged for other retryable failures (default zero).
+
+Liveness `/health/live` works while model loading/inference/failure occurs;
+readiness `/health/ready` only checks initialized model/executor and shutdown
+state. Model loading occurs once off-loop in lifespan startup, with a bounded
+load wait; failed/timed-out loading stays not-ready until restart. Production
+forbids downloads and requires an explicit persistent cache. Prefer immutable
+local model artifacts with recorded digests; named aliases are not revision pins.
+No inference warmup is necessary for the selected readiness contract.
+
+Service timeout/client cancellation releases the HTTP waiter but retains the
+compute permit/spool until native work finishes; further requests cannot queue
+unbounded compute. The OS spool is closed on parser errors, normal decode/inference
+completion/failure, and eventual native completion after a timeout. Lifespan marks
+not-ready and performs bounded drain/executor disposal. Native Python threads
+cannot be killed safely and may outlive that drain; an orchestrator hard deadline
+and container CPU/memory/temp limits are required. Start one model worker by
+default with `python main.py`, never development auto-reload. Limits are per process.
+
+Structured service events: model.ready/unavailable, inference.completed/rejected/
+cancelled, temp.cleanup_failed and shutdown.requested/timeout/completed. They
+contain only timestamp, safe bounded X-Request-ID, fixed category and duration.
+Service access logs/debug request dumps are disabled by the production launcher;
+configure proxy/framework logs with the same credential/header hygiene.
+Actual model/device capacity, artifact provenance and private/shared network
+deployment remain operator verification; unit tests never download Whisper.

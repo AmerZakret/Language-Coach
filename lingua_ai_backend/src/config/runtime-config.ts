@@ -12,6 +12,7 @@ export interface RuntimeConfig extends Record<string, unknown> {
   PORT: number;
   AI_ENABLED: boolean;
   PRONUNCIATION_ENABLED: boolean;
+  PRONUNCIATION_SERVICE_TOKEN: string;
   CORS_ORIGINS: string;
   UPLOAD_ROOT: string;
   READINESS_TIMEOUT_MS: number;
@@ -245,6 +246,22 @@ export function validateEnvironment(
         'requires the explicit ALLOW_LOCAL_PRONUNCIATION self-hosted override',
       );
   }
+  const serviceToken =
+    typeof env.PRONUNCIATION_SERVICE_TOKEN === 'string'
+      ? env.PRONUNCIATION_SERVICE_TOKEN
+      : '';
+  if (
+    (production && pronunciation && !serviceToken) ||
+    (serviceToken &&
+      (!/^[A-Za-z0-9_+/=-]{32,256}$/.test(serviceToken) ||
+        new Set(serviceToken).size < 12 ||
+        /placeholder|change.?me|your[_-]|example|default/i.test(serviceToken) ||
+        serviceToken === secret))
+  )
+    invalid(
+      'PRONUNCIATION_SERVICE_TOKEN',
+      'must be a separate random service credential (32-256 characters), required when pronunciation is enabled in production',
+    );
   const originsText = text(env, 'CORS_ORIGINS');
   if (production && !originsText) invalid('CORS_ORIGINS', 'is required');
   const origins = originsText
@@ -318,6 +335,7 @@ export function validateEnvironment(
     PORT: Number(portText),
     AI_ENABLED: ai,
     PRONUNCIATION_ENABLED: pronunciation,
+    PRONUNCIATION_SERVICE_TOKEN: serviceToken,
     CORS_ORIGINS: [...new Set(origins)].join(','),
     UPLOAD_ROOT: root,
     TRUST_PROXY: String(proxy),

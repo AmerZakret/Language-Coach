@@ -161,6 +161,8 @@ export async function providerJson(
               );
             if ([401, 403].includes(response.status))
               throw new ProviderFailure('PROVIDER_CONFIGURATION', false);
+            if (kind === 'pronunciation' && response.status === 504)
+              throw new ProviderFailure('PROVIDER_TIMEOUT', true);
             throw new ProviderFailure(
               [500, 502, 503, 504].includes(response.status)
                 ? 'PROVIDER_UNAVAILABLE'

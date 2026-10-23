@@ -91,6 +91,7 @@ describe('Phase 8A production configuration (no external services)', () => {
       ALLOW_LOCAL_ORIGINS: 'true',
       PRONUNCIATION_ENABLED: 'true',
       PRONUNCIATION_SERVICE_URL: 'http://localhost:8001',
+      PRONUNCIATION_SERVICE_TOKEN: randomBytes(32).toString('hex'),
       ALLOW_LOCAL_PRONUNCIATION: 'true',
     });
     expect(validateEnvironment(env).PRONUNCIATION_ENABLED).toBe(true);
@@ -124,6 +125,7 @@ describe('Phase 8A production configuration (no external services)', () => {
         production({
           PRONUNCIATION_ENABLED: 'true',
           PRONUNCIATION_SERVICE_URL: 'http://whisper.internal:8001',
+          PRONUNCIATION_SERVICE_TOKEN: randomBytes(32).toString('hex'),
         }),
       ).PRONUNCIATION_ENABLED,
     ).toBe(true);

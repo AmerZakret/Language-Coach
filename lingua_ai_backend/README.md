@@ -101,6 +101,11 @@ and [output options](https://sharp.pixelplumbing.com/api-output/).
 
 ## Durable sync receipt retention
 
+Phase 8E requires a separate `PRONUNCIATION_SERVICE_TOKEN` when pronunciation is
+enabled in production. The backend forwards it only to the internal transcriber,
+rejects redirects there, and retains 8D deadlines/redaction. See the
+[pronunciation production contract](../lingua_ai_pronunciation_service/README.md).
+
 Phase 8D provides JSON operational events, X-Request-ID correlation, safe log
 redaction and bounded provider transport. See the
 [production diagnostics contract](../PRODUCTION_CONFIGURATION.md#phase-8d-structured-diagnostics-and-bounded-providers)

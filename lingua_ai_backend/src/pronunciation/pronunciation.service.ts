@@ -32,6 +32,11 @@ export class PronunciationService {
       'http://localhost:8001'
     ).trim();
 
+    const serviceToken = this.configService.get<string>('PRONUNCIATION_SERVICE_TOKEN');
+    if (this.configService.get('NODE_ENV') === 'production' && !serviceToken)
+      throw new ProviderFailure('PROVIDER_CONFIGURATION', false);
+    telemetry.configure(this.configService);
+
     // 1. Send Audio to Python Whisper service
     let recognizedText = '';
     let detectedLanguage: string = targetCode;
@@ -48,6 +53,8 @@ export class PronunciationService {
 
       const data = await providerJson(this.configService, this.budget, 'pronunciation',`${whisperUrl}/transcribe`, {
         method: 'POST',
+        headers: serviceToken ? { 'X-Service-Token': serviceToken } : undefined,
+        redirect: 'error', // A redirect must never forward the service credential elsewhere.
         body: formData,
       });
 

@@ -42,7 +42,7 @@ export class OperationalTelemetry {
   configure(config: Pick<ConfigService, 'get'>) {
     for (const [name, value] of Object.entries(process.env))
       if (secretNames.test(name) && value) this.secrets.add(value);
-    for (const name of ['JWT_SECRET', 'MONGODB_URI', 'GEMINI_API_KEY']) {
+    for (const name of ['JWT_SECRET', 'MONGODB_URI', 'GEMINI_API_KEY', 'PRONUNCIATION_SERVICE_TOKEN']) {
       const value = config.get<string>(name);
       if (value) this.secrets.add(value);
     }
