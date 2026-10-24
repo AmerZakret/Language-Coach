@@ -1,3 +1,4 @@
+import { ClientRecoveryNotice } from './components/ClientRecoveryNotice';
 import { ReleaseCompatibilityNotice } from './components/ReleaseCompatibilityNotice';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
@@ -56,6 +57,7 @@ export default function App() {
     <NetworkProvider>
       <ReleaseCompatibilityNotice />
       <AuthProvider>
+        <ClientRecoveryNotice />
         <SyncProvider>
           <SoundProvider>
             <TargetLanguageProvider>

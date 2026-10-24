@@ -9,9 +9,9 @@ for (const operation of ['create', 'edit', 'delete', 'reaction', 'send', 'clear'
     let attempts = 0;
     tab.dispatch = async req => {
       if (++attempts === 1) throw { response: { status: 503 }, config: req };
-      return { data: { _id: 'post', learningLanguage: 'en', likesCount: 8, likedByMe: true, reply: 'reply' } };
+      return { data: { _id: 'post', learningLanguage: 'en', likesCount: 8, likedByMe: true, reply: 'reply', success: true } };
     };
-    const form = new FormData(); form.set('learningLanguage', 'en'); form.set('text', 'post'); form.set('expectedRevision', '3');
+    const form = new FormData(); form.set('learningLanguage', 'en'); form.set('text', 'post'); if (operation === 'edit') form.set('expectedRevision', '3');
     const mutate = key => operation === 'create' ? api.createCommunityPost(form, key)
       : operation === 'edit' ? api.updateCommunityPost('post', form, key)
       : operation === 'delete' ? api.deleteCommunityPost('post', 3, key)

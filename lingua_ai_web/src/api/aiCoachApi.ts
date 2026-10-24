@@ -1,4 +1,6 @@
-import { mutationRequest, newMutationId } from './mutationRequest';
+import { prepareOnlineIntent } from '../utils/onlineIntents';
+import { getSessionRequestConfig, isSessionCurrent } from '../utils/queueSession';
+import { durableMutation, recoverBeforeRead } from './intentRecovery';
 import { targetLanguageCode } from '../utils/targetLanguage';
 import apiClient from './apiClient';
 import type { TargetLanguage, TargetLanguageCode, InterfaceLanguage } from '../types/language';
@@ -23,22 +25,30 @@ interface ChatResponse {
   assistantMessage?: ChatMessage;
 }
 
-export const sendMessage = async (data: ChatRequest, operationId = newMutationId()): Promise<ChatResponse> => {
-  const response = await mutationRequest(operationId, config => apiClient.post<ChatResponse>('/ai-coach/chat', { ...data, targetLanguage: targetLanguageCode(data.targetLanguage) }, config));
-  return response.data;
+export const prepareSendMessage = (data: ChatRequest) => {
+  const target = targetLanguageCode(data.targetLanguage);
+  return prepareOnlineIntent('ai-send', target, { ...data, targetLanguage: target });
+};
+
+export const sendMessage = async (data: ChatRequest, operationId?: string): Promise<ChatResponse> => {
+  const target = targetLanguageCode(data.targetLanguage);
+  return durableMutation<ChatResponse>('ai-send', target, { ...data, targetLanguage: target }, operationId);
 };
 
 export const getChatHistory = async (targetLanguage: TargetLanguage | TargetLanguageCode): Promise<ChatMessage[]> => {
+  const session = getSessionRequestConfig().sessionSnapshot;
+  await recoverBeforeRead('ai', targetLanguageCode(targetLanguage));
+  if (!isSessionCurrent(session)) throw new Error('Chat session changed');
   const response = await apiClient.get<ChatMessage[]>(`/ai-coach/history`, {
+    ...{ sessionSnapshot: session },
     params: { targetLanguage: targetLanguageCode(targetLanguage) }
   });
   return response.data;
 };
 
-export const clearChatHistory = async (targetLanguage: TargetLanguage | TargetLanguageCode, operationId = newMutationId()): Promise<void> => {
-  await mutationRequest(operationId, config => apiClient.delete(`/ai-coach/clear`, { ...config,
-    params: { targetLanguage: targetLanguageCode(targetLanguage) }
-  }));
+export const clearChatHistory = async (targetLanguage: TargetLanguage | TargetLanguageCode, operationId?: string): Promise<void> => {
+  const target = targetLanguageCode(targetLanguage);
+  await durableMutation('ai-clear', target, { targetLanguage: target }, operationId);
 };
 
 export interface WritingCorrectionRequest {

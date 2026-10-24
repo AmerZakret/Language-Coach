@@ -206,3 +206,30 @@ package version change or private Git history is needed for build identification
 New protocol metadata is optional for historical queue records: they remain
 headerless on replay and must be drained/reconciled before enforcement rollout.
 Compatibility failures pause execution rather than entering permanent quarantine.
+# Phase 9D client recovery regressions
+
+The normal full component commands include all recovery tests. For focused work:
+
+```sh
+cd lingua_ai_web
+node --test test/intent-recovery.test.cjs test/mutation-replay.test.cjs test/session-response.test.cjs
+```
+
+```sh
+cd lingua_ai
+flutter test test/online_intent_recovery_test.dart test/mutation_replay_test.dart test/ai_history_session_test.dart test/community_cache_test.dart test/protocol_compatibility_test.dart
+```
+
+These tests exercise actual owner-scoped journals, Web Locks with independent
+browser contexts, native temporary two-slot stores, lost acknowledgements,
+restart/disposal, corruption and verified-backup evidence, bounded retry clocks,
+capacity, account/language changes, original protocol retention, and local
+acknowledgement failures. Provider/receipt behavior is mocked at client transport
+boundaries; the full backend `common/mutation-hardening.spec.ts` suite separately
+proves real transactional Community/AI receipt replay and clear-barrier safety
+using disposable Mongo. No Atlas, paid provider, real service credential, or
+Whisper model is required. Language/writing boundary unit fixtures explicitly
+mock recovery; the recovery suites execute the actual implementation.
+
+See [CLIENT_RECOVERY.md](CLIENT_RECOVERY.md) for the operation classification,
+capacity/no-TTL contract, failure semantics and conservative backup handling.

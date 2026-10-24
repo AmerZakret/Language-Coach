@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from "react";
+import { subscribeIntentAcknowledgements } from '../utils/onlineIntents';
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Globe, Heart, Trash2, Edit3, Image, X, AlertCircle, Loader, CheckCircle, WifiOff } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useLanguage } from "../context/LanguageContext";
@@ -47,6 +48,8 @@ export function CommunityPage() {
   const [newPostImagePreview, setNewPostImagePreview] = useState<string | null>(null);
   const [learningLanguage, setLearningLanguage] = useState(targetLanguage);
   const [isPosting, setIsPosting] = useState(false);
+  const currentDraft = useRef({ text: newPostText, image: newPostImage, language: learningLanguage });
+  useEffect(() => { currentDraft.current = { text: newPostText, image: newPostImage, language: learningLanguage }; }, [newPostText, newPostImage, learningLanguage]);
   const [postSuccess, setPostSuccess] = useState(false);
 
   // Edit State
@@ -58,7 +61,6 @@ export function CommunityPage() {
   const [deletingPostId, setDeletingPostId] = useState<string | null>(null);
 
   const pendingMutations = useRef(new Map<string, { payload: string; id: string }>());
-  const imageIntents = useRef(new WeakMap<File, string>());
   const operationFor = (slot: string, payload: string) => {
     const key = `${session.revision}:${slot}`;
     const previous = pendingMutations.current.get(key);
@@ -79,12 +81,16 @@ export function CommunityPage() {
   const session = getOfflineQueueSession();
   const query = communityQuery(getUserProgressKey(user, isGuest, token), selectedLanguage, 1, 50);
   const queryKey = communityCacheKey(query);
+  const [recoveryRevision, setRecoveryRevision] = useState(0);
+  useEffect(() => subscribeIntentAcknowledgements(query.ownerNamespace, () => setRecoveryRevision(value => value + 1)), [query.ownerNamespace]);
   const captureSession = useSessionGuard(query.ownerNamespace, queryKey);
   const feedRevision = useRef(0);
   const reactionRevisions = useRef(new Map<string, number>());
   const canUseBackend = !!token && query.ownerNamespace !== 'local_guest';
 
-  const fetchFeed = async () => {
+  const ownerNamespace = query.ownerNamespace;
+  const fetchFeed = useCallback(async () => {
+    const query = communityQuery(ownerNamespace, selectedLanguage, 1, 50);
     const currentSession = captureSession();
     const revision = ++feedRevision.current;
     const isCurrent = () => currentSession() && revision === feedRevision.current;
@@ -116,14 +122,14 @@ export function CommunityPage() {
     } finally {
       if (isCurrent()) setLoading(prev => isCurrent() ? false : prev);
     }
-  };
+  }, [ownerNamespace, selectedLanguage, captureSession, canUseBackend, isOffline, t]);
 
   useEffect(() => {
     const isCurrent = captureSession();
     setPosts(prev => isCurrent() ? [] : prev);
     void fetchFeed();
     return () => { feedRevision.current++; };
-  }, [captureSession, queryKey, isOffline, token, targetLanguage]);
+  }, [captureSession, fetchFeed, targetLanguage, recoveryRevision]);
 
   useEffect(() => {
     const isCurrent = captureSession();
@@ -180,21 +186,21 @@ export function CommunityPage() {
       }
 
       feedRevision.current++;
-      if (newPostImage && !imageIntents.current.has(newPostImage)) imageIntents.current.set(newPostImage, crypto.randomUUID());
-      const operationId = operationFor('create', JSON.stringify([learningLanguage, newPostText, newPostImage && imageIntents.current.get(newPostImage)]));
-      await createCommunityPost(formData, operationId);
-      if (!completeOperation('create', operationId)) return;
+      await createCommunityPost(formData);
       if (isCurrent() && isSessionCurrent(session)) invalidateCommunityFeed(query.ownerNamespace, { language: learningLanguage });
       if (!isCurrent()) return;
-      setNewPostText("");
-      clearImage();
+      if (currentDraft.current.text === newPostText && currentDraft.current.image === newPostImage
+        && currentDraft.current.language === learningLanguage) {
+        setNewPostText("");
+        clearImage();
+      }
       setPostSuccess(true);
       setTimeout(() => { if (isCurrent()) setPostSuccess(prev => isCurrent() ? false : prev); }, 3000);
       fetchFeed();
-    } catch (e) {
+    } catch {
       if (!isCurrent()) return;
-      console.error("Failed to create community post", e);
-      alert(t("failed_submit_post"));
+      console.error("client_intent_recovery_needed");
+      alert("Could not confirm this post. Saved action is preserved; refresh to recover before posting again.");
     } finally {
       if (isCurrent()) setIsPosting(prev => isCurrent() ? false : prev);
     }
@@ -231,9 +237,9 @@ export function CommunityPage() {
       if (isCurrent() && isSessionCurrent(session)) invalidateCommunityFeed(query.ownerNamespace, { postId });
       if (!isCurrent()) return;
       setPosts(prev => !isCurrent() ? prev : prev.map(post => post._id === postId ? { ...post, ...result } : post));
-    } catch (e) {
+    } catch {
       if (!isCurrent()) return;
-      console.error("Failed to toggle like", e);
+      console.error("community_reaction_refresh_needed");
       // Revert if failed
       fetchFeed();
     }
@@ -264,10 +270,12 @@ export function CommunityPage() {
       if (!isCurrent()) return;
       setEditingPostId(null);
       fetchFeed();
-    } catch (e) {
+    } catch {
       if (!isCurrent()) return;
-      console.error("Failed to update post", e);
-      alert(t("failed_update_post"));
+      console.error("community_update_refresh_needed");
+      await fetchFeed();
+      if (isCurrent()) setEditingPostId(null);
+      if (isCurrent()) alert("Edit outcome is uncertain or conflicted. The feed was refreshed; check the latest revision before retrying.");
     } finally {
       if (isCurrent()) setIsUpdating(prev => isCurrent() ? false : prev);
     }
@@ -287,10 +295,12 @@ export function CommunityPage() {
       if (!isCurrent()) return;
       setDeletingPostId(null);
       await fetchFeed();
-    } catch (e) {
+    } catch {
       if (!isCurrent()) return;
-      console.error("Failed to delete post", e);
-      alert(t("failed_delete_post"));
+      console.error("community_delete_refresh_needed");
+      await fetchFeed();
+      if (isCurrent()) setDeletingPostId(null);
+      if (isCurrent()) alert("Deletion could not be confirmed. Check the refreshed feed before retrying.");
     }
   };
 

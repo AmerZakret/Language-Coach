@@ -93,7 +93,7 @@ class CommunityFeedCache {
   }
 
   static Future<void> invalidate(SharedPreferences prefs, String owner,
-      {String? postId, String? language, bool Function()? isCurrent}) async {
+      {String? postId, String? language, bool Function()? isCurrent, bool requireAcknowledgement = false}) async {
     final prefix = 'community_feed_v2_${Uri.encodeComponent(owner)}_';
     final code = language == null ? null : TargetLanguage.code(language);
     for (final key in prefs.getKeys().where((key) => key.startsWith(prefix))) {
@@ -112,9 +112,20 @@ class CommunityFeedCache {
                     (feed['items'] as List)
                         .any((post) => post['_id'] == postId)))) {
           if (isCurrent?.call() == false) return;
-          await prefs.remove(key);
+          try {
+            final removed = await prefs.remove(key);
+            if (!removed && requireAcknowledgement) {
+              throw StateError('Post saved; cache acknowledgement needs recovery.');
+            }
+          } catch (_) {
+            if (requireAcknowledgement) {
+              throw StateError('Post saved; cache acknowledgement needs recovery.');
+            }
+          }
         }
-      } catch (_) {/* Malformed entries are unavailable, never re-owned. */}
+      } catch (error) {
+        if (requireAcknowledgement && error is StateError) rethrow;
+      }
     }
   }
 }

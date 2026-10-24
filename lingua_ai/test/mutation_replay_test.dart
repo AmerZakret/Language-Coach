@@ -1,3 +1,4 @@
+import 'package:lingua_ai/services/online_intent_service.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -15,6 +16,8 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   const a = '507f1f77bcf86cd799439011', b = '507f1f77bcf86cd799439012';
   final auth = AuthService();
+  var clock = DateTime.now().millisecondsSinceEpoch;
+  void advance() { clock += 300001; }
   Future<void> login(String id) async {
     auth.setBackendSession(
         id: id, name: id, email: '$id@example.test', token: 'token-$id');
@@ -37,10 +40,13 @@ void main() {
     'updatedAt': '2026-01-01'
   };
   setUp(() async {
+    OnlineIntentService.clock = () => clock;
     SharedPreferences.setMockInitialValues({});
     await auth.init();
     await login(a);
   });
+
+  tearDown(() { OnlineIntentService.clock = () => DateTime.now().millisecondsSinceEpoch; });
 
   test(
       'image create keeps operation ID and captured bytes after lost ack and source removal',
@@ -59,7 +65,8 @@ void main() {
                 learningLanguage: 'en', text: 'caption', imagePath: file.path),
             throwsA(isA<ApiException>()));
         await file.delete();
-        await service.createPost(
+        advance();
+        await CommunityService().createPost(
             learningLanguage: 'en', text: 'caption', imagePath: file.path);
         expect(keys.toSet(), hasLength(1));
         await service.createPost(learningLanguage: 'en', text: 'caption');
@@ -203,6 +210,7 @@ void main() {
           : service.clearHistory(targetLanguage: 'de');
       await http.runWithClient(() async {
         await expectLater(mutate(), throwsA(isA<ApiException>()));
+        advance();
         await mutate();
         expect(keys.toSet(), hasLength(1));
         await mutate();
@@ -253,22 +261,25 @@ void main() {
             }));
   });
 
-  test('late clear replay preserves the operation ID of a later unresolved send', () async {
-    final service = AiCoachApiService(), sendKeys = <String>[];
-    var clearFailures = 2, sendFailures = 2;
+  test('uncertain clear blocks later send until original clear is reconciled', () async {
+    final service = AiCoachApiService(), clearKeys = <String>[], sendKeys = <String>[];
+    var clearFailures = 2;
     await http.runWithClient(() async {
       await expectLater(service.clearHistory(targetLanguage: 'en'), throwsA(isA<ApiException>()));
-      await expectLater(service.sendMessage(message: 'later', language: 'en', targetLanguage: 'en'), throwsA(isA<ApiException>()));
+      await expectLater(service.sendMessage(message: 'later', language: 'en', targetLanguage: 'en'), throwsA(isA<IntentRecoveryRequired>()));
+      expect(sendKeys, isEmpty);
+      advance();
       await service.clearHistory(targetLanguage: 'en');
       await service.sendMessage(message: 'later', language: 'en', targetLanguage: 'en');
-      expect(sendKeys, hasLength(3));
-      expect(sendKeys.toSet(), hasLength(1));
+      expect(clearKeys.toSet(), hasLength(1));
+      expect(sendKeys, hasLength(1));
     }, () => MockClient((request) async {
       if (request.url.path.endsWith('/clear')) {
-        return http.Response('{}', clearFailures-- > 0 ? 503 : 200);
+        clearKeys.add(request.headers['X-Idempotency-Key']!);
+        return http.Response('{"success":true}', clearFailures-- > 0 ? 503 : 200);
       }
       sendKeys.add(request.headers['X-Idempotency-Key']!);
-      return http.Response('{"reply":"later reply"}', sendFailures-- > 0 ? 503 : 200);
+      return http.Response('{"reply":"later reply"}', 200);
     }));
   });
 
@@ -278,11 +289,12 @@ void main() {
     await http.runWithClient(() async {
       await service.clearHistory(targetLanguage: 'en', operationId: 'clear');
       await expectLater(service.sendMessage(message: 'later', language: 'en', targetLanguage: 'en'), throwsA(isA<ApiException>()));
-      await service.clearHistory(targetLanguage: 'en', operationId: 'clear');
+      advance();
       await service.sendMessage(message: 'later', language: 'en', targetLanguage: 'en');
+      await service.clearHistory(targetLanguage: 'en', operationId: 'clear');
       expect(sendKeys.toSet(), hasLength(1));
     }, () => MockClient((request) async {
-      if (request.url.path.endsWith('/clear')) return http.Response('{}', 200);
+      if (request.url.path.endsWith('/clear')) return http.Response('{"success":true}', 200);
       sendKeys.add(request.headers['X-Idempotency-Key']!);
       return http.Response('{"reply":"reply"}', failures-- > 0 ? 503 : 200);
     }));

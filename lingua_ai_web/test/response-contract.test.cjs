@@ -11,6 +11,8 @@ function apiModule(fileName, client) {
     vm.runInNewContext(ts.transpileModule(readFileSync(file, 'utf8'), {
       compilerOptions: { module: ts.ModuleKind.CommonJS, esModuleInterop: true },
     }).outputText, { module, exports: module.exports, localStorage: { getItem: () => null }, require: name =>
+      name.endsWith('/onlineIntents') ? {} :
+      name.endsWith('/intentRecovery') ? require('./helpers/isolatedIntentBoundary.cjs').isolatedIntentBoundary(client) :
       name.endsWith('/apiClient') ? { __esModule: true, default: client }
         : load(resolve(dirname(file), `${name}.ts`)) });
     return module.exports;

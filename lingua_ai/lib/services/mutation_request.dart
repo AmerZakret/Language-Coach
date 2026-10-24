@@ -42,7 +42,7 @@ Future<http.Response> mutationRequest(
     try {
       return await dispatch();
     } on ApiException catch (error) {
-      if (!session.isCurrent ||
+      if (!session.isCurrent || (error.retryAfterMs ?? 0) > 0 ||
           (error.kind != ApiFailure.network &&
               error.kind != ApiFailure.server)) {
         rethrow;

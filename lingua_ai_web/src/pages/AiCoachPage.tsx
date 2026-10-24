@@ -1,3 +1,4 @@
+import { subscribeIntentAcknowledgements } from '../utils/onlineIntents';
 import { useState, useRef, useEffect } from "react";
 import { Send, Trash2, Sparkles, User, Utensils, BookOpen, MessageSquare, ShoppingCart, WifiOff } from "lucide-react";
 import aiCoachImg from "../assets/images/ai-coach-icon.png";
@@ -7,7 +8,7 @@ import { useTargetLanguage } from "../context/TargetLanguageContext";
 import { useSessionGuard } from "../utils/useSessionGuard";
 import { getUserProgressKey } from "../utils/userKey";
 import { useNetwork } from "../context/NetworkContext";
-import { sendMessage, getChatHistory, clearChatHistory, type ChatMessage } from "../api/aiCoachApi";
+import { prepareSendMessage, sendMessage, getChatHistory, clearChatHistory, type ChatMessage } from "../api/aiCoachApi";
 
 const STARTER_PROMPTS = [
   { Icon: Utensils, key: "prompt_restaurant" },
@@ -21,20 +22,21 @@ export function AiCoachPage() {
   const { language, t } = useLanguage();
   const { targetLanguage } = useTargetLanguage();
   const { isOffline } = useNetwork();
-  const captureSession = useSessionGuard(getUserProgressKey(user, isGuest, token), targetLanguage);
+  const ownerNamespace = getUserProgressKey(user, isGuest, token);
+  const captureSession = useSessionGuard(ownerNamespace, targetLanguage);
+  const [recoveryRevision, setRecoveryRevision] = useState(0);
+  useEffect(() => subscribeIntentAcknowledgements(ownerNamespace, () => setRecoveryRevision(value => value + 1)), [ownerNamespace]);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(true);
-  const pendingSend = useRef<{ payload: string; id: string } | null>(null);
-  const pendingClear = useRef<{ language: string; id: string; supersededSend?: string } | null>(null);
+  const [recoveryMessage, setRecoveryMessage] = useState<string | null>(null);
   const activeMutation = useRef<symbol | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const historyRevision = useRef(0);
   useEffect(() => {
     // Connectivity changes must retain uncertain operations for receipt replay.
-    pendingSend.current = null; pendingClear.current = null;
     activeMutation.current = null;
   }, [captureSession, targetLanguage, token]);
   useEffect(() => {
@@ -43,6 +45,7 @@ export function AiCoachPage() {
     let cancelled = false;
     const isCurrent = () => !cancelled && isSessionCurrent() && revision === historyRevision.current;
     setMessages(prev => isCurrent() ? [] : prev);
+    setRecoveryMessage(prev => isCurrent() ? null : prev);
     setInput(prev => isCurrent() ? '' : prev);
     setIsTyping(prev => isCurrent() ? false : prev);
     if (isOffline || !token) {
@@ -55,15 +58,15 @@ export function AiCoachPage() {
         const history = await getChatHistory(targetLanguage);
         if (!isCurrent()) return;
         setMessages(prev => isCurrent() ? history : prev);
-      } catch (e) {
-        if (isCurrent()) console.error('Failed to load chat history', e);
+      } catch {
+        if (isCurrent()) setRecoveryMessage('Could not confirm a previous action. Saved work is preserved. Refresh to recover, or update the client if required.');
       } finally {
         if (isCurrent()) setHistoryLoading(prev => isCurrent() ? false : prev);
       }
     };
     loadHistory();
     return () => { cancelled = true; };
-  }, [captureSession, targetLanguage, isOffline, token]);
+  }, [captureSession, targetLanguage, isOffline, token, recoveryRevision]);
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, isTyping, historyLoading]);
 
@@ -75,26 +78,22 @@ export function AiCoachPage() {
     const mutation = Symbol();
     activeMutation.current = mutation;
     
-    const userMsg: ChatMessage = { role: "user", message: content, createdAt: new Date().toISOString() };
-    setMessages((prev) => isCurrent() ? [...prev, userMsg] : prev);
-    setInput("");
     setIsTyping(true);
-
     try {
-      const payload = JSON.stringify([content, language, targetLanguage]);
-      if (pendingSend.current?.payload !== payload) pendingSend.current = { payload, id: crypto.randomUUID() };
-      const response = await sendMessage({
-        message: content,
-        language: language,
-        targetLanguage: targetLanguage
-      }, pendingSend.current.id);
+      const request = { message: content, language, targetLanguage };
+      const intent = await prepareSendMessage(request);
+      if (!isCurrent()) return;
+      const userMsg: ChatMessage = { _id: `pending:${intent.id}`, role: 'user', message: content, createdAt: new Date().toISOString() };
+      setMessages(prev => isCurrent() ? [...prev.filter(message => message._id !== userMsg._id), userMsg] : prev);
+      setInput('');
+      const response = await sendMessage(request, intent.id);
 
       if (!isCurrent()) return;
-      pendingSend.current = null;
+      setRecoveryMessage(null);
       setMessages((prev) => {
         if (!isCurrent()) return prev;
         const filtered = prev.slice(0, -1);
-        const actualUserMsg: ChatMessage = response.userMessage || userMsg;
+        const actualUserMsg: ChatMessage = response.userMessage || { ...userMsg, _id: undefined };
         const actualAssistantMsg: ChatMessage = response.assistantMessage || {
           role: "assistant",
           message: response.reply,
@@ -107,13 +106,12 @@ export function AiCoachPage() {
         }
         return filtered;
       });
-    } catch (e: any) {
+    } catch {
       if (!isCurrent()) return;
-      console.error('AI Coach error', e);
+      console.error('client_intent_recovery_needed');
       setInput(content);
-      setMessages((prev) => isCurrent() ? prev.slice(0, -1) : prev);
-      const errMsg = e.response?.data?.message || t("something_wrong");
-      alert(errMsg);
+      setRecoveryMessage('Could not confirm this message. Its original operation is saved. Refresh to recover before sending a different message.');
+      alert("Could not confirm this message. Saved work is preserved; refresh to recover.");
     } finally {
       if (activeMutation.current === mutation) activeMutation.current = null;
       if (isCurrent()) setIsTyping(prev => isCurrent() ? false : prev);
@@ -140,20 +138,13 @@ export function AiCoachPage() {
       const isCurrent = () => currentSession() && revision === historyRevision.current;
       setHistoryLoading(true);
       try {
-        if (pendingClear.current?.language !== targetLanguage) pendingClear.current = {
-          language: targetLanguage, id: crypto.randomUUID(), supersededSend: pendingSend.current?.id,
-        };
-        const clear = pendingClear.current;
-        await clearChatHistory(targetLanguage, clear.id);
-        if (isCurrent()) {
-          if (pendingSend.current?.id === clear.supersededSend) pendingSend.current = null;
-          pendingClear.current = null;
-        }
+        await clearChatHistory(targetLanguage);
+        if (isCurrent()) setRecoveryMessage(null);
         if (!isCurrent()) return;
         const history = await getChatHistory(targetLanguage);
         if (isCurrent()) setMessages(prev => isCurrent() ? history : prev);
-      } catch (e) {
-        if (isCurrent()) console.error('Failed to clear chat history', e);
+      } catch {
+        if (isCurrent()) setRecoveryMessage('Could not confirm the clear. Its original operation is saved. Refresh to recover; do not issue a new clear.');
       } finally {
         if (activeMutation.current === mutation) activeMutation.current = null;
         if (isCurrent()) setHistoryLoading(prev => isCurrent() ? false : prev);
@@ -173,6 +164,9 @@ export function AiCoachPage() {
 
   return (
     <div className="flex flex-col h-full animate-fade-in" style={{ background: "var(--l-bg)" }}>
+      {recoveryMessage && <div role="alert" className="p-4 text-amber-700">{recoveryMessage}
+        <button onClick={() => window.location.reload()} className="ml-3 underline">Reload and recover</button>
+      </div>}
       {/* Header */}
       <div className="flex items-center justify-between px-6 py-4 shrink-0" style={{ borderBottom: "1px solid var(--l-border-subtle)" }}>
         <div className="flex items-center gap-3">

@@ -9,7 +9,7 @@ export async function mutationRequest<T>(operationId: string, send: (config: Axi
     if (!isSessionCurrent(session.sessionSnapshot)) throw new Error('Mutation session changed');
     try { return await send(config); }
     catch (error: any) {
-      if (!isSessionCurrent(session.sessionSnapshot) || (error.response && error.response.status < 500)) throw error;
+      if (!isSessionCurrent(session.sessionSnapshot) || Number(error.response?.headers?.['retry-after']) > 0 || (error.response && error.response.status < 500)) throw error;
       return send(config);
     }
   };

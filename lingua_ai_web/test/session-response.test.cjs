@@ -130,6 +130,7 @@ function harness(initial = {}) {
       navigator: { locks: lockManager },
       document: { addEventListener() {}, removeEventListener() {} }, window: { confirm: () => true },
       require: path => {
+        if (path.endsWith('/onlineIntents')) return { subscribeIntentAcknowledgements: () => () => {} };
         if (path.endsWith('/clientProtocol')) return load('protocol');
         if (path.endsWith('/releaseCompatibility')) return load('compatibility');
         if (path === 'react') return react;
@@ -147,6 +148,7 @@ function harness(initial = {}) {
         if (path.endsWith('/writingTopics')) return h.writingTopics || (h.writingTopics = { writingTopics: { en: { en: ['Topic'] } } });
         if (path.endsWith('/communityFeedCache')) return load('communityCache');
         if (path.endsWith('/aiCoachApi')) return {
+          prepareSendMessage: async (...args) => h.prepareSendMessage ? h.prepareSendMessage(...args) : ({ id: 'prepared-by-durable-api' }),
           sendMessage: (...args) => h.sendMessage(...args),
           clearChatHistory: (...args) => h.clearChatHistory(...args),
           checkWriting: (...args) => h.checkWriting(...args),
@@ -1325,7 +1327,7 @@ test('older like response cannot overwrite a newer reaction result', async () =>
 });
 
 
-test('7E Community create retry retains logical key; acknowledged same-content action gets a fresh key', async () => {
+test('9D Community UI delegates identity to durable API and preserves draft until acknowledgement', async () => {
   const h = await communityHarness();
   h.fetchCommunity = async () => communityFeed();
   let attempts = 0;
@@ -1338,7 +1340,8 @@ test('7E Community create retry retains logical key; acknowledged same-content a
   assert.equal(calls[0][2], calls[1][2]);
   h.child.exposed.setNewPostText('draft'); h.child.render();
   await h.child.exposed.handleCreatePost({ preventDefault() {} }); await h.settle();
-  assert.notEqual(h.calls.filter(call => call[0] === 'community-create').at(-1)[2], calls[0][2]);
+  assert.equal(h.calls.filter(call => call[0] === 'community-create').length, 3);
+  assert.ok(h.calls.filter(call => call[0] === 'community-create').every(call => call[2] === undefined));
 });
 
 test('7E AI lost clear ack -> later send -> clear retry reconciles later history with original clear ID', async () => {
@@ -1362,7 +1365,7 @@ test('7E AI lost clear ack -> later send -> clear retry reconciles later history
   assert.deepEqual(copy(h.child.exposed.messages), history);
 });
 
-test('7E AI send retry retains key until acknowledged; independent intentional sends get fresh keys', async () => {
+test('9D AI UI delegates identity to durable API; retries render one user message', async () => {
   const h = await communityHarness(), keys = [];
   h.getChatHistory = async () => [];
   let sends = 0;
@@ -1371,10 +1374,11 @@ test('7E AI send retry retains key until acknowledged; independent intentional s
   await h.child.exposed.handleSend('hello'); await h.settle();
   await h.child.exposed.handleSend('hello'); await h.settle();
   await h.child.exposed.handleSend('hello'); await h.settle();
-  assert.equal(keys[0], keys[1]); assert.notEqual(keys[1], keys[2]);
+  assert.deepEqual(keys, ['prepared-by-durable-api', 'prepared-by-durable-api', 'prepared-by-durable-api']);
+  assert.equal(h.child.exposed.messages.filter(message => message.role === 'user').length, 2);
 });
 
-test('7E old Community acknowledgement cannot retire a newer unresolved create intent', async () => {
+test('9D old Community acknowledgement cannot clear a newer draft', async () => {
   const h = await communityHarness(), older = deferred();
   h.fetchCommunity = async () => communityFeed();
   let attempts = 0;
@@ -1388,11 +1392,12 @@ test('7E old Community acknowledgement cannot retire a newer unresolved create i
   assert.equal(h.child.exposed.newPostText, 'newer');
   await h.child.exposed.handleCreatePost({ preventDefault() {} });
   const calls = h.calls.filter(call => call[0] === 'community-create');
-  assert.notEqual(calls[0][2], calls[1][2]);
-  assert.equal(calls[1][2], calls[2][2]);
+  assert.equal(calls[0][1].get('text'), 'older');
+  assert.equal(calls[1][1].get('text'), 'newer');
+  assert.equal(calls[2][1].get('text'), 'newer');
 });
 
-test('7E newly selected images with identical metadata are distinct logical creates', async () => {
+test('9D Community UI passes original image bytes to the durable API rather than manufacturing keys', async () => {
   const h = await communityHarness();
   h.fetchCommunity = async () => communityFeed();
   h.communityMutation = async () => { throw new Error('Lost acknowledgement'); };
@@ -1406,7 +1411,10 @@ test('7E newly selected images with identical metadata are distinct logical crea
   h.child.exposed.setNewPostImage(second); h.child.render();
   await h.child.exposed.handleCreatePost({ preventDefault() {} });
   const keys = h.calls.filter(call => call[0] === 'community-create').map(call => call[2]);
-  assert.equal(keys[0], keys[1]); assert.notEqual(keys[1], keys[2]);
+  assert.deepEqual(keys, [undefined, undefined, undefined]);
+  const forms = h.calls.filter(call => call[0] === 'community-create').map(call => call[1]);
+  assert.equal(await forms[0].get('image').text(), 'one');
+  assert.equal(await forms[2].get('image').text(), 'two');
 });
 
 test('7E AI send retains unresolved ID across connectivity loss and recovery', async () => {
@@ -1438,13 +1446,14 @@ test('7E connectivity recovery retains old clear receipt rather than erasing a l
 });
 
 test('7E same-render duplicate AI send dispatch cannot duplicate the displayed pair', async () => {
-  const h = await communityHarness(), result = deferred();
+  const h = await communityHarness(), result = deferred(), started = deferred();
   h.getChatHistory = async () => [];
   let calls = 0;
-  h.sendMessage = () => { calls++; return result.promise; };
+  h.sendMessage = () => { calls++; started.resolve(); return result.promise; };
   h.mount('coach', 'AiCoachPage'); await h.settle();
   const send = h.child.exposed.handleSend;
   const first = send('hello'), second = send('hello');
+  await started.promise;
   assert.equal(calls, 1);
   result.resolve({ reply: 'reply' }); await Promise.all([first, second]); await h.settle();
   assert.equal(h.child.exposed.messages.length, 2);
@@ -1616,4 +1625,23 @@ test('9B corrupt review storage is preserved, surfaced, and cannot advance study
   await h.child.exposed.handleStudyScore(4); await h.settle();
   assert.equal(h.child.exposed.studyResults.length, 0); assert.equal(h.mutations.length, 0);
   assert.equal(h.localStorage.getItem(queueKey), '{invalid');
+});
+
+
+test('9D AI preparation failure cannot dispatch or replace the original pending bubble with a different draft', async () => {
+  const h = await communityHarness();
+  h.getChatHistory = async () => [];
+  let sends = 0;
+  h.sendMessage = async () => { sends++; throw new Error('Lost acknowledgement'); };
+  h.prepareSendMessage = async data => {
+    if (data.message !== 'original') throw new Error('Saved action needs recovery');
+    return { id: 'durable-operation' };
+  };
+  h.mount('coach', 'AiCoachPage'); await h.settle();
+  await h.child.exposed.handleSend('original'); await h.settle();
+  assert.equal(h.child.exposed.messages.length, 1);
+  assert.equal(h.child.exposed.messages[0]._id, 'pending:durable-operation');
+  await h.child.exposed.handleSend('different draft'); await h.settle();
+  assert.equal(sends, 1); assert.equal(h.child.exposed.messages.length, 1);
+  assert.equal(h.child.exposed.messages[0].message, 'original');
 });

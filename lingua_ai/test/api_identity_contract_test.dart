@@ -33,7 +33,7 @@ void main() {
       await coach.clearHistory(targetLanguage: 'en');
     }, () => MockClient((request) async {
       requests.add(request);
-      return http.Response(request.method == 'GET' ? '[]' : request.url.path == '/flashcards' ? '{"_id":"receipt-id"}' : '{}', 200);
+      return http.Response(request.method == 'GET' ? '[]' : request.url.path == '/flashcards' ? '{"_id":"receipt-id"}' : request.url.path.endsWith('/chat') ? '{"reply":"reply"}' : request.url.path.endsWith('/clear') ? '{"success":true}' : '{}', 200);
     }));
     expect(requests, hasLength(7));
     for (final request in requests) {

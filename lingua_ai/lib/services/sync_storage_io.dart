@@ -10,6 +10,12 @@ SyncStorageBackend createSyncStorage() => FileSyncStorage(() async {
       return Directory('${support.path}${Platform.pathSeparator}sync-v1');
     });
 
+SyncStorageBackend createIntentStorage() => FileSyncStorage(() async {
+      final support = await getApplicationSupportDirectory();
+      return Directory('${support.path}${Platform.pathSeparator}sync-v1'
+          '${Platform.pathSeparator}online-intents');
+    });
+
 class FileSyncStorage implements SyncStorageBackend {
   final Future<Directory> Function() directory;
   // Fault injection at the flushed-but-not-promoted boundary, used only by tests.

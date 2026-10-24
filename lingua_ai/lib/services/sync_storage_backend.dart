@@ -18,8 +18,10 @@ class SyncStorageCorruption implements Exception {
 // Flutter web retains its existing persistence. Also an explicit regression
 // test adapter; native production targets never choose this implementation.
 class PreferencesSyncStorage implements SyncStorageBackend {
+  final String prefix;
+  PreferencesSyncStorage({this.prefix = 'linguaai_offline_queue_'});
   String key(String owner) =>
-      'linguaai_offline_queue_${Uri.encodeComponent(owner)}';
+      '$prefix${Uri.encodeComponent(owner)}';
   @override
   bool get durable => false;
   @override

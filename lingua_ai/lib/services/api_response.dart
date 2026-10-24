@@ -20,8 +20,9 @@ class ApiException implements Exception {
   final int? statusCode;
   final bool sessionInvalidated;
   final String? code;
+  final int? retryAfterMs;
   const ApiException(this.kind, this.message,
-      [this.statusCode, this.sessionInvalidated = false, this.code]);
+      [this.statusCode, this.sessionInvalidated = false, this.code, this.retryAfterMs]);
   @override
   String toString() => message;
 }
@@ -95,7 +96,10 @@ Future<http.Response> apiRequest(
   final invalidated = status == 401 &&
       Zone.current[_deferUnauthorizedInvalidation] != true &&
       AuthService().invalidateSession(session);
-  throw ApiException(kind, message, status, invalidated, code);
+  final retrySeconds = int.tryParse(response.headers['retry-after'] ?? '');
+  final retryAfterMs = [429, 503].contains(status) && retrySeconds != null
+      ? retrySeconds.clamp(0, 300) * 1000 : null;
+  throw ApiException(kind, message, status, invalidated, code, retryAfterMs);
 }
 
 Map<String, dynamic> parsePublicUser(dynamic value) {

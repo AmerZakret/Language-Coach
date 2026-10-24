@@ -5,4 +5,6 @@ export 'sync_storage_backend.dart';
 
 class SyncStorage {
   static SyncStorageBackend backend = platform.createSyncStorage();
+  // Separate bounded collection, using the same durable storage mechanism.
+  static SyncStorageBackend intents = platform.createIntentStorage();
 }
