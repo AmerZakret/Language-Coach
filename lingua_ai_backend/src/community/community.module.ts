@@ -17,6 +17,6 @@ import { User, UserSchema } from '../users/schemas/user.schema';
   ],
   controllers: [CommunityController],
   providers: [CommunityService, CommunityImageStorage],
-  exports: [CommunityService],
+  exports: [CommunityService, CommunityImageStorage],
 })
 export class CommunityModule {}

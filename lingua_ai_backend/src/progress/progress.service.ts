@@ -1,3 +1,5 @@
+import { observedTransaction } from '../operations/observed-transaction';
+import { receiptEvent } from '../operations/telemetry';
 import { targetLanguageCode, targetLanguageQuery, tryTargetLanguage } from '../common/target-language';
 import { BadRequestException, ConflictException, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
@@ -7,6 +9,7 @@ import { User } from '../users/schemas/user.schema';
 import { Lesson } from '../lessons/schemas/lesson.schema';
 import { ProgressReset } from './schemas/progress-reset.schema';
 import { deriveLevel, validXp } from '../common/xp-level';
+import { initializeDevelopmentIndexes } from '../operations/schema-startup';
 
 @Injectable()
 export class ProgressService implements OnModuleInit {
@@ -18,7 +21,7 @@ export class ProgressService implements OnModuleInit {
     @InjectModel(ProgressReset.name) private resetModel: Model<ProgressReset>,
   ) {}
 
-  async onModuleInit() { await this.resetModel.createIndexes(); }
+  async onModuleInit() { await initializeDevelopmentIndexes(this.resetModel); }
 
   private assertEpoch(expected: number, current: number, reset = false) {
     if (!Number.isSafeInteger(expected) || expected < 0) {
@@ -52,7 +55,7 @@ export class ProgressService implements OnModuleInit {
   async getUserProgress(userId: string, targetLanguage?: string) {
     const session = await this.connection.startSession();
     try {
-      return await session.withTransaction(() => this.getProgressSnapshot(userId, targetLanguage, session),
+      return await observedTransaction(session, 'progress', () => this.getProgressSnapshot(userId, targetLanguage, session),
         { readConcern: { level: 'snapshot' } });
     } finally { await session.endSession(); }
   }
@@ -114,7 +117,7 @@ export class ProgressService implements OnModuleInit {
     // retries write conflicts, including simultaneous different lessons.
     const session = await this.connection.startSession();
     try {
-      const run = () => session.withTransaction(async () => {
+      const run = () => observedTransaction(session, 'progress', async () => {
         let user = await this.findUser(userId, session);
         this.assertEpoch(progressEpoch, user.progressEpoch ?? 0);
         const lesson = await this.lessonModel.findOne({ id: lessonId }).session(session).lean();
@@ -185,9 +188,12 @@ export class ProgressService implements OnModuleInit {
   }
 
   private resetResult(userId: string, expectedEpoch: number, receipt: ProgressReset) {
-    if (receipt.expectedEpoch !== expectedEpoch) throw new ConflictException({
+    if (receipt.expectedEpoch !== expectedEpoch) {
+      receiptEvent('receipt.conflict', 'progress_reset', userId, receipt.operationId);
+      throw new ConflictException({
       code: 'RESET_IDEMPOTENCY_CONFLICT', message: 'Idempotency key was used for a different request',
-    });
+      });
+    }
     return { message: 'Progress successfully reset', userId, progressEpoch: receipt.progressEpoch,
       operationId: receipt.operationId, expectedEpoch: receipt.expectedEpoch };
   }
@@ -198,18 +204,22 @@ export class ProgressService implements OnModuleInit {
     const user = await this.findUser(userId);
     const receipt = await this.resetModel.findOne({ userId: user._id.toString(), operationId });
     if (!receipt) throw new NotFoundException({ code: 'RESET_NOT_COMMITTED', message: 'No committed reset receipt found' });
-    return this.resetResult(userId, expectedEpoch, receipt);
+    const result = this.resetResult(userId, expectedEpoch, receipt);
+    receiptEvent('reset.recovered', 'progress_reset', userId, operationId);
+    return result;
   }
 
   async resetProgress(userId: string, expectedEpoch: number, operationId: string) {
     this.validateResetRequest(expectedEpoch, operationId);
     const result = (receipt: ProgressReset) => this.resetResult(userId, expectedEpoch, receipt);
     const session = await this.connection.startSession();
+    let created = false;
     try {
-      return await session.withTransaction(async () => {
+      const outcome = await observedTransaction(session, 'progress', async () => {
+        created = false;
         const user = await this.findUser(userId, session);
         const receipt = await this.resetModel.findOne({ userId: user._id.toString(), operationId }).session(session);
-        if (receipt) return result(receipt);
+        if (receipt) { receiptEvent('receipt.replay', 'progress_reset', userId, operationId); return result(receipt); }
         this.assertEpoch(expectedEpoch, user.progressEpoch ?? 0, true);
         const [saved] = await this.resetModel.create([{
           userId: user._id.toString(), operationId, expectedEpoch, progressEpoch: expectedEpoch + 1,
@@ -219,12 +229,15 @@ export class ProgressService implements OnModuleInit {
           totalXp: 0, streak: 0, level: 'Beginner', xpPerLanguage: {}, levelPerLanguage: {},
           progressEpoch: expectedEpoch + 1,
         } }, { session });
+        created = true;
         return result(saved);
       }, { readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' } });
+      if (created) receiptEvent('receipt.created', 'progress_reset', userId, operationId);
+      return outcome;
     } catch (error) {
       if (error?.code === 11000) {
         const winner = await this.resetModel.findOne({ userId, operationId });
-        if (winner) return result(winner);
+        if (winner) { receiptEvent('receipt.replay', 'progress_reset', userId, operationId); return result(winner); }
       }
       throw error;
     } finally { await session.endSession(); }

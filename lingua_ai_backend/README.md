@@ -4,6 +4,11 @@ A clean NestJS backend for the LinguaAI English learning application.
 
 ## Getting Started
 
+Production requirements, offline preflight, credential rotation and client release
+configuration are documented in [Production configuration](../PRODUCTION_CONFIGURATION.md).
+Build first, inject `NODE_ENV=production` and the required configuration, then run
+`npm run validate:prod` and `npm run start:prod`. Production ignores local `.env`.
+
 1.  **Install dependencies**:
     ```bash
     npm install
@@ -19,6 +24,11 @@ A clean NestJS backend for the LinguaAI English learning application.
 
 ### 1. Health & System
 *   **GET `/health`**: Returns system status and timestamp.
+*   **GET `/health/live`**: Cheap process liveness, independent of Mongo/providers.
+*   **GET `/health/ready`**: Cached core readiness; 503 for database, transaction,
+    critical-index or upload-storage failure. Production gates business traffic
+    until ready. See the production contract for verify-only schema provisioning
+    and bounded SIGTERM/SIGINT draining.
 
 ### 2. Authentication
 *   **POST `/auth/register`**: Register a new user.
@@ -49,8 +59,8 @@ A clean NestJS backend for the LinguaAI English learning application.
 
 ## Community image storage
 
-Community images use `UPLOAD_ROOT` (absolute or relative to the backend working
-directory), defaulting to `<backend working directory>/uploads`. Writing,
+Community images require an explicit absolute `UPLOAD_ROOT` in production.
+Development accepts relative paths and defaults to `<backend working directory>/uploads`. Writing,
 serving and cleanup use the same resolved root. Keep this directory on persistent
 writable storage owned by the backend service; multiple backend instances must
 share that storage. Unshared instance disks and ephemeral deployment filesystems
@@ -90,6 +100,28 @@ limits follow [Sharp input options](https://sharp.pixelplumbing.com/api-construc
 and [output options](https://sharp.pixelplumbing.com/api-output/).
 
 ## Durable sync receipt retention
+
+The [Phase 8F runbooks](../PRODUCTION_RUNBOOKS.md) cover controlled index provisioning,
+coordinated DB/upload/receipt restore, offline replay, client compatibility and fleet
+capacity. After building, run `npm run preflight:deploy` from the reviewed release
+checkout with injected production environment. It reads local metadata only, never
+connects to Mongo or mutates indexes/files, and does not certify remote readiness.
+
+Phase 8E requires a separate `PRONUNCIATION_SERVICE_TOKEN` when pronunciation is
+enabled in production. The backend forwards it only to the internal transcriber,
+rejects redirects there, and retains 8D deadlines/redaction. See the
+[pronunciation production contract](../lingua_ai_pronunciation_service/README.md).
+
+Phase 8D provides JSON operational events, X-Request-ID correlation, safe log
+redaction and bounded provider transport. See the
+[production diagnostics contract](../PRODUCTION_CONFIGURATION.md#phase-8d-structured-diagnostics-and-bounded-providers)
+for deadlines, explicit retry policy, counters and lifecycle event names.
+
+Production abuse limits, trusted proxy policy, CORS enforcement, headers, error
+redaction and input limits are documented in
+[PRODUCTION_CONFIGURATION.md](../PRODUCTION_CONFIGURATION.md#phase-8c-http-abuse-and-browser-boundary).
+Limits are per-process; coordinated multi-instance abuse controls require ingress
+or shared infrastructure. Committed replay preserves provider-budget exemptions.
 
 There is no enforced maximum replay age. Offline requests may return months or
 years later; timestamps are diagnostic, never permission to reuse operation keys.

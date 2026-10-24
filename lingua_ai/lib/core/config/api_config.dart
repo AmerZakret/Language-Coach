@@ -2,6 +2,51 @@ import 'package:flutter/foundation.dart';
 import 'dart:io' show Platform;
 
 class ApiConfig {
+  /// Runs before services/queues start, and on every endpoint lookup.
+  /// Flutter calls pronunciation through the backend; there is no second URL.
+  static String validateEndpoint(String value, {required bool release}) {
+    final raw = value.trim();
+    final uri = Uri.tryParse(raw);
+    if (release) {
+      final host = uri?.host
+              .toLowerCase()
+              .replaceAll(RegExp(r'\.$'), '')
+              .replaceAll(RegExp(r'^\[|\]$'), '') ??
+          '';
+      final local = host == 'localhost' ||
+          host.endsWith('.localhost') ||
+          host.endsWith('.local') ||
+          host == 'host.docker.internal' ||
+          RegExp(r'^[0:]*1?$').hasMatch(host) ||
+          RegExp(r'^(::|(?:0*:){5})ffff:').hasMatch(host) ||
+          RegExp(r'^(127|0|10)\.').hasMatch(host) ||
+          RegExp(r'^192\.168\.').hasMatch(host) ||
+          RegExp(r'^172\.(1[6-9]|2\d|3[01])\.').hasMatch(host) ||
+          RegExp(r'^169\.254\.').hasMatch(host) ||
+          RegExp(r'^(0x[\da-f]+|\d+)$').hasMatch(host) ||
+          RegExp(r'(^|\.)0\d').hasMatch(host) ||
+          RegExp(r'^f[cd][\da-f]{2}:').hasMatch(host) ||
+          RegExp(r'^fe[89ab][\da-f]:').hasMatch(host);
+      if (uri == null ||
+          uri.scheme != 'https' ||
+          host.isEmpty ||
+          local ||
+          uri.userInfo.isNotEmpty ||
+          uri.hasQuery ||
+          uri.hasFragment) {
+        throw StateError(
+            'Release requires --dart-define=API_URL with an explicit public HTTPS backend URL.');
+      }
+    }
+    return raw.replaceAll(RegExp(r'/+$'), '');
+  }
+
+  static void validateReleaseConfiguration() {
+    if (kReleaseMode) {
+      validateEndpoint(const String.fromEnvironment('API_URL'), release: true);
+    }
+  }
+
   // Set this to your computer's local IP address when testing on a physical device.
   // You can find your computer's IP address by running 'ipconfig' (currently 192.168.1.102).
   static const String localComputerIp = '192.168.1.102';
@@ -12,6 +57,7 @@ class ApiConfig {
 
   static String get baseUrl {
     const envUrl = String.fromEnvironment('API_URL');
+    if (kReleaseMode) return validateEndpoint(envUrl, release: true);
     if (envUrl.isNotEmpty) {
       return envUrl;
     }

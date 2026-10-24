@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsOptional, IsString, IsInt, Min, MaxLength } from 'class-validator';
+import { IsOptional, IsString, IsInt, Min, MaxLength, IsIn } from 'class-validator';
 
 export class UpdateCommunityPostDto {
   @Type(() => Number)
@@ -12,5 +12,6 @@ export class UpdateCommunityPostDto {
   text?: string;
 
   @IsOptional()
-  removeImage?: any;
+  @IsIn([true, false, 'true', 'false'])
+  removeImage?: boolean | string;
 }

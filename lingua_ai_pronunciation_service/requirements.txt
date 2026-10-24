@@ -1,4 +1,8 @@
-fastapi
-uvicorn
-faster-whisper
-python-multipart
+# Tested on Python 3.12. The bounded parser uses pinned Starlette extension points.
+fastapi==0.136.3
+starlette==1.1.0
+uvicorn==0.48.0
+faster-whisper==1.2.1
+python-multipart==0.0.29
+av==17.0.1
+numpy==2.4.6

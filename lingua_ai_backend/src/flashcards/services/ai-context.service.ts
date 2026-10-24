@@ -1,20 +1,23 @@
+import { providerJson, ProviderFailure } from '../../operations/provider-client';
+import { telemetry } from '../../operations/telemetry';
 import { targetLanguageCode, TARGET_LANGUAGE_NAMES } from '../../common/target-language';
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Optional, HttpException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { featureEnabled } from '../../config/runtime-config';
+import { ProviderBudget } from '../../security/provider-budget';
+import { OUTPUT_TOKENS } from '../../security/abuse-policy';
 
 @Injectable()
 export class AiContextService {
-  private readonly logger = new Logger(AiContextService.name);
-
-  constructor(private configService: ConfigService) {}
+  constructor(private configService: ConfigService, @Optional() private readonly budget?: ProviderBudget) {}
 
   async generateContext(word: string, translation: string, targetLanguage: string) {
     const language = TARGET_LANGUAGE_NAMES[targetLanguageCode(targetLanguage)];
     const apiKey = this.configService.get<string>('GEMINI_API_KEY')?.trim();
     const model = (this.configService.get<string>('GEMINI_MODEL') || 'gemini-2.5-flash').trim();
 
-    if (!apiKey) {
-      this.logger.warn('GEMINI_API_KEY not found, returning placeholder context');
+    if (!featureEnabled(this.configService, 'AI_ENABLED') || !apiKey) {
+      telemetry.emit('provider.disabled', { dependency: 'flashcard' });
       return { 
         sentences: [`Example sentence for ${word}`], 
         mnemonic: 'Mnemonic not available without API key' 
@@ -30,35 +33,34 @@ export class AiContextService {
     Do not include markdown code block formatting.`;
 
     try {
-      const response = await fetch(
+      const data = await providerJson(this.configService, this.budget, 'flashcard',
         `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             contents: [{ parts: [{ text: systemPrompt }] }],
-            generationConfig: { 
+            generationConfig: {
+              maxOutputTokens: OUTPUT_TOKENS.flashcard,
               responseMimeType: 'application/json'
             },
           }),
         },
       );
-
-      if (!response.ok) {
-        throw new Error(`Gemini API error: ${response.status}`);
-      }
-
-      const data = await response.json();
       const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      
+
       if (!text) throw new Error('Empty response from Gemini');
-      
-      return JSON.parse(text);
-    } catch (e) {
-      this.logger.error('Failed to generate AI context for flashcard', e);
-      return { 
-        sentences: [`He used the word ${word} in a sentence.`], 
-        mnemonic: 'Try to associate the sound with something familiar.' 
+
+      const context = JSON.parse(text);
+      if (!context || !Array.isArray(context.sentences) || !context.sentences.length || context.sentences.some((sentence: unknown) => typeof sentence !== 'string') || typeof context.mnemonic !== 'string')
+        throw new ProviderFailure('PROVIDER_INVALID_RESPONSE', false);
+      return context;
+    } catch (error) {
+      if (error instanceof HttpException && !(error instanceof ProviderFailure)) throw error;
+      telemetry.emit('provider.fallback', { dependency: 'flashcard', code: error instanceof ProviderFailure ? error.code : 'PROVIDER_INVALID_RESPONSE' }, 'warn');
+      return {
+        sentences: [`He used the word ${word} in a sentence.`],
+        mnemonic: 'Try to associate the sound with something familiar.'
       };
     }
   }

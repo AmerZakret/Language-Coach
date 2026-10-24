@@ -10,9 +10,11 @@ import 'services/theme_service.dart';
 import 'services/connectivity_service.dart';
 import 'services/sync_coordinator.dart';
 import 'services/offline_queue_service.dart';
+import 'core/config/api_config.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  ApiConfig.validateReleaseConfiguration();
 
   await ConnectivityService().init();
   await ThemeService().init();

@@ -1,31 +1,43 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { configureCommunityUploadServing } from './community/community-upload-serving';
+import { safeConfigSummary } from './config/runtime-config';
+import { TrafficLifecycle } from './operations/traffic-lifecycle.service';
+import { HttpSecurity } from './security/http-security';
+import { StructuredNestLogger, telemetry } from './operations/telemetry';
+import { ReadinessService } from './operations/readiness.service';
 
 async function bootstrap() {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    bodyParser: false,
+    logger: new StructuredNestLogger(),
+  });
   const configService = app.get(ConfigService);
-
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      forbidNonWhitelisted: true,
-      transform: true,
-    }),
-  );
-
-  app.enableCors();
+  app.enableShutdownHooks(['SIGTERM', 'SIGINT']);
+  const security = app.get(HttpSecurity);
+  security.install(app);
+  app.get(TrafficLifecycle).attach(app, () => process.exit(1));
+  security.installBodyParsers(app);
 
   configureCommunityUploadServing(app);
 
-  const port = configService.get<number>('PORT') || 3000;
+  const port = configService.getOrThrow<number>('PORT');
+  telemetry.emit('application.configured', {
+    ...safeConfigSummary(configService),
+    rateLimitMode: 'per_process',
+    readiness: app.get(ReadinessService).snapshot().status,
+  });
   await app.listen(port, '0.0.0.0');
-  console.log(`Application is running on: http://localhost:${port} (accessible on local network)`);
+  telemetry.emit('application.started', {
+    port,
+    readiness: app.get(ReadinessService).snapshot().status,
+  });
 }
-bootstrap().catch((err) => {
-  console.error(err);
+bootstrap().catch(() => {
+  telemetry.error('application.startup_failed', {
+    failureCategory: 'configuration_or_dependency',
+  });
   process.exit(1);
 });

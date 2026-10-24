@@ -19,6 +19,7 @@ import { CommunityModule } from './community.module';
 import { CommunityPost } from './schemas/community-post.schema';
 import { COMMUNITY_IMAGE_LIMIT, COMMUNITY_PIXEL_LIMIT, CommunityImageStorage, resolveUploadRoot } from './community-image.storage';
 import { configureCommunityUploadServing } from './community-upload-serving';
+import { telemetry } from '../operations/telemetry';
 
 // Real multipart interceptor, validation pipe, JWT strategy, filesystem, image
 // decoder and disposable MongoDB. No production upload path or database is used.
@@ -191,10 +192,10 @@ describe('Phase 7B community image safety and lifecycle', () => {
     const original = new Error('Original DB failure');
     jest.spyOn(posts.prototype, 'save').mockRejectedValue(original);
     jest.spyOn(images, 'remove').mockRejectedValue(Object.assign(new Error('cleanup'), { code: 'EACCES' }));
-    const log = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+    const log = jest.spyOn(telemetry, 'emit').mockImplementation(() => {});
     const service = app.get(require('./community.service').CommunityService);
     await expect(service.create(owner._id.toString(), owner.name, 'en', undefined, file(), crypto.randomUUID())).rejects.toMatchObject({ status: 503 });
-    expect(log).toHaveBeenCalledWith(expect.stringContaining('EACCES'));
+    expect(log).toHaveBeenCalledWith('upload.cleanup_failed', expect.objectContaining({ code: 'EACCES' }), 'warn');
     expect(await files()).toHaveLength(1);
   });
 
@@ -202,10 +203,10 @@ describe('Phase 7B community image safety and lifecycle', () => {
     const original = new Error('DB save failed');
     jest.spyOn(posts.prototype, 'save').mockRejectedValue(original);
     jest.spyOn(posts, 'exists').mockImplementation(() => ({ exec: async () => { throw new Error('DB unavailable'); } }) as any);
-    const log = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+    const log = jest.spyOn(telemetry, 'emit').mockImplementation(() => {});
     const service = app.get(require('./community.service').CommunityService);
     await expect(service.create(owner._id.toString(), owner.name, 'en', undefined, file(), crypto.randomUUID())).rejects.toMatchObject({ status: 503 });
-    expect(log).toHaveBeenCalledWith(expect.stringContaining('DB state unavailable'));
+    expect(log).toHaveBeenCalledWith('upload.cleanup_failed', expect.objectContaining({ failureCategory: 'reference_check_unavailable' }), 'warn');
     expect(await files()).toHaveLength(1);
   });
 
@@ -326,10 +327,10 @@ describe('Phase 7B community image safety and lifecycle', () => {
   it('failed deletion cleanup preserves successful DB deletion and logs the orphan', async () => {
     const post = await imagePost();
     jest.spyOn(images, 'remove').mockRejectedValue(Object.assign(new Error('cleanup'), { code: 'EACCES' }));
-    const log = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => {});
+    const log = jest.spyOn(telemetry, 'emit').mockImplementation(() => {});
     await request(app.getHttpServer()).delete(`/community/posts/${post._id}`).auth(token, { type: 'bearer' }).set('X-Idempotency-Key', crypto.randomUUID()).set('X-Resource-Revision', '0').expect(200);
     expect(await posts.findById(post._id)).toBeNull(); await fs.access(disk(post.imageUrl));
-    expect(log).toHaveBeenCalledWith(expect.stringContaining('EACCES'));
+    expect(log).toHaveBeenCalledWith('upload.cleanup_failed', expect.objectContaining({ code: 'EACCES' }), 'warn');
   });
 
   it('unique backend guests can upload their own image, and another guest cannot replace it', async () => {

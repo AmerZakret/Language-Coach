@@ -1,5 +1,6 @@
 import { tryTargetLanguage } from '../common/target-language';
 import { ReactionDto } from './dto/reaction.dto';
+import { AbusePolicy } from '../security/abuse-policy';
 
 import {
   Controller,
@@ -15,6 +16,7 @@ import {
   UseInterceptors,
   UploadedFile,
   Headers,
+  BadRequestException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
@@ -43,13 +45,17 @@ export class CommunityController {
     @Query('language') language: string,
     @Req() req: any,
   ) {
-    const pageNum = parseInt(page, 10) || 1;
-    const limitNum = parseInt(limit, 10) || 10;
+    const pageNum = page === undefined ? 1 : Number(page);
+    const limitNum = limit === undefined ? 10 : Number(limit);
+    if (!Number.isInteger(pageNum) || pageNum < 1 || pageNum > 10000 ||
+      !Number.isInteger(limitNum) || limitNum < 1 || limitNum > 50)
+      throw new BadRequestException('Invalid pagination.');
     const userId = req.user.id;
     return this.communityService.findAll(userId, pageNum, limitNum, language);
   }
 
   @Post()
+  @AbusePolicy('community-write')
   @UseInterceptors(FileInterceptor('image', communityMulterOptions))
   async createPost(
     @Body() dto: CreateCommunityPostDto,
@@ -71,6 +77,7 @@ export class CommunityController {
   }
 
   @Put(':id')
+  @AbusePolicy('community-write')
   @UseInterceptors(FileInterceptor('image', communityMulterOptions))
   async updatePost(
     @Param('id') id: string,
@@ -97,12 +104,14 @@ export class CommunityController {
   }
 
   @Delete(':id')
+  @AbusePolicy('community-write')
   async deletePost(@Param('id') id: string, @Req() req: any, @Headers('x-idempotency-key') operationId: string, @Headers('x-resource-revision') revision: string) {
     const userId = req.user.id;
     return this.communityService.delete(id, userId, operationId, revision === undefined ? undefined : Number(revision));
   }
 
   @Post(':id/like')
+  @AbusePolicy('reaction')
   async setLike(@Param('id') id: string, @Req() req: any, @Body() dto: ReactionDto, @Headers('x-idempotency-key') operationId: string) {
     const userId = req.user.id;
     return this.communityService.setLike(id, userId, dto.liked, operationId);

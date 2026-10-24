@@ -1,15 +1,21 @@
+import { providerJson, ProviderFailure } from '../operations/provider-client';
+import { telemetry } from '../operations/telemetry';
 import { targetLanguageCode, TARGET_LANGUAGE_NAMES } from '../common/target-language';
-import { Injectable, Logger, HttpException, HttpStatus } from '@nestjs/common';
+import { Injectable, HttpException, HttpStatus, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AssessPronunciationDto } from './dto/assess-pronunciation.dto';
+import { featureEnabled } from '../config/runtime-config';
+import { ProviderBudget } from '../security/provider-budget';
+import { OUTPUT_TOKENS } from '../security/abuse-policy';
 
 @Injectable()
 export class PronunciationService {
-  private readonly logger = new Logger(PronunciationService.name);
-
-  constructor(private readonly configService: ConfigService) {}
+  constructor(private readonly configService: ConfigService, @Optional() private readonly budget?: ProviderBudget) {}
 
   async assess(file: Express.Multer.File, dto: AssessPronunciationDto) {
+    if (!featureEnabled(this.configService, 'PRONUNCIATION_ENABLED')) {
+      throw new HttpException({ code: 'FEATURE_DISABLED', message: 'Pronunciation is disabled.' }, HttpStatus.SERVICE_UNAVAILABLE);
+    }
     if (!file) {
       throw new HttpException('Audio file is required', HttpStatus.BAD_REQUEST);
     }
@@ -26,6 +32,11 @@ export class PronunciationService {
       'http://localhost:8001'
     ).trim();
 
+    const serviceToken = this.configService.get<string>('PRONUNCIATION_SERVICE_TOKEN');
+    if (this.configService.get('NODE_ENV') === 'production' && !serviceToken)
+      throw new ProviderFailure('PROVIDER_CONFIGURATION', false);
+    telemetry.configure(this.configService);
+
     // 1. Send Audio to Python Whisper service
     let recognizedText = '';
     let detectedLanguage: string = targetCode;
@@ -40,32 +51,21 @@ export class PronunciationService {
       formData.append('audio', fileBlob, file.originalname || 'audio.wav');
       formData.append('language', whisperLanguage);
 
-      const response = await fetch(`${whisperUrl}/transcribe`, {
+      const data = await providerJson(this.configService, this.budget, 'pronunciation',`${whisperUrl}/transcribe`, {
         method: 'POST',
+        headers: serviceToken ? { 'X-Service-Token': serviceToken } : undefined,
+        redirect: 'error', // A redirect must never forward the service credential elsewhere.
         body: formData,
       });
 
-      if (!response.ok) {
-        const errText = await response.text();
-        this.logger.error(`Python Whisper service returned error: ${response.status} - ${errText}`);
-        throw new Error(`Whisper service error: ${response.status}`);
-      }
-
-      const data = (await response.json()) as {
-        recognizedText: string;
-        detectedLanguage: string;
-        languageProbability: number;
-      };
-
-      recognizedText = data.recognizedText || '';
+      if (typeof data.recognizedText !== 'string' || data.recognizedText.length > 4000) throw new Error('Invalid transcription response');
+      recognizedText = data.recognizedText;
       detectedLanguage = data.detectedLanguage || targetCode;
       languageProbability = data.languageProbability ?? 1.0;
     } catch (error) {
-      this.logger.error('Failed to communicate with Python Whisper service', error);
-      throw new HttpException(
-        'The pronunciation service is currently offline or unreachable. Please check if the Whisper service is running.',
-        HttpStatus.SERVICE_UNAVAILABLE,
-      );
+      if (error instanceof HttpException) throw error;
+      telemetry.emit('provider.invalid_response', { dependency: 'pronunciation' }, 'warn');
+      throw new ProviderFailure('PROVIDER_INVALID_RESPONSE', false);
     }
 
     // 2. Normalize and compute similarity
@@ -167,8 +167,8 @@ export class PronunciationService {
       try_again: 'Keep practicing! Focus on each word slowly and try again.',
     };
 
-    if (!apiKey) {
-      this.logger.warn('GEMINI_API_KEY not configured, using fallback feedback.');
+    if (!featureEnabled(this.configService, 'AI_ENABLED') || !apiKey) {
+      telemetry.emit('provider.disabled', { dependency: 'feedback' });
       return fallbackMessages[result];
     }
 
@@ -185,27 +185,24 @@ export class PronunciationService {
     - Keep it under 2 short sentences.`;
 
     try {
-      const response = await fetch(
+      const data = await providerJson(this.configService, this.budget, 'feedback',
         `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { maxOutputTokens: OUTPUT_TOKENS.feedback },
           }),
         },
       );
-
-      if (!response.ok) {
-        throw new Error(`Gemini status code: ${response.status}`);
-      }
-
-      const data = await response.json();
       const aiResponse = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
 
-      return aiResponse || fallbackMessages[result];
+      if (!aiResponse) throw new ProviderFailure('PROVIDER_INVALID_RESPONSE', false);
+      return aiResponse;
     } catch (error) {
-      this.logger.error('Failed to generate Gemini pronunciation feedback', error);
+      telemetry.emit('provider.fallback', { dependency: 'feedback', code: error instanceof ProviderFailure ? error.code
+        : error instanceof HttpException ? (error.getStatus() === 429 ? 'RATE_LIMITED' : 'LOCAL_PROVIDER_CONTROL') : 'PROVIDER_INVALID_RESPONSE' }, 'warn');
       return fallbackMessages[result];
     }
   }

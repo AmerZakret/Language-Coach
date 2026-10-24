@@ -22,10 +22,12 @@ export class UpdateFlashcardDto {
 
   @ValidateIf((_object, value) => value !== undefined)
   @IsString()
+  @MaxLength(64)
   nativeLanguage?: string;
 
   @ValidateIf((_object, value) => value !== undefined)
   @IsString()
+  @MaxLength(200)
   nativeTranslation?: string;
 
   @ValidateIf((_object, value) => value !== undefined)

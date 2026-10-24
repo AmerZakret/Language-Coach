@@ -1,9 +1,10 @@
 import { IsTargetLanguage } from '../../common/target-language';
-import { IsNotEmpty, IsOptional, IsString, IsIn } from 'class-validator';
+import { IsNotEmpty, IsOptional, IsString, IsIn, MaxLength } from 'class-validator';
 
 export class AssessPronunciationDto {
   @IsString()
   @IsNotEmpty()
+  @MaxLength(1000)
   targetText: string;
 
   @IsString()
@@ -13,10 +14,12 @@ export class AssessPronunciationDto {
 
   @IsString()
   @IsOptional()
+  @MaxLength(500)
   nativeTranslation?: string;
 
   @IsString()
   @IsOptional()
+  @MaxLength(64)
   nativeLanguage?: string;
 
   @IsString()

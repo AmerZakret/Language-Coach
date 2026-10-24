@@ -1,5 +1,5 @@
 import { targetLanguageCode, targetLanguageQuery, tryTargetLanguage } from '../common/target-language';
-import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Optional, Logger, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException, Optional, ConflictException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { ClientSession, Model, Types } from 'mongoose';
 import { CommunityPost, CommunityPostDocument } from './schemas/community-post.schema';
@@ -8,10 +8,10 @@ import { CommunityImageStorage } from './community-image.storage';
 
 import { createHash } from 'node:crypto';
 import { MutationReceipts } from '../common/mutation-receipt';
+import { telemetry } from '../operations/telemetry';
 
 @Injectable()
 export class CommunityService {
-  private readonly logger = new Logger(CommunityService.name);
   constructor(
     @InjectModel(CommunityPost.name)
     private readonly communityPostModel: Model<CommunityPostDocument>,
@@ -29,7 +29,7 @@ export class CommunityService {
       // preserved for manual reconciliation, never guessed to mean "unreferenced".
       if (await this.communityPostModel.exists({ imageUrl }).exec()) return;
     } catch {
-      this.logger.error(`Community image cleanup deferred (${operation}): DB state unavailable`);
+      telemetry.emit('upload.cleanup_failed', { domain: operation, failureCategory: 'reference_check_unavailable' }, 'warn');
       return;
     }
     await this.images.cleanup(imageUrl, operation);

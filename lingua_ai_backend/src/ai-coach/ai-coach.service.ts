@@ -1,5 +1,7 @@
+import { providerJson, ProviderFailure } from '../operations/provider-client';
+import { telemetry } from '../operations/telemetry';
 import { targetLanguageCode, targetLanguageQuery, TARGET_LANGUAGE_NAMES, languageResponse } from '../common/target-language';
-import { Injectable, Logger, NotFoundException, HttpException, HttpStatus, ServiceUnavailableException } from '@nestjs/common';
+import { Injectable, NotFoundException, HttpException, HttpStatus, ServiceUnavailableException, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import { ClientSession, Model, Types } from 'mongoose';
@@ -7,6 +9,10 @@ import { ChatMessage } from './schemas/chat-message.schema';
 import { MutationReceipts } from '../common/mutation-receipt';
 import { ChatBarrier } from './schemas/chat-barrier.schema';
 import { User } from '../users/schemas/user.schema';
+import { featureEnabled } from '../config/runtime-config';
+import { initializeDevelopmentIndexes } from '../operations/schema-startup';
+import { ProviderBudget } from '../security/provider-budget';
+import { OUTPUT_TOKENS } from '../security/abuse-policy';
 
 interface GeminiResponse {
   candidates?: Array<{
@@ -23,9 +29,6 @@ interface ParsedAIResponse {
 
 @Injectable()
 export class AiCoachService {
-  // Logger instance for tracing API interactions and errors in backend logs
-  private readonly logger = new Logger(AiCoachService.name);
-
   constructor(
     private configService: ConfigService,
     @InjectModel(ChatMessage.name)
@@ -34,9 +37,10 @@ export class AiCoachService {
     private userModel: Model<User>,
     private readonly receipts: MutationReceipts,
     @InjectModel(ChatBarrier.name) private readonly barriers: Model<ChatBarrier>,
+    @Optional() private readonly budget?: ProviderBudget,
   ) {}
 
-  async onModuleInit() { await this.barriers.createIndexes(); }
+  async onModuleInit() { await initializeDevelopmentIndexes(this.barriers); }
 
   /**
    * Resolve only the MongoDB identity supplied by an authenticated controller.
@@ -98,6 +102,7 @@ export class AiCoachService {
   }
 
   private async generateReply(message: string, language: string, targetCode: ReturnType<typeof targetLanguageCode>): Promise<ParsedAIResponse> {
+    if (!featureEnabled(this.configService, 'AI_ENABLED')) throw new ServiceUnavailableException({ code: 'FEATURE_DISABLED', message: 'AI features are disabled.' });
     // Retrieve secret variables securely from NestJS config provider (protects key from client bundles)
     const targetLangName = TARGET_LANGUAGE_NAMES[targetCode];
     const apiKey = this.configService.get<string>('GEMINI_API_KEY')?.trim();
@@ -107,8 +112,8 @@ export class AiCoachService {
 
     // Configuration failures remain retryable and never create history or a receipt.
     if (!apiKey || apiKey === 'your_gemini_api_key') {
-      this.logger.warn('GEMINI_API_KEY is not configured');
-      throw new ServiceUnavailableException({ code: 'PROVIDER_UNAVAILABLE', message: 'AI Coach is temporarily unavailable. Please try again.' });
+      telemetry.emit('provider.configuration', { dependency: 'chat' }, 'warn');
+      throw new ProviderFailure('PROVIDER_CONFIGURATION', false);
     }
 
     // Convert interface and target language codes to human-readable names for prompt construction
@@ -134,11 +139,10 @@ Do not include markdown code block formatting like \`\`\`json. Return pure JSON.
 
     try {
       // Execute async request to Google Gemini API
-      const response = await fetch(
+      const data = await providerJson(this.configService, this.budget, 'chat',
         `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
         {
           method: 'POST',
-          signal: AbortSignal.timeout(35000),
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             system_instruction: {
@@ -150,6 +154,7 @@ Do not include markdown code block formatting like \`\`\`json. Return pure JSON.
               },
             ],
             generationConfig: {
+              maxOutputTokens: OUTPUT_TOKENS.chat,
               responseMimeType: 'application/json', // Force Gemini to return a clean JSON payload
             },
           }),
@@ -157,17 +162,6 @@ Do not include markdown code block formatting like \`\`\`json. Return pure JSON.
       );
 
       // Handle raw network/API error codes (intercept quota limits securely)
-      if (!response.ok) {
-        this.logger.warn(`AI provider returned HTTP ${response.status}`);
-        if (response.status === 429) {
-          throw new Error('QUOTA_EXCEEDED');
-        }
-        throw new Error(
-          `AI provider HTTP ${response.status}`,
-        );
-      }
-
-      const data = (await response.json()) as GeminiResponse;
       const textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
 
       if (!textResponse) {
@@ -178,9 +172,10 @@ Do not include markdown code block formatting like \`\`\`json. Return pure JSON.
       if (!parsedResponse || typeof parsedResponse.reply !== 'string' || !parsedResponse.reply.trim()
         || typeof parsedResponse.correction !== 'string') throw new Error('Invalid provider response');
       return parsedResponse;
-    } catch {
-      this.logger.warn('AI chat provider unavailable');
-      throw new ServiceUnavailableException({ code: 'PROVIDER_UNAVAILABLE', message: 'AI Coach is temporarily unavailable. Please try again.' });
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      telemetry.emit('provider.invalid_response', { dependency: 'chat', failureCategory: 'invalid_response' }, 'warn');
+      throw new ProviderFailure('PROVIDER_INVALID_RESPONSE', false);
     }
   }
 
@@ -199,6 +194,8 @@ Do not include markdown code block formatting like \`\`\`json. Return pure JSON.
   ) {
     await this.findUser(userId);
 
+    if (!featureEnabled(this.configService, 'AI_ENABLED')) throw new ServiceUnavailableException({ code: 'FEATURE_DISABLED', message: 'AI features are disabled.' });
+
     const targetCode = targetLanguageCode(targetLanguage ?? 'en');
     const targetLangName = TARGET_LANGUAGE_NAMES[targetCode];
     const apiKey = this.configService.get<string>('GEMINI_API_KEY')?.trim();
@@ -207,7 +204,7 @@ Do not include markdown code block formatting like \`\`\`json. Return pure JSON.
     ).trim();
 
     if (!apiKey || apiKey === 'your_gemini_api_key') {
-      throw new HttpException('Writing evaluation is not configured yet.', HttpStatus.SERVICE_UNAVAILABLE);
+      throw new ProviderFailure('PROVIDER_CONFIGURATION', false);
     }
 
     const interfaceLangName = language === 'tr' ? 'Turkish' : 'English';
@@ -240,7 +237,7 @@ Return ONLY this JSON. Do not include markdown formatting like \`\`\`json.`;
     const prompt = `Evaluate the following user writing:\nTopic: "${topic}"\nUser text: "${text}"`;
 
     try {
-      const response = await fetch(
+      const data = await providerJson(this.configService, this.budget, 'writing',
         `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`,
         {
           method: 'POST',
@@ -255,27 +252,18 @@ Return ONLY this JSON. Do not include markdown formatting like \`\`\`json.`;
               },
             ],
             generationConfig: {
+              maxOutputTokens: OUTPUT_TOKENS.writing,
               responseMimeType: 'application/json',
             },
           }),
         },
       );
-
-      if (!response.ok) {
-        this.logger.warn(`Writing provider returned HTTP ${response.status}`);
-        throw new HttpException(
-          'Writing evaluation is temporarily unavailable. Please try again.',
-          response.status === 429 ? HttpStatus.SERVICE_UNAVAILABLE : HttpStatus.BAD_GATEWAY,
-        );
-      }
-
-      const data = (await response.json()) as GeminiResponse;
       const textResponse = data?.candidates?.[0]?.content?.parts?.[0]?.text;
       let evaluation: any;
       try {
         evaluation = JSON.parse(textResponse ?? '');
       } catch {
-        throw new HttpException('Writing provider returned an invalid evaluation.', HttpStatus.BAD_GATEWAY);
+        throw new ProviderFailure('PROVIDER_INVALID_RESPONSE', false);
       }
       const scoreFields = ['grammarScore', 'vocabularyScore', 'clarityScore', 'overallScore'];
       if (!evaluation || scoreFields.some(field => typeof evaluation[field] !== 'number'
@@ -284,7 +272,7 @@ Return ONLY this JSON. Do not include markdown formatting like \`\`\`json.`;
         || !Array.isArray(evaluation.corrections)
         || evaluation.corrections.some((item: any) => !item || ['original', 'correction', 'explanation']
           .some(field => typeof item[field] !== 'string'))) {
-        throw new HttpException('Writing provider returned an invalid evaluation.', HttpStatus.BAD_GATEWAY);
+        throw new ProviderFailure('PROVIDER_INVALID_RESPONSE', false);
       }
       // Scores are percentages (0-100), including decimals; never infer a second scale.
       return {
@@ -299,9 +287,9 @@ Return ONLY this JSON. Do not include markdown formatting like \`\`\`json.`;
     } catch (error) {
       if (error instanceof HttpException) throw error;
       if (error instanceof SyntaxError) {
-        throw new HttpException('Writing provider returned an invalid evaluation.', HttpStatus.BAD_GATEWAY);
+        throw new ProviderFailure('PROVIDER_INVALID_RESPONSE', false);
       }
-      this.logger.warn('Writing evaluation provider could not be reached');
+      telemetry.emit('provider.invalid_response', { dependency: 'writing' }, 'warn');
       throw new HttpException('Writing evaluation is temporarily unavailable. Please try again.', HttpStatus.SERVICE_UNAVAILABLE);
     }
   }
