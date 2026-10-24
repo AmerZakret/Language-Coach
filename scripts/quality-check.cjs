@@ -3,6 +3,8 @@ const { createHash, randomBytes } = require('node:crypto');
 const { readFileSync, existsSync } = require('node:fs');
 const { resolve, join } = require('node:path');
 const root = resolve(__dirname, '..');
+const qualityBuildId = process.env.QUALITY_BUILD_ID || 'quality-check';
+if (!/^[A-Za-z0-9._-]{1,96}$/.test(qualityBuildId)) throw new Error('QUALITY_BUILD_ID must be a bounded public identifier.');
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const flutter = process.platform === 'win32' ? 'flutter.bat' : 'flutter';
 const git = args => execFileSync('git', args, { cwd: root, encoding: 'utf8' });
@@ -13,7 +15,10 @@ function snapshot() {
 }
 // Never pass inherited application credentials/configuration into quality checks.
 const safeEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) =>
-  !/^(NODE_ENV|MONGODB_URI|JWT_SECRET|GEMINI_.*|AI_ENABLED|PRONUNCIATION_.*|WHISPER_.*|CORS_ORIGINS|UPLOAD_ROOT|VITE_.*|ALLOW_LOCAL_.*|TRUST_PROXY)$/.test(name)));
+  !/^(CLIENT_PROTOCOL_POLICY|RELEASE_BUILD_ID|NODE_ENV|MONGODB_URI|JWT_SECRET|GEMINI_.*|AI_ENABLED|PRONUNCIATION_.*|WHISPER_.*|CORS_ORIGINS|UPLOAD_ROOT|VITE_.*|ALLOW_LOCAL_.*|TRUST_PROXY)$/.test(name)));
+// Keep disposable Mongo binaries in the ignored test dependency cache, not in
+// a developer database directory. CI may download only this test server binary.
+safeEnv.MONGOMS_DOWNLOAD_DIR ||= join(root, 'lingua_ai_backend/node_modules/.cache/mongodb-memory-server');
 function run(command, args, cwd = root, env = {}) {
   console.log(`\n> ${command} ${args.join(' ')} [${cwd === root ? '.' : cwd.slice(root.length + 1)}]`);
   // cmd.exe is needed only for fixed npm/flutter .cmd/.bat launchers on Windows.
@@ -26,18 +31,20 @@ const jobs = {
   backend() {
     const cwd = join(root, 'lingua_ai_backend');
     run(npm, ['run', 'build'], cwd); run(npm, ['test'], cwd); run(npm, ['run', 'test:e2e'], cwd);
+    run(process.execPath, ['scripts/check-release-contract.cjs']);
     run(process.execPath, ['scripts/lint-ratchet.cjs', 'backend']);
   },
   web() {
     const cwd = join(root, 'lingua_ai_web');
     run(npm, ['ls'], cwd); run(npm, ['test'], cwd);
-    run(npm, ['run', 'build'], cwd, { VITE_API_URL: 'https://api.example.invalid' });
+    run(npm, ['run', 'build'], cwd, { VITE_API_URL: 'https://api.example.invalid', VITE_BUILD_ID: qualityBuildId });
+    run(process.execPath, ['scripts/check-release-contract.cjs']);
     run(process.execPath, ['scripts/lint-ratchet.cjs', 'web']);
   },
   flutter() {
     const cwd = join(root, 'lingua_ai');
     run(flutter, ['pub', 'get', '--enforce-lockfile'], cwd);
-    run(flutter, ['test'], cwd); run(flutter, ['analyze'], cwd);
+    run(flutter, ['test', `--dart-define=BUILD_ID=${qualityBuildId}`], cwd); run(flutter, ['analyze'], cwd);
   },
   pronunciation() {
     const cwd = join(root, 'lingua_ai_pronunciation_service');
@@ -48,7 +55,7 @@ const jobs = {
   release() {
     const cwd = join(root, 'lingua_ai_backend');
     run(npm, ['run', 'build'], cwd);
-    const env = { NODE_ENV: 'production', MONGODB_URI: 'mongodb://db.example.invalid/quality',
+    const env = { CLIENT_PROTOCOL_POLICY: 'ENFORCE_MUTATIONS', RELEASE_BUILD_ID: qualityBuildId, NODE_ENV: 'production', MONGODB_URI: 'mongodb://db.example.invalid/quality',
       JWT_SECRET: randomBytes(48).toString('base64'), AI_ENABLED: 'false', PRONUNCIATION_ENABLED: 'false',
       CORS_ORIGINS: 'https://app.example.invalid', UPLOAD_ROOT: resolve(root, '.quality-upload-contract') };
     run(npm, ['run', 'validate:prod'], cwd, env); run(npm, ['run', 'preflight:deploy'], cwd, env);

@@ -1,3 +1,4 @@
+import apiClient from '../api/apiClient';
 import React, { createContext, useContext, useState, useEffect, useLayoutEffect, useRef } from 'react';
 import type { User } from '../types/auth';
 import { fetchMe } from '../api/authApi';
@@ -69,10 +70,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     let user = localGuestUser;
     let token: string | null = null;
     try {
-      const response = await fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:3000'}/auth/guest`,
-        { method: 'POST', headers: { 'Content-Type': 'application/json' } });
-      if (!response.ok) throw new Error('Guest login failed');
-      const data = await response.json();
+      const response = await apiClient.post('/auth/guest');
+      const data = response.data;
       if (!isBackendGuestUser(data.user) || typeof data.access_token !== 'string' || !data.access_token.trim()) throw new Error('Invalid guest session');
       user = data.user; token = data.access_token;
     } catch { /* Tokenless local guest when backend guest creation is unavailable. */ }

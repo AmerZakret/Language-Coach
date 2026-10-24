@@ -197,6 +197,7 @@ describe('8F operator runbook safety contracts', () => {
 describe('8F local deployment preflight (no connections or writes)', () => {
   const production = () => ({
     NODE_ENV: 'production',
+    CLIENT_PROTOCOL_POLICY: 'ALLOW_LEGACY',
     MONGODB_URI: 'mongodb://db.example.invalid/language',
     JWT_SECRET: randomBytes(48).toString('base64'),
     AI_ENABLED: 'false',

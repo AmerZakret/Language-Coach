@@ -1,3 +1,4 @@
+import { ClientUpdateRequired, compatibilityCode } from './releaseCompatibility';
 export const REPLAY_TIMEOUT_MS = 45_000;
 export const RETRY_BASE_MS = 5_000;
 export const RETRY_MAX_MS = 300_000;
@@ -18,6 +19,8 @@ export class InvalidQueuedPayload extends Error {
 }
 export function classifySyncFailure(error: any): { category: string; terminal: boolean; code?: string; status?: number } {
   const status = error?.response?.status;
+  if (error instanceof ClientUpdateRequired || (status === 426 && compatibilityCode(error?.response?.data?.code)))
+    return { category: 'compatibility', terminal: false, status: 426 };
   const rawCode = error instanceof InvalidQueuedPayload ? error.code : error?.response?.data?.code;
   const code = typeof rawCode === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(rawCode) ? rawCode : undefined;
   const known: Record<string, string> = { STALE_PROGRESS_EPOCH: 'stale-epoch', FUTURE_PROGRESS_EPOCH: 'future-epoch',

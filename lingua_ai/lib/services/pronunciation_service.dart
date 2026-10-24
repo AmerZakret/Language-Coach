@@ -1,7 +1,7 @@
 import '../core/localization/target_language.dart';
 import 'dart:convert';
 import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:http/http.dart' as http;
+import 'backend_http.dart' as http;
 import '../core/config/api_config.dart';
 import '../models/pronunciation_assessment_result.dart';
 import 'auth_service.dart';
@@ -57,7 +57,7 @@ class PronunciationService {
 
       // Send the request
       final response = await apiRequest(
-          () async => http.Response.fromStream(await request.send()), session);
+          () async => http.sendMultipart(request), session);
 
       if (response.statusCode == 200 || response.statusCode == 201) {
         final decoded = json.decode(response.body);

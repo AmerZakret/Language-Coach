@@ -1,6 +1,7 @@
 const { execFileSync } = require('node:child_process');
-const { readFileSync, existsSync } = require('node:fs');
-const { resolve, relative } = require('node:path');
+const { readFileSync, existsSync, mkdtempSync, symlinkSync, copyFileSync, rmSync } = require('node:fs');
+const { resolve, relative, join, dirname, basename } = require('node:path');
+const { tmpdir } = require('node:os');
 const root = resolve(__dirname, '..');
 // Reviewed 9A baseline. Compare source diagnostics, not a suppression/count file.
 // CI fetches this history; a missing baseline fails closed.
@@ -34,6 +35,24 @@ function productionGraph() {
   if ([...seen].some(file => /[\\/]new_components[\\/]/.test(file))) throw new Error('Prototype code entered production graph; remove its type/lint exclusions before release.');
   console.log(`Production graph: ${seen.size} source modules; new_components is PROTOTYPE_REFERENCE (zero imports).`);
 }
+function baselineTree(component) {
+  const temporary = mkdtempSync(join(tmpdir(), 'lingua-lint-'));
+  const cleanup = () => {
+    if (dirname(resolve(temporary)) !== resolve(tmpdir()) || !basename(temporary).startsWith('lingua-lint-')) throw new Error('Unsafe lint fixture cleanup path.');
+    rmSync(temporary, { recursive: true, force: true });
+  };
+  try {
+    const archive = execFileSync('git', ['archive', '--format=tar', BASE, `lingua_ai_${component}`], { cwd: root, maxBuffer: 32 * 1024 * 1024 });
+    execFileSync('tar', ['-xf', '-', '-C', temporary], { input: archive });
+    const cwd = join(temporary, `lingua_ai_${component}`);
+    symlinkSync(join(root, `lingua_ai_${component}`, 'node_modules'), join(cwd, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir');
+    // The same current rules/toolchain evaluate both trees. Only source/program
+    // context differs; never lint old text against the current TS type graph.
+    const config = component === 'backend' ? 'eslint.config.mjs' : 'eslint.config.js';
+    copyFileSync(join(root, `lingua_ai_${component}`, config), join(cwd, config));
+    return { cwd, cleanup };
+  } catch (error) { cleanup(); throw error; }
+}
 async function main(component) {
   if (!['backend', 'web'].includes(component)) throw new Error('Select backend or web.');
   const cwd = resolve(root, `lingua_ai_${component}`);
@@ -45,31 +64,46 @@ async function main(component) {
   const baselineFiles = new Set(git(['ls-tree', '-r', '--name-only', BASE, '--', `lingua_ai_${component}`]).trim().split('\n'));
   const changedFiles = new Set(git(['diff', '--name-only', BASE, '--', `lingua_ai_${component}`]).trim().split('\n'));
   let errors = 0, warnings = 0, newIssues = 0;
-  for (const file of paths) {
-    const full = resolve(root, file);
-    if (await eslint.isPathIgnored(full)) continue;
-    const source = readFileSync(full, 'utf8');
-    const [current] = await eslint.lintText(source, { filePath: full });
-    errors += current.errorCount; warnings += current.warningCount;
-    let oldSource;
-    if (baselineFiles.has(file)) oldSource = changedFiles.has(file) ? git(['show', `${BASE}:${file}`]) : source;
-    let previous = [];
-    if (oldSource !== undefined) {
-      if (source.replace(/\r\n/g, '\n') === oldSource.replace(/\r\n/g, '\n')) previous = fingerprints(current, source);
-      else previous = fingerprints((await eslint.lintText(oldSource, { filePath: full }))[0], oldSource);
+  const baseline = baselineTree(component);
+  try {
+    const historicalPaths = paths.filter(file => baselineFiles.has(file) && changedFiles.has(file))
+      .map(file => resolve(baseline.cwd, relative(cwd, resolve(root, file))));
+    // Type-aware parsers share a project service within a process. Evaluate the
+    // historical program in its own process so opening old source cannot alter
+    // the current program's symbols or produce position-dependent diagnostics.
+    const program = `const {ESLint}=require(${JSON.stringify(resolve(cwd, 'node_modules/eslint'))});
+      (async()=>{const e=new ESLint({cwd:process.cwd(),fix:false});const results=await e.lintFiles(JSON.parse(process.argv[1]));
+      process.stdout.write(JSON.stringify(results.map(r=>({filePath:r.filePath,messages:r.messages}))));})().catch(e=>{console.error(e.message);process.exitCode=1;});`;
+    const historical = historicalPaths.length ? JSON.parse(execFileSync(process.execPath, ['-e', program, JSON.stringify(historicalPaths)],
+      { cwd: baseline.cwd, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 })) : [];
+    const history = new Map(historical.map(result => [result.filePath, result]));
+    const results = await eslint.lintFiles(paths.map(file => resolve(root, file)));
+    for (const current of results) {
+      const full = current.filePath, file = relative(root, full).replaceAll('\\', '/');
+      const source = readFileSync(full, 'utf8');
+      errors += current.errorCount; warnings += current.warningCount;
+      let previous = [];
+      if (baselineFiles.has(file)) {
+        if (!changedFiles.has(file)) previous = fingerprints(current, source);
+        else {
+          const historicalPath = resolve(baseline.cwd, relative(cwd, full));
+          const oldResult = history.get(historicalPath);
+          if (!oldResult) throw new Error('Missing historical lint result; refusing to grandfather diagnostics.');
+          previous = fingerprints(oldResult, readFileSync(historicalPath, 'utf8'));
+        }
+      }
+      for (const { message } of novel(fingerprints(current, source), previous)) {
+        newIssues++; console.error(`${file}:${message.line}:${message.column} ${message.ruleId || 'parse'} ${message.message.split('\n')[0]}`);
+      }
+      const critical = new Set(['no-undef', 'no-unreachable', 'no-async-promise-executor', 'react-hooks/rules-of-hooks']);
+      for (const message of current.messages.filter(message => critical.has(message.ruleId))) {
+        newIssues++; console.error(`${file}:${message.line} critical: ${message.ruleId}`);
+      }
     }
-    for (const { message } of novel(fingerprints(current, source), previous)) {
-      newIssues++; console.error(`${relative(root, full)}:${message.line}:${message.column} ${message.ruleId || 'parse'} ${message.message.split('\n')[0]}`);
-    }
-    // These core defects may never be grandfathered, even in untouched source.
-    const critical = new Set(['no-undef', 'no-unreachable', 'no-async-promise-executor', 'react-hooks/rules-of-hooks']);
-    for (const message of current.messages.filter(message => critical.has(message.ruleId))) {
-      newIssues++; console.error(`${file}:${message.line} critical: ${message.ruleId}`);
-    }
-  }
+  } finally { baseline.cleanup(); }
   console.log(`${component} read-only lint: ${errors} existing/current errors, ${warnings} warnings; ${newIssues} new or critical diagnostics. Historical debt is NOT clean.`);
   if (component === 'web') productionGraph();
   if (newIssues) throw new Error('Lint regression: fix new diagnostics. No auto-fix was run.');
 }
 if (require.main === module) main(process.argv[2]).catch(error => { console.error(error.message); process.exitCode = 1; });
-module.exports = { novel, fingerprints };
+module.exports = { novel, fingerprints, baselineTree };

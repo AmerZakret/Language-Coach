@@ -1,6 +1,6 @@
 import '../core/localization/target_language.dart';
 import 'dart:convert';
-import 'package:http/http.dart' as http;
+import 'backend_http.dart' as http;
 import '../core/config/api_config.dart';
 import '../models/flashcard.dart';
 import 'auth_service.dart';
@@ -36,14 +36,14 @@ class FlashcardApiService {
     String? nativeTranslation,
     String? exampleSentence,
     String? note,
-    String? operationId,
+    required String operationId,
     bool preserveLegacyLanguage = false,
   }) async {
     try {
       final session = AuthService().captureSession();
       final headers = <String, String>{
         'Content-Type': 'application/json',
-        if (operationId != null) 'X-Idempotency-Key': operationId,
+        'X-Idempotency-Key': operationId,
       };
       final token = AuthService().token;
       if (token.isNotEmpty) {
@@ -91,14 +91,14 @@ class FlashcardApiService {
     String? nativeTranslation,
     String? exampleSentence,
     String? note,
-    String? operationId,
+    required String operationId,
     bool preserveLegacyLanguage = false,
   }) async {
     try {
       final session = AuthService().captureSession();
       final headers = <String, String>{
         'Content-Type': 'application/json',
-        if (operationId != null) 'X-Idempotency-Key': operationId,
+        'X-Idempotency-Key': operationId,
       };
       final token = AuthService().token;
       if (token.isNotEmpty) {
@@ -140,11 +140,11 @@ class FlashcardApiService {
     }
   }
 
-  Future<void> deleteFlashcard(String cardId, {String? operationId}) async {
+  Future<void> deleteFlashcard(String cardId, {required String operationId}) async {
     try {
       final session = AuthService().captureSession();
       final headers = <String, String>{};
-      if (operationId != null) headers['X-Idempotency-Key'] = operationId;
+      headers['X-Idempotency-Key'] = operationId;
       final token = AuthService().token;
       if (token.isNotEmpty) {
         headers['Authorization'] = 'Bearer $token';
@@ -239,12 +239,12 @@ class FlashcardApiService {
   }
 
   Future<FlashcardMutationResult> reviewCard(String cardId, int score,
-      {String? operationId}) async {
+      {required String operationId}) async {
     try {
       final session = AuthService().captureSession();
       final headers = <String, String>{
         'Content-Type': 'application/json',
-        if (operationId != null) 'X-Idempotency-Key': operationId,
+        'X-Idempotency-Key': operationId,
       };
       final token = AuthService().token;
       if (token.isNotEmpty) {

@@ -18,7 +18,7 @@ function harness() {
     const file = resolve(__dirname, '../src', path);
     if (modules.has(file)) return modules.get(file).exports;
     const module = { exports: {} }; modules.set(file, module);
-    vm.runInNewContext(ts.transpileModule(readFileSync(file, 'utf8'), { compilerOptions: {
+    vm.runInNewContext(ts.transpileModule(readFileSync(file, 'utf8').replaceAll('import.meta.env.VITE_API_URL', 'undefined'), { compilerOptions: {
       module: ts.ModuleKind.CommonJS, esModuleInterop: true,
     } }).outputText, { module, exports: module.exports, localStorage, console,
       require: name => {

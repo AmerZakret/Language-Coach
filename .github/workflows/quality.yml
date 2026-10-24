@@ -3,6 +3,8 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+env:
+  QUALITY_BUILD_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}
 permissions:
   contents: read
 concurrency:
@@ -99,6 +101,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22.14.0'

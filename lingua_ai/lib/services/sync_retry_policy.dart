@@ -1,3 +1,4 @@
+import 'client_compatibility.dart';
 import 'dart:async';
 import 'api_response.dart';
 
@@ -35,6 +36,9 @@ class SyncFailure {
             : error is InvalidQueuedPayload
                 ? error.code
                 : null;
+    if (error is ClientCompatibilityException || error is ApiException && error.kind == ApiFailure.compatibility || status == 426 && ClientCompatibility.isCompatibilityCode(code)) {
+      return SyncFailure('compatibility', false, code, 426);
+    }
     const known = {
       'STALE_PROGRESS_EPOCH': 'stale-epoch',
       'FUTURE_PROGRESS_EPOCH': 'future-epoch',

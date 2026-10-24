@@ -59,7 +59,7 @@ function origin() {
       createElement:(type,props,...children)=>({type,props:{...props,children:children.length===1?children[0]:children}}),
     };
     const requestInterceptors=[],responseInterceptors=[];
-    tab.dispatch=async req=>req.url.includes('complete-lesson')?{data:{data:{progressEpoch:req.data.progressEpoch}}}
+    tab.dispatch=async req=>req.url === '/auth/guest' ? {data:await (await tab.fetchGuest()).json()} : req.url.includes('complete-lesson')?{data:{data:{progressEpoch:req.data.progressEpoch}}}
       : req.url.startsWith('/progress/') && req.method==='delete'?{data:{progressEpoch:req.data.expectedEpoch+1}}
       : {data:{_id:`server-${req.headers['X-Idempotency-Key']}`}};
     const transport={interceptors:{request:{use:fn=>requestInterceptors.push(fn)},response:{use:(success,failure)=>responseInterceptors.push({success,failure})}}};

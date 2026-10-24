@@ -26,3 +26,18 @@ test('new quality tooling and real DOM regression use read-only core ESLint chec
   assert.equal(results.reduce((count, result) => count + result.errorCount + result.warningCount, 0), 0,
     JSON.stringify(results.flatMap(result => result.messages)));
 });
+
+test('historical lint tree is isolated and cleanup preserves current dependencies', () => {
+  const { baselineTree } = require('./lint-ratchet.cjs');
+  const { readFileSync, existsSync } = require('node:fs');
+  const { resolve } = require('node:path');
+  const fixture = baselineTree('backend'); const temporary = fixture.cwd;
+  try {
+    const old = readFileSync(resolve(temporary, 'src/config/runtime-config.ts'), 'utf8');
+    assert.doesNotMatch(old, /CLIENT_PROTOCOL_POLICY/);
+    assert.match(readFileSync(resolve(__dirname, '../lingua_ai_backend/src/config/runtime-config.ts'), 'utf8'), /CLIENT_PROTOCOL_POLICY/);
+    assert.ok(existsSync(resolve(temporary, 'node_modules/typescript')));
+  } finally { fixture.cleanup(); }
+  assert.equal(existsSync(temporary), false);
+  assert.ok(existsSync(resolve(__dirname, '../lingua_ai_backend/node_modules/typescript')));
+});

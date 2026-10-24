@@ -140,7 +140,11 @@ rules with `fix: false`. It prints the full current production-source/test backl
 and fails every new diagnostic against the reviewed 9A commit
 `cd0d28bf108186466ef3fede14de6778cf44159d`. CI fetches history for this comparison;
 a missing baseline fails closed. No JSON suppression inventory or count threshold
-is maintained. Diagnostics match by rule, severity, message and source line,
+is maintained. Historical source is extracted into an owned temporary tree and
+linted with the same current rules in a separate process. This keeps TypeScript
+project symbols and source positions from being mixed across revisions. Tar and
+filesystem links are required (available on the selected Ubuntu runner and tested
+Windows environment); the temporary tree is removed without touching source. Diagnostics match by rule, severity, message and source line,
 with occurrence counts: moving unchanged debt is tolerated, adding another
 occurrence or changing the offending line is not. Changes can reduce the backlog;
 updating the baseline requires a separately reviewed change. Core undefined,
@@ -177,3 +181,28 @@ blocked. Server receipt/history exactly-once behavior remains covered by the ful
 backend tests; web tests verify transport replay with one operation ID and a
 receipt-aware fake server. No Community/AI intent persistence or protocol gating
 is introduced here.
+
+## Phase 9C compatibility and identity checks
+
+See [Release identity and client compatibility](RELEASE_COMPATIBILITY.md) for the
+protocol route inventory, explicit production policies and staged rollout.
+`node scripts/check-release-contract.cjs` executes the backend/web source constants;
+Flutter's `protocol_compatibility_test.dart` compares its compiled constant against
+that same machine-readable output. Backend HTTP tests inventory every real
+controller route, exercise enforcement/errors/CORS and all four flashcard key gates.
+Existing database suites remain the durable receipt/replay correctness gate.
+Web tests use real client/queue contexts for rejection and cross-tab preservation,
+real React DOM for the reload notice, and execute the Vite manifest plugin.
+Flutter tests use real temporary two-slot storage across compatibility rejection
+and reopening, alongside transport/header/key tests. No queue generation is upgraded
+by changing the running application's protocol constant.
+
+CI sets public `QUALITY_BUILD_ID=ci-<run>-<attempt>`; the root command passes it to
+web build configuration, Flutter test compilation, and synthetic backend release
+validation. Local quality runs use `quality-check`. Ordinary component builds use
+explicit `development` unless a public artifact ID is supplied. The root command
+validates this identifier before passing any shell argument. No source rewrite,
+package version change or private Git history is needed for build identification.
+New protocol metadata is optional for historical queue records: they remain
+headerless on replay and must be drained/reconciled before enforcement rollout.
+Compatibility failures pause execution rather than entering permanent quarantine.

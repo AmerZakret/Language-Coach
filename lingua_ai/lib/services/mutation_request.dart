@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:math';
-import 'package:http/http.dart' as http;
+import 'backend_http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 import 'auth_service.dart';
 import 'api_response.dart';
@@ -106,6 +106,6 @@ class PreparedMultipartMutation {
           next.files.add(http.MultipartFile.fromBytes(file.field, file.bytes,
               filename: file.filename, contentType: file.contentType));
         }
-        return http.Response.fromStream(await next.send());
+        return http.sendMultipart(next);
       }, session);
 }

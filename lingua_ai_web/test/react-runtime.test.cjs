@@ -88,3 +88,36 @@ test('9B real React: initial offline render performs no network work; stale sour
     assert.doesNotMatch(h.container.textContent, /Stale/); assert.deepEqual(h.errors, []);
   } finally { await h.close(); }
 });
+
+test('9C real React: new release/update-required notice renders without clearing queues or needing a service worker', async () => {
+  const { origin } = require('./helpers/browserContexts.cjs');
+  const o = origin(), tab = o.tab();
+  const store = tab.load('utils/releaseCompatibility.ts').releaseCompatibility;
+  let starts = 0, stops = 0;
+  // Network behavior is exercised by compatibility tests; this render fixture
+  // attaches the real external store while controlling only polling lifecycle.
+  store.start = () => { starts++; }; store.stop = () => { stops++; };
+  const file = resolve(__dirname, '../src/components/ReleaseCompatibilityNotice.tsx');
+  const module = { exports: {} };
+  const output = ts.transpileModule(readFileSync(file, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText;
+  vm.runInNewContext(output, { module, exports: module.exports, window: dom.window,
+    require: name => name === '../utils/releaseCompatibility' ? { releaseCompatibility: store }
+      : name === '../utils/clientProtocol' ? tab.load('utils/clientProtocol.ts') : require(name) });
+  const container = document.createElement('div'); document.body.append(container);
+  const root = createRoot(container);
+  const queueKey = 'linguaai_offline_queue_registered_fixture';
+  o.values.set(queueKey, 'retained-owner-work');
+  try {
+    await act(async () => root.render(React.createElement(module.exports.ReleaseCompatibilityNotice)));
+    assert.equal(container.textContent, ''); assert.equal(starts, 1);
+    await act(async () => store.observeRelease({ protocolRevision: 1, buildId: 'ci-new' }));
+    assert.match(container.textContent, /different deployed build/);
+    assert.equal(container.querySelector('button').textContent, 'Reload application');
+    await act(async () => store.reject());
+    assert.match(container.textContent, /Mutations are paused/);
+    assert.match(container.textContent, /preserved/);
+    assert.equal(o.values.get(queueKey), 'retained-owner-work');
+    assert.equal('serviceWorker' in dom.window.navigator, false);
+  } finally { await act(async () => root.unmount()); container.remove(); tab.close(); }
+  assert.equal(stops, 1);
+});

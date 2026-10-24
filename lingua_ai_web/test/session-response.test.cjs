@@ -90,7 +90,8 @@ function harness(initial = {}) {
     },
   };
   const jsx = (type, props) => ({ type, props });
-  const sources = { userKey: 'utils/userKey.ts', queueSession: 'utils/queueSession.ts', authStorage: 'utils/authSessionStorage.ts', coordination: 'utils/browserCoordination.ts', localGuestCards: 'utils/localGuestCards.ts',
+  const sources = {
+    protocol: 'utils/clientProtocol.ts', compatibility: 'utils/releaseCompatibility.ts', userKey: 'utils/userKey.ts', queueSession: 'utils/queueSession.ts', authStorage: 'utils/authSessionStorage.ts', coordination: 'utils/browserCoordination.ts', localGuestCards: 'utils/localGuestCards.ts',
     policy: 'utils/syncRetryPolicy.ts', guard: 'utils/useSessionGuard.ts', auth: 'context/AuthContext.tsx',
     storage: 'utils/progressStorage.ts', types: 'types/progress.ts',
     progress: 'context/ProgressContext.tsx', target: 'context/TargetLanguageContext.tsx',
@@ -129,6 +130,8 @@ function harness(initial = {}) {
       navigator: { locks: lockManager },
       document: { addEventListener() {}, removeEventListener() {} }, window: { confirm: () => true },
       require: path => {
+        if (path.endsWith('/clientProtocol')) return load('protocol');
+        if (path.endsWith('/releaseCompatibility')) return load('compatibility');
         if (path === 'react') return react;
         if (path === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment: 'fragment' };
         if (path === 'lucide-react') return new Proxy({}, { get: (_, name) => String(name) });
@@ -184,6 +187,10 @@ function harness(initial = {}) {
         };
         if (path.endsWith('/apiClient')) return Object.fromEntries(['get', 'post', 'put', 'delete'].map(method => [method,
           (url, data, config) => {
+            if (url === '/auth/guest') return Promise.resolve(h.fetchGuest()).then(async response => {
+              if (!response.ok) throw new Error('Guest login failed');
+              return { data: await response.json() };
+            });
             calls.push([method, url]);
             if (url.includes('/progress/') && method === 'post') {
               const id = url.split('/')[2]; calls.push(['complete', id, data.lessonId, data.score]);

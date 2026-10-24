@@ -1,3 +1,5 @@
+import { CLIENT_PROTOCOL_REVISION, CLIENT_PROTOCOL_HEADER, isProtocolMutation } from '../utils/clientProtocol';
+import { releaseCompatibility, compatibilityCode } from '../utils/releaseCompatibility';
 import axios from 'axios';
 import type { InternalAxiosRequestConfig } from 'axios';
 import { isOfflineQueueSessionActive, isSessionCurrent, getSessionRequestConfig, invalidateCurrentSession } from '../utils/queueSession';
@@ -19,7 +21,7 @@ for (const method of ['get', 'delete', 'head', 'options', 'post', 'put', 'patch'
   (apiClient[method] as (...args: any[]) => any) = (...args: any[]) => {
     const index = ['post', 'put', 'patch'].includes(method) ? 2 : 1;
     const config = args[index] || {};
-    if (!args[0]?.startsWith('/auth/') && !config.offlineQueueSession && !config.sessionSnapshot) {
+    if (!args[0]?.startsWith('/auth/') && args[0] !== '/compatibility' && !config.offlineQueueSession && !config.sessionSnapshot) {
       try { args[index] = { ...config, ...getSessionRequestConfig() }; }
       catch (error) { return Promise.reject(error); }
     }
@@ -30,6 +32,13 @@ for (const method of ['get', 'delete', 'head', 'options', 'post', 'put', 'patch'
 // Add a request interceptor for attaching the JWT token
 apiClient.interceptors.request.use(
   (config) => {
+    if (isProtocolMutation(config.method, config.url)) releaseCompatibility.assertMutationAllowed();
+    const protocol = (config as InternalAxiosRequestConfig & { clientProtocolRevision?: number | null }).clientProtocolRevision;
+    if (protocol === null) {
+      config.headers.delete?.(CLIENT_PROTOCOL_HEADER);
+      delete config.headers[CLIENT_PROTOCOL_HEADER];
+      delete config.headers['x-client-protocol'];
+    } else config.headers[CLIENT_PROTOCOL_HEADER] = String(protocol ?? CLIENT_PROTOCOL_REVISION);
     const queueSession = (config as InternalAxiosRequestConfig & {
       offlineQueueSession?: QueueSession;
     }).offlineQueueSession;
@@ -51,7 +60,7 @@ apiClient.interceptors.request.use(
       else { config.headers.delete?.('Authorization'); delete config.headers.Authorization; delete config.headers.authorization; }
       return config;
     }
-    if (!config.url?.startsWith('/auth/')) throw new Error('Protected request needs a captured session');
+    if (!config.url?.startsWith('/auth/') && config.url !== '/compatibility') throw new Error('Protected request needs a captured session');
     return config;
   },
   (error) => {
@@ -64,6 +73,7 @@ apiClient.interceptors.response.use(
   (response) => response,
   async (error) => {
     // Queue failures persist their authentication retry state before invalidation.
+    if (error.response?.status === 426 && compatibilityCode(error.response?.data?.code)) releaseCompatibility.reject();
     const config = error.config;
     if (error.response?.status === 401 && !config?.url?.startsWith('/auth/')
       && !config?.offlineQueueSession && config?.sessionSnapshot) {

@@ -1,7 +1,7 @@
 import 'mutation_request.dart';
 import '../core/localization/target_language.dart';
 import 'dart:convert';
-import 'package:http/http.dart' as http;
+import 'backend_http.dart' as http;
 import '../core/config/api_config.dart';
 import 'auth_service.dart';
 import 'api_response.dart';

@@ -1,3 +1,4 @@
+import 'backend_http.dart' as backend;
 import 'dart:async';
 import 'dart:convert';
 import 'package:connectivity_plus/connectivity_plus.dart';
@@ -95,8 +96,7 @@ class ConnectivityService extends ChangeNotifier {
     final client = _clientFactory();
     var reachable = false;
     try {
-      final response = await client
-          .get(Uri.parse('${ApiConfig.baseUrl}/health'))
+      final response = await backend.sendWithClient(client, http.Request('GET', Uri.parse('${ApiConfig.baseUrl}/health')))
           .timeout(_probeTimeout);
       reachable = response.statusCode == 200 &&
           jsonDecode(response.body)['status'] == 'ok';

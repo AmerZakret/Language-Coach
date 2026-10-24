@@ -1,3 +1,5 @@
+import 'api_response.dart';
+import 'client_compatibility.dart';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -179,6 +181,7 @@ class FlashcardService extends ChangeNotifier {
     String? note,
   }) async {
     final auth = AuthService();
+    if (auth.localStorageNamespace != 'local_guest') ClientCompatibility().ensureMutationAllowed();
     final isCurrent = _captureContext();
     final operationId = OfflineQueueService().createOperationId();
     final userId = auth.currentUserId.isNotEmpty ? auth.currentUserId : auth.currentUserEmail;
@@ -216,6 +219,7 @@ class FlashcardService extends ChangeNotifier {
         if (newCard.card != null) _cards.add(newCard.card!);
         await _saveLocal();
       } catch (e) {
+        if (e is ClientCompatibilityException || e is ApiException && e.kind == ApiFailure.compatibility) rethrow;
         if (!isCurrent()) return;
         debugPrint('Failed to create flashcard on backend: $e. Queueing instead.');
         await OfflineQueueService().pushAction('create-flashcard', {
@@ -275,6 +279,7 @@ class FlashcardService extends ChangeNotifier {
     String? note,
   }) async {
     final auth = AuthService();
+    if (auth.localStorageNamespace != 'local_guest') ClientCompatibility().ensureMutationAllowed();
     final isCurrent = _captureContext();
     final operationId = OfflineQueueService().createOperationId();
     final isLocal = cardId.startsWith('local_') || auth.localStorageNamespace == 'local_guest' || auth.token.isEmpty;
@@ -327,6 +332,7 @@ class FlashcardService extends ChangeNotifier {
         await _saveLocal();
         return;
       } catch (e) {
+        if (e is ClientCompatibilityException || e is ApiException && e.kind == ApiFailure.compatibility) rethrow;
         if (!isCurrent()) return;
         debugPrint('Failed to update flashcard on backend: $e. Queueing update.');
         await OfflineQueueService().pushAction('update-flashcard', payload,
@@ -363,6 +369,7 @@ class FlashcardService extends ChangeNotifier {
 
   Future<void> deleteFlashcard(String cardId) async {
     final auth = AuthService();
+    if (auth.localStorageNamespace != 'local_guest') ClientCompatibility().ensureMutationAllowed();
     final isCurrent = _captureContext();
     final operationId = OfflineQueueService().createOperationId();
     final ownerNamespace = auth.localStorageNamespace;
@@ -392,6 +399,7 @@ class FlashcardService extends ChangeNotifier {
         _deleteLocalCard(cardId);
         return;
       } catch (e) {
+        if (e is ClientCompatibilityException || e is ApiException && e.kind == ApiFailure.compatibility) rethrow;
         if (!isCurrent()) return;
         debugPrint('Failed to delete flashcard on backend: $e. Queueing delete.');
         await OfflineQueueService().pushAction('delete-flashcard', {
@@ -412,6 +420,7 @@ class FlashcardService extends ChangeNotifier {
 
   Future<void> reviewCard(Flashcard card, int score) async {
     final auth = AuthService();
+    if (auth.localStorageNamespace != 'local_guest') ClientCompatibility().ensureMutationAllowed();
     final isCurrent = _captureContext();
     final operationId = OfflineQueueService().createOperationId();
     final ownerNamespace = auth.localStorageNamespace;
@@ -450,6 +459,7 @@ class FlashcardService extends ChangeNotifier {
         await _saveLocal();
         return;
       } catch (e) {
+        if (e is ClientCompatibilityException || e is ApiException && e.kind == ApiFailure.compatibility) rethrow;
         if (!isCurrent()) return;
         debugPrint('Failed to submit review to backend: $e. Queueing review.');
         await OfflineQueueService().pushAction('review-flashcard', {

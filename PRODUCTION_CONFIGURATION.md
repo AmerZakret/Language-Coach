@@ -570,3 +570,18 @@ Service access logs/debug request dumps are disabled by the production launcher;
 configure proxy/framework logs with the same credential/header hygiene.
 Actual model/device capacity, artifact provenance and private/shared network
 deployment remain operator verification; unit tests never download Whisper.
+
+## Client protocol rollout policy
+
+Production now requires an explicit `CLIENT_PROTOCOL_POLICY`: `ALLOW_LEGACY`
+for the staged migration/reporting window or `ENFORCE_MUTATIONS` after compatible
+clients and legacy queues are coordinated. Supplied unsupported generations are
+rejected in either policy; declared current flashcard writers always require
+stable operation keys. `RELEASE_BUILD_ID` is an optional bounded public deployment
+identifier, defaulting to `development`, and must never contain secrets.
+
+See [Release identity and client compatibility](RELEASE_COMPATIBILITY.md) for the
+complete route classification, metadata/error contract, web/Flutter build IDs,
+old-tab/update handling, queue preservation and rollback limits. Backend support
+must precede new client release. A green local preflight does not verify the
+compatible cohort, authorize a policy flip, or remediate historical credentials.

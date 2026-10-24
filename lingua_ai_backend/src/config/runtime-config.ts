@@ -1,3 +1,4 @@
+import { CLIENT_PROTOCOL_HEADER } from '../compatibility/protocol-contract';
 import { mongo } from 'mongoose';
 import { isAbsolute, resolve, parse } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -6,6 +7,8 @@ import type { ConfigService } from '@nestjs/config';
 import type { CorsOptions } from '@nestjs/common/interfaces/external/cors-options.interface';
 
 export interface RuntimeConfig extends Record<string, unknown> {
+  CLIENT_PROTOCOL_POLICY: 'ALLOW_LEGACY' | 'ENFORCE_MUTATIONS';
+  RELEASE_BUILD_ID: string;
   NODE_ENV: 'development' | 'test' | 'production';
   MONGODB_URI: string;
   JWT_SECRET: string;
@@ -98,6 +101,7 @@ export function corsOptions(config: Pick<ConfigService, 'get'>): CorsOptions {
       'X-Idempotency-Key',
       'X-Resource-Revision',
       'X-Request-ID',
+      CLIENT_PROTOCOL_HEADER,
     ],
     exposedHeaders: ['Retry-After', 'X-Request-ID'],
     origin: (origin, done) => done(null, originAllowed(config, origin)),
@@ -166,6 +170,22 @@ export function validateEnvironment(
   if (!['development', 'test', 'production'].includes(mode))
     invalid('NODE_ENV', 'must be development, test or production');
   const production = mode === 'production';
+  const protocolPolicy =
+    text(env, 'CLIENT_PROTOCOL_POLICY') || (production ? '' : 'ALLOW_LEGACY');
+  if (!['ALLOW_LEGACY', 'ENFORCE_MUTATIONS'].includes(protocolPolicy))
+    invalid(
+      'CLIENT_PROTOCOL_POLICY',
+      'must explicitly be ALLOW_LEGACY or ENFORCE_MUTATIONS',
+    );
+  const buildId =
+    env.RELEASE_BUILD_ID === undefined
+      ? 'development'
+      : text(env, 'RELEASE_BUILD_ID');
+  if (!/^[A-Za-z0-9._-]{1,96}$/.test(buildId))
+    invalid(
+      'RELEASE_BUILD_ID',
+      'must be a public identifier of 1 to 96 safe characters',
+    );
   const proxy = env.TRUST_PROXY === undefined ? 'false' : env.TRUST_PROXY;
   trustedProxyPolicy(proxy);
   const uri = text(env, 'MONGODB_URI');
@@ -329,6 +349,9 @@ export function validateEnvironment(
   };
   return {
     ...env,
+    CLIENT_PROTOCOL_POLICY:
+      protocolPolicy as RuntimeConfig['CLIENT_PROTOCOL_POLICY'],
+    RELEASE_BUILD_ID: buildId,
     NODE_ENV: mode as RuntimeConfig['NODE_ENV'],
     MONGODB_URI: uri,
     JWT_SECRET: secret,
@@ -398,6 +421,9 @@ export function validateEnvironment(
 export function safeConfigSummary(config: Pick<ConfigService, 'get'>) {
   return {
     environment: config.get('NODE_ENV'),
+    clientProtocolPolicy: config.get<RuntimeConfig['CLIENT_PROTOCOL_POLICY']>(
+      'CLIENT_PROTOCOL_POLICY',
+    ),
     port: config.get('PORT'),
     aiEnabled: featureEnabled(config, 'AI_ENABLED'),
     pronunciationEnabled: featureEnabled(config, 'PRONUNCIATION_ENABLED'),

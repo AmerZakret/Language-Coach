@@ -32,6 +32,15 @@ rate/concurrency controls do not provide cluster-wide abuse protection.
 
 ## Deployment sequence
 
+Protocol rollout also requires the staged order in
+[Release identity and client compatibility](RELEASE_COMPATIBILITY.md): explicitly
+configure `ALLOW_LEGACY` for backend-first support, release compatible clients,
+reconcile/drain legacy queued work, then deliberately enable `ENFORCE_MUTATIONS`.
+Serve the matching web `/release.json` with no-cache/revalidation semantics.
+An enforcement/policy or artifact rollback must preserve receipt/epoch/barrier and
+queue contracts; prefer a compatible forward fix. This does not relax credential
+rotation before traffic.
+
 1. **Credential rotation before production traffic:** complete the rotation and
    revocation procedure below for the historical Mongo credential. Do not treat a
    configuration pass or a code change as evidence that rotation occurred.

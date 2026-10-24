@@ -72,6 +72,7 @@ async function mount(localStorage, fetch, fetchMe = async () => {
     module, exports: module.exports, localStorage, fetch,
     require: name => {
       if (name === 'react') return react;
+      if (name === '../api/apiClient') return { __esModule: true, default: { post: async () => { const response = await fetch(); if (!response.ok) throw new Error('Guest login failed'); return { data: await response.json() }; } } };
       if (name === '../api/authApi') return { fetchMe };
       if (name === '../utils/authSessionStorage') return loadUtility('authSessionStorage');
       if (name === '../utils/browserCoordination') return loadUtility('browserCoordination');

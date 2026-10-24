@@ -1,10 +1,11 @@
+import 'client_compatibility.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'auth_service.dart';
 
-enum ApiFailure { network, unauthorized, client, server }
+enum ApiFailure { network, unauthorized, client, server, compatibility }
 
 const _deferUnauthorizedInvalidation = #deferUnauthorizedInvalidation;
 
@@ -86,6 +87,10 @@ Future<http.Response> apiRequest(
     }
   } on FormatException {
     // Use the safe status-specific message for non-JSON responses.
+  }
+  if (status == 426 && ClientCompatibility.isCompatibilityCode(code)) {
+    ClientCompatibility().requireUpdate();
+    throw ApiException(ApiFailure.compatibility, 'Client update or pending-work reconciliation is required. Saved work is preserved.', 426, false, code);
   }
   final invalidated = status == 401 &&
       Zone.current[_deferUnauthorizedInvalidation] != true &&

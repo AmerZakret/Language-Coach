@@ -84,6 +84,7 @@ describe('8B readiness with disposable MongoDB and temporary storage only', () =
       connection,
       new ConfigService({
         NODE_ENV: 'production',
+        CLIENT_PROTOCOL_POLICY: 'ALLOW_LEGACY',
         READINESS_TIMEOUT_MS: 3000,
         READINESS_RECHECK_MS: 10000,
         AI_ENABLED: false,
@@ -616,6 +617,7 @@ describe('8B readiness with disposable MongoDB and temporary storage only', () =
           provide: ConfigService,
           useValue: new ConfigService({
             NODE_ENV: 'production',
+            CLIENT_PROTOCOL_POLICY: 'ALLOW_LEGACY',
             SHUTDOWN_GRACE_MS: grace,
             READINESS_TIMEOUT_MS: 1000,
           }),
@@ -855,6 +857,7 @@ describe('8B readiness with disposable MongoDB and temporary storage only', () =
           PATH: process.env.PATH,
           SystemRoot: process.env.SystemRoot,
           NODE_ENV: 'production',
+          CLIENT_PROTOCOL_POLICY: 'ALLOW_LEGACY',
           MONGODB_URI: replica.getUri(connection.name),
           ALLOW_LOCAL_MONGODB: 'true',
           JWT_SECRET: randomUUID() + randomUUID(),
