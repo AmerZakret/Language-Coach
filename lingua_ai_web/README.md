@@ -1,5 +1,9 @@
 # React + TypeScript + Vite
 
+Run `npm ci`, then `npm test` for the full Node/browser-context suite. See
+[Local test baseline](../TESTING.md) for test requirements and the documented
+prototype-only status of `src/new_components`; those files are not release inputs.
+
 Production builds require explicit `VITE_API_URL`; localhost fallback is development
 only. See [Production configuration](../PRODUCTION_CONFIGURATION.md) for endpoint
 validation and the deliberate self-hosted override.

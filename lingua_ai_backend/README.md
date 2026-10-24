@@ -2,6 +2,10 @@
 
 A clean NestJS backend for the LinguaAI English learning application.
 
+Run `npm ci`, `npm test` (includes its fresh production build), and
+`npm run test:e2e` for complete local verification. E2e owns disposable Mongo and
+uploads and ignores developer configuration. See [Local test baseline](../TESTING.md).
+
 ## Getting Started
 
 Production requirements, offline preflight, credential rotation and client release

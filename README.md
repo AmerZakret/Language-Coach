@@ -45,6 +45,9 @@ To run the backend locally, you must create a `.env` file inside the `lingua_ai_
 
 ## How to Run
 
+For complete component test commands and disposable test infrastructure, see
+[Local test baseline](TESTING.md).
+
 ### 1. Run the NestJS Backend
 ```bash
 cd lingua_ai_backend
