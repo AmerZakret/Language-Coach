@@ -5,6 +5,10 @@ connects to MongoDB/providers, creates indexes, or verifies credential rotation.
 Runtime topology/index/storage readiness is now enforced by Phase 8B below.
 The remaining Phase 8 controls are still required before deployment.
 
+Phase 8F [deployment, backup/recovery, compatibility and capacity runbooks](PRODUCTION_RUNBOOKS.md)
+define operator gates and the local `npm run preflight:deploy` check. A local pass
+never verifies remote credentials, indexes, shared storage or restore safety.
+
 ## Backend
 
 Use a supported Node runtime, install target-platform dependencies with `npm ci`,
@@ -51,7 +55,7 @@ Only set these after reviewing the deployment's network boundary:
   requests remain possible. CORS uses bearer JWTs, with credentials disabled.
 - `ALLOW_LOCAL_PRONUNCIATION=true`: permits an explicitly configured loopback
   transcription service. Private non-loopback HTTP service URLs are supported;
-  service authentication and resource limits are deferred to Phase 8E.
+  service authentication and resource limits are required by Phase 8E below.
 
 Overrides never supply missing values. Private/public DNS resolution and network
 isolation remain operator responsibilities; this offline check does not resolve
@@ -74,10 +78,15 @@ Treat that credential as compromised, even if current source reads the environme
    database operator's trusted control plane.
 2. Replace deployment secrets and the ignored local backend `.env`; do not reuse
    the exposed credential in any environment.
-3. Revoke the exposed credential and verify revocation through an authorized
-   operator workflow. Audit access as appropriate; record evidence without values.
+3. Deploy all consumers with the replacement and verify authorized access before
+   revoking the exposed credential. Terminate old sessions where supported and
+   verify revocation through an authorized operator workflow. Audit access as
+   appropriate; record evidence without values. Do not fall back to the exposed key.
 4. Run the offline preflight against the injected replacement configuration.
    A pass proves shape only, never remote revocation or credential validity.
+
+Use the [full rotation/revocation procedure](PRODUCTION_RUNBOOKS.md#credential-rotation-revocation-and-history-cleanup)
+for consumer inventory, incident evidence and separate history-cleanup policy.
 
 `CREDENTIAL ROTATION VERIFIED BY CODE: NO`
 

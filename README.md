@@ -89,5 +89,12 @@ enable `PRONUNCIATION_ALLOW_INSECURE_LOCAL=true` only on a loopback development
 service. Model downloads require explicit development opt-in. For production use
 the [internal service deployment guide](lingua_ai_pronunciation_service/README.md).
 
+## Production operations
+
+Production operators: use the [deployment and recovery runbooks](PRODUCTION_RUNBOOKS.md)
+with the [configuration contract](PRODUCTION_CONFIGURATION.md). The local backend
+`npm run preflight:deploy` is read-only and does not prove production readiness.
+
 ## Screenshots
+
 *(Add screenshots of the web dashboard, mobile app, and AI chat interface here)*

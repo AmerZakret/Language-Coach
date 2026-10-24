@@ -1,5 +1,9 @@
 # Internal pronunciation service
 
+For rollout order, backup boundaries, worker capacity and incident response use the
+[Phase 8F operator runbooks](../PRODUCTION_RUNBOOKS.md). Run configuration checks in
+this service's own environment; do not inherit backend browser CORS configuration.
+
 ## Production
 
 Python 3.12 and the direct dependencies in `requirements.txt` are the tested

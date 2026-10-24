@@ -101,6 +101,12 @@ and [output options](https://sharp.pixelplumbing.com/api-output/).
 
 ## Durable sync receipt retention
 
+The [Phase 8F runbooks](../PRODUCTION_RUNBOOKS.md) cover controlled index provisioning,
+coordinated DB/upload/receipt restore, offline replay, client compatibility and fleet
+capacity. After building, run `npm run preflight:deploy` from the reviewed release
+checkout with injected production environment. It reads local metadata only, never
+connects to Mongo or mutates indexes/files, and does not certify remote readiness.
+
 Phase 8E requires a separate `PRONUNCIATION_SERVICE_TOKEN` when pronunciation is
 enabled in production. The backend forwards it only to the internal transcriber,
 rejects redirects there, and retains 8D deadlines/redaction. See the
