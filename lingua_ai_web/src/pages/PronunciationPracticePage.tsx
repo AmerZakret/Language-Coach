@@ -46,16 +46,6 @@ export function PronunciationPracticePage() {
   const [targetText, setTargetText] = useState("");
   const [nativeTranslation, setNativeTranslation] = useState("");
 
-  if (isOffline) {
-    return (
-      <div className="flex flex-col items-center justify-center text-center p-8 border rounded-2xl h-[450px]" style={{ background: "var(--l-surface)", borderColor: "var(--l-border)", color: "var(--l-text)" }}>
-        <WifiOff size={48} className="text-amber-500 mb-4 animate-bounce" />
-        <h2 style={{ fontSize: "20px", fontWeight: 800 }}>{t("offline_only_title")}</h2>
-        <p style={{ fontSize: "14px", color: "var(--l-muted)", marginTop: "8px", maxWidth: "340px" }}>{t("offline_only_desc")}</p>
-      </div>
-    );
-  }
-  
   // Dynamic Sources Data
   const [flashcards, setFlashcards] = useState<Flashcard[]>([]);
 
@@ -72,23 +62,26 @@ export function PronunciationPracticePage() {
   const [error, setError] = useState<string | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const timerRef = useRef<any>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
 
   // Fetch Flashcards on load
   useEffect(() => {
+    if (isOffline) return;
+    let active = true;
     const fetchSources = async () => {
       try {
         if (user?.id && user.id !== "guest") {
           const fcRes = await apiClient.get(`/flashcards/all?targetLanguage=${targetLanguageCode(targetLanguage)}`);
-          setFlashcards(fcRes.data || []);
+          if (active) setFlashcards(fcRes.data || []);
         }
       } catch (e) {
         console.error("Failed to load pronunciation sources", e);
       }
     };
-    fetchSources();
-  }, [targetLanguage, user]);
+    void fetchSources();
+    return () => { active = false; };
+  }, [isOffline, targetLanguage, user]);
 
   // Reset audio & results when targetText changes
   useEffect(() => {
@@ -121,7 +114,7 @@ export function PronunciationPracticePage() {
 
   // Text-To-Speech playback
   const handleListen = () => {
-    if (!targetText.trim()) return;
+    if (isOffline || !targetText.trim()) return;
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(targetText);
     const voiceCode = targetLanguageTtsLocale(targetLanguage);
@@ -137,6 +130,7 @@ export function PronunciationPracticePage() {
   };
 
   const startRecording = async () => {
+    if (isOffline) return;
     setMicPermissionError(null);
     setAudioBlob(null);
     setAudioUrl(null);
@@ -189,7 +183,7 @@ export function PronunciationPracticePage() {
   };
 
   const handleSubmitAssessment = async () => {
-    if (!audioBlob || !targetText.trim()) return;
+    if (isOffline || !audioBlob || !targetText.trim()) return;
 
     setLoading(true);
     setError(null);
@@ -221,6 +215,17 @@ export function PronunciationPracticePage() {
     if (score >= 70) return "#F59E0B"; // Orange
     return "#EF4444"; // Red
   };
+
+  if (isOffline) {
+    return (
+      <div className="flex flex-col items-center justify-center text-center p-8 border rounded-2xl h-[450px]" style={{ background: "var(--l-surface)", borderColor: "var(--l-border)", color: "var(--l-text)" }}>
+        <WifiOff size={48} className="text-amber-500 mb-4 animate-bounce" />
+        <h2 style={{ fontSize: "20px", fontWeight: 800 }}>{t("offline_only_title")}</h2>
+        <p style={{ fontSize: "14px", color: "var(--l-muted)", marginTop: "8px", maxWidth: "340px" }}>{t("offline_only_desc")}</p>
+      </div>
+    );
+  }
+
 
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-6 animate-fade-in" style={{ background: "var(--l-bg)", minHeight: "100vh" }}>

@@ -36,7 +36,8 @@ fixture and therefore also need Node and the backend dev dependencies installed.
 They use no database.
 Native sync-store tests use temporary directories; ordinary preference fixtures
 retain their explicit test adapter. Web tests use isolated in-memory storage and
-browser-context/Web Locks simulations, not a real browser runner.
+browser-context/Web Locks simulations, plus real React DOM rendering in jsdom
+for pronunciation hook order, connectivity transitions and retained practice state.
 
 Python tests use stub model loading/inference, synthetic audio and real bounded
 PyAV decoding. They never download/load Whisper. The inference-timeout fixture
@@ -85,3 +86,94 @@ are prototype-only/unused and removed; the active CSS dependency is retained in
 devDependencies. The standalone `Design/`
 reference bundle retains its own manifest. No prototype source is moved, deleted,
 adopted into runtime or newly excluded by this phase. Prototype cleanup is separate.
+
+## Repository quality gate (Phase 9B)
+
+After `npm ci` in backend and web, `flutter pub get` in `lingua_ai`, and Python
+requirements installed in an isolated environment, run from the repository root:
+
+```sh
+node scripts/quality-check.cjs
+```
+
+The deterministic order is backend (fresh build, full tests, hermetic e2e,
+read-only lint), web (dependency tree, full tests including real React rendering,
+explicit HTTPS placeholder production build, read-only lint), Flutter (locked
+pub get, full tests, analyze), pronunciation (full stub-model tests,
+syntax/import/config/direct requirements, pip check), release configuration,
+and hygiene/tooling tests. `node scripts/quality-check.cjs <component>` also
+accepts `backend`, `web`, `flutter`, `pronunciation`, `release`, or `hygiene`.
+Set `QUALITY_PYTHON` to the Python executable in your isolated test environment;
+on Windows the existing service `venv/Scripts/python.exe` is detected, otherwise
+`python3` (Windows: `python`) is used. The script does not install Node/Python
+packages. The locked pub install may download packages; first Mongo use may
+download its disposable server binary. No Whisper model is downloaded or loaded.
+
+`.github/workflows/quality.yml` runs five independent Ubuntu 24.04 jobs with Node
+22.14.0 with explicitly selected npm 10.9.0, Flutter 3.41.7 / Dart 3.11.5, and Python 3.12.4.
+Node installs use `npm ci`; Flutter enforces its lock; Python installs both pinned
+requirements files in a fresh venv. Web/Flutter contract tests also install
+backend dev dependencies. Only npm/pip download caches keyed by manifests and
+selected toolchains are used; no env, uploads, audio, model or credential caches.
+
+All tests use disposable Mongo, temporary storage and mocked providers. The
+runner removes inherited application credentials/config from child environments.
+Release validation uses newly generated ephemeral JWT material, reserved `.invalid`
+hostnames and disabled provider features; it makes no infrastructure connections.
+Neither CI nor these commands prove rotation/revocation, live infrastructure,
+restore success, browser engine/device behavior or signing/release packaging.
+No production traffic is authorized by a green workflow.
+
+Each component snapshots source/unignored files and the index before execution,
+then fails if checks mutate them or leave unignored artifacts. Existing local
+source edits are permitted but must remain byte-for-byte unchanged. CI additionally
+requires a clean tracked tree and no untracked files after installation/checks.
+The path hygiene gate rejects caches/build output, backend runtime uploads,
+model-cache, non-example `.env` variants and signing/private-key artifacts.
+Legitimate source audio/assets and explicitly named env examples remain allowed.
+It is a precise path gate, not a claim to identify every live secret.
+
+### Read-only lint backlog policy
+
+`node scripts/lint-ratchet.cjs backend` / `web` runs the unchanged component ESLint
+rules with `fix: false`. It prints the full current production-source/test backlog
+and fails every new diagnostic against the reviewed 9A commit
+`cd0d28bf108186466ef3fede14de6778cf44159d`. CI fetches history for this comparison;
+a missing baseline fails closed. No JSON suppression inventory or count threshold
+is maintained. Diagnostics match by rule, severity, message and source line,
+with occurrence counts: moving unchanged debt is tolerated, adding another
+occurrence or changing the offending line is not. Changes can reduce the backlog;
+updating the baseline requires a separately reviewed change. Core undefined,
+unreachable, async-promise-executor and hook-order defects are forbidden even
+if historical. New root tooling and the real DOM fixture also pass core ESLint checks.
+No lint command in the quality gate uses auto-fix. The backend's
+legacy `npm run lint` developer command still includes `--fix`; do not use it as
+a read-only gate. Repository-wide cleanup/strictness migration remains deferred.
+Prototype `src/new_components` is PROTOTYPE_REFERENCE, excluded from release
+checking as documented above; each web gate verifies the actual TypeScript
+import graph from `src/main.tsx` still reaches zero prototype modules. Prototypes
+have additional historical lint debt and are not claimed clean.
+
+### Runtime regression contracts
+
+Pronunciation calls every hook on every render; offline UI is selected afterward.
+Offline mounting/connectivity changes start no source fetch or assessment. A source
+response invalidated by connectivity/language/owner effect cleanup is ignored.
+The real React tests exercise online -> offline -> online and initial offline
+mounting; they complement the existing VM suite rather than replace it.
+
+Web study reviews persist into the existing owner-locked queue before their first
+HTTP attempt, including online reviews. One stored action ID is the idempotency
+key through ambiguous acknowledgement, reconnect and page disposal. Storage
+failure prevents study advancement. After durable persistence, optimistic SRS
+state may advance; transient/auth failures remain pending under the original owner.
+Corrupt queue records are preserved and surfaced; they block review submission.
+Terminal validation/conflict actions move to existing durable quarantine, do not
+retry automatically, and display a persistent notice with a server-refresh recovery
+action. A refresh reconciles card state; intentionally reviewing again is a new
+logical review, not a retry of the quarantined action. Active study snapshots are
+not refreshed by their own queue drain; same-render duplicate submissions are
+blocked. Server receipt/history exactly-once behavior remains covered by the full
+backend tests; web tests verify transport replay with one operation ID and a
+receipt-aware fake server. No Community/AI intent persistence or protocol gating
+is introduced here.
