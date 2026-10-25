@@ -201,6 +201,7 @@ describe('8D structured operational diagnostics', () => {
         transactions: 'ok',
         indexes: 'ok',
         uploads: 'ok',
+        timeline: 'ok',
       },
       diagnostics: [],
     });
@@ -367,7 +368,10 @@ describe('8D structured operational diagnostics', () => {
         failureCategory: 'unexpected_failure',
         route: '/observed/failure',
       });
-      expect(rows.find(row => row.event === 'http.failed').stack).toContain('DiagnosticFixture.fail');
+      const failure = rows.find(
+        (row: Record<string, unknown>) => row.event === 'http.failed',
+      ) as Record<string, unknown>;
+      expect(failure.stack).toContain('DiagnosticFixture.fail');
       expect(
         JSON.stringify(rows) + JSON.stringify(response.body),
       ).not.toContain(marker);

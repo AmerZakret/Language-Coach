@@ -17,6 +17,8 @@ describe('8E internal pronunciation authentication (mocked HTTP only)', () => {
   const production = (overrides = {}) => ({
     NODE_ENV: 'production',
     CLIENT_PROTOCOL_POLICY: 'ALLOW_LEGACY',
+    DATA_TIMELINE_ID: '11111111-1111-4111-8111-111111111111',
+    DATA_WRITE_MODE: 'OPEN',
     MONGODB_URI: 'mongodb://db.example.invalid/language',
     JWT_SECRET: credential(),
     AI_ENABLED: 'false',

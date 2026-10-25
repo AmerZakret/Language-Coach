@@ -21,6 +21,8 @@ same offline preflight; build success alone is not a readiness check.
 | Variable | Production contract |
 |---|---|
 | `NODE_ENV` | Explicitly `production`; only development/test/production accepted |
+| `DATA_TIMELINE_ID` | Required independent public timeline expectation; canonical lowercase UUID v4, exactly 36 characters; no generated/default/DB-derived value |
+| `DATA_WRITE_MODE` | Required operator/deployment latch: exactly `OPEN` or `CLOSED`; missing production value rejects startup |
 | `MONGODB_URI` | Required valid `mongodb://` or `mongodb+srv://` URI; never hardcoded/logged |
 | `JWT_SECRET` | Required cryptographically random secret, at least 32 characters and 12 distinct characters; defaults, placeholders, single-case/numeric-only and repeated values rejected |
 | `PORT` | Optional; integer 1–65535, default 3000; binds all interfaces behind controlled ingress |
@@ -592,3 +594,100 @@ compatible cohort, authorize a policy flip, or remediate historical credentials.
 See [Release packaging and checklist](RELEASE_PACKAGING.md) for artifact allowlists,
 source-map policy, validated toolchains, build/version metadata and operator-only
 identity/signing/configuration requirements.
+
+
+## Phase 10A timeline control and write readiness
+
+This is the server control foundation only. Protocol remains revision 1. Domain
+transactions and receipt replays do not yet use the timeline fence (10B); browser
+and Flutter durable queues do not yet carry timeline IDs (10C/10D). This phase
+alone does not make protocol 1 safe after a restore or authorize production traffic.
+
+`DATA_TIMELINE_ID` is a non-secret equality token issued deliberately by the
+operator as a fresh random UUID v4. It is independent of Mongo, timestamps, app
+versions, build IDs, protocol revisions and progressEpoch. It must be canonical
+lowercase, exactly 36 characters, with no whitespace. Supply it through external
+deployment configuration; keep it out of secret rotation semantics. No real ID is
+provided here. There is no startup random default and no fallback to a DB value.
+`DATA_WRITE_MODE` is the separate external write latch. Missing/invalid values for
+either setting fail production validation before any connection or Nest startup.
+
+The external control record must durably maintain the expected active timeline,
+maintenance/write latch, restore event/reference, and operator audit evidence.
+Provisioning and retention of that independent record remain operator work; no
+vendor is prescribed. Updating environment configuration is not a live fleet
+broadcast: replace/drain every process to apply it. Never rely on an old process
+noticing an external environment edit. Hard ingress/network isolation is required.
+
+Mongo `timelinecontrol` has exactly one document, `_id=global`, `singleton=global`,
+with dataTimelineId, OPEN/CLOSED writeState, controlVersion, fenceVersion,
+createdAt/updatedAt, lastEventId, and optional sourceTimelineId. The exact strict
+JSON schema in `operations/timeline-contract.ts` rejects other identities, fields,
+malformed IDs, states, dates and unsafe/non-integral revisions. The unique
+`singleton_1` index and built-in `_id` constraint protect the singleton. Production
+readiness verifies the validator (strict/error), inventory index, and at most two
+raw records; it never applies schema/index changes. No timeline metadata is
+created, replaced, repaired or opened by boot, deploy, restart, scaling or probes.
+
+An existing database requires explicit operator initialization before readiness
+can pass. Use the separate OPERATOR_TOOL from the reviewed build checkout, with
+transaction-capable Mongo, external latch CLOSED, an explicitly supplied timeline
+and event ID, and hard maintenance isolation. Initialization provisions an absent
+strict collection/index and inserts CLOSED metadata plus audit transactionally.
+Existing unvalidated collections require separately reviewed operator migration;
+initialization refuses to overwrite their schema. Opening is a separate command.
+See the [timeline operator procedure](PRODUCTION_RUNBOOKS.md#phase-10a-timeline-control-procedure).
+
+Effective write readiness requires a valid external expectation, matching valid
+Mongo singleton, both latches OPEN, healthy Mongo transaction/index/upload checks,
+and a process that is not draining. Missing, duplicate, malformed, mismatched,
+CLOSED or unavailable control fails closed without reconciliation. Startup with
+valid configuration but invalid Mongo control can serve cheap liveness while
+remaining unready; it never admits ordinary production traffic. Public readiness
+returns only `ok|failed|pending` checks, including `timeline`; diagnostic codes
+contain no DB errors, IDs, paths, secrets or stacks.
+
+Readiness retains the existing bounded refresh (`READINESS_RECHECK_MS` plus
+`READINESS_TIMEOUT_MS` maximum validity). Disconnect/shutdown invalidates it.
+Each ordinary production HTTP admission also performs a fresh primary control
+read, so a previously green readiness cache cannot authorize a newly arriving
+request after a committed close/mismatch. Ordinary authenticated reads are
+conservatively gated too. Only health/liveness bypass this admission gate.
+Compatibility discovery stays unchanged and follows ordinary production gating;
+public timeline discovery is deferred. Local/test defaults are empty expectation
+and CLOSED latch; explicitly initialize disposable DBs and supply synthetic IDs
+for local readiness. NODE_ENV never silently initializes timeline metadata.
+
+`TimelineWriteGate.assertAndTouchWriteFence(session, expectedTimeline)` is the 10B
+foundation. It requires an active caller-owned Mongo transaction on this connection,
+checks the deployment expectation/latch, infrastructure readiness and drain state,
+reads current raw control, and conditionally increments fenceVersion on that same
+OPEN timeline/control version. It never substitutes a read-only assertion and never
+retries or commits. Failure aborts the transaction and throws only a safe typed
+category: TIMELINE_CONTROL_UNAVAILABLE, TIMELINE_MISMATCH, WRITES_CLOSED or
+FENCE_CONFLICT. Callers must bound their session/transaction (defaultTimeoutMS
+must be positive and no greater than READINESS_TIMEOUT_MS; the primitive rejects
+unbounded sessions),
+propagate failure, and retry the complete transaction only after fresh admission.
+A control update committed after a transaction snapshot conflicts with the fence
+write. A fence acquired first serializes a concurrent control update after that
+transaction, or makes the control operation fail and require an explicit safe retry.
+Shared-document contention/capacity analysis remains for 10E. No domain route
+calls this fence yet; previously admitted work still requires hard drain/isolation.
+
+Read-handler audit: users/me and JWT owner resolution read users; lesson queries
+read the catalog; progress GET reads inside a snapshot transaction; reset-receipt GET reads saved
+owner/receipt state without replaying the operation;
+flashcard due/all read cards; AI history reads messages; Community feed reads posts.
+These handlers contain no domain persistence writes. Authentication/abuse controls
+can update process-local accounting, and all ordinary requests remain gated rather
+than assuming GET implies absence of side effects. Startup lesson seeding remains
+disabled in production. No read handler can invoke operator transitions.
+
+Mongo audit events and timeline provenance can themselves roll back. They are
+useful local evidence, never the independent external audit source. If an operator
+restores data with unchanged external control and without hard write isolation,
+software cannot reliably detect that restore. An old process retaining access to
+an old/uncontrolled DB cannot be made safe by this foundation: ingress closure,
+process termination, endpoint isolation and credential/network restrictions remain
+mandatory operator responsibilities.

@@ -165,6 +165,7 @@ new flavor or broad permission refactor is part of this phase.
 | validate-production | RUNTIME_REQUIRED local environment/entry shape check; no DB/network |
 | deployment-preflight | OPERATOR_TOOL; read-only from the release checkout with runbooks, not the minimal runtime package |
 | progress-audit / progress-audit-cli | OPERATOR_TOOL; build checkout first, read-only default, explicit bounded --apply/rollback authorization; excluded from deploy package |
+| timeline-control / timeline-control-cli | OPERATOR_TOOL; explicit local inspect/init/close/install/open with target, event, CAS and production confirmations; excluded from runtime artifacts; never startup/preflight/CI infrastructure mutation |
 | update-english-db | DEVELOPMENT_ONLY destructive fixture replacement; explicit --replace-local-english-lessons, NODE_ENV=development and loopback lingua_dev/lingua_test URI with directConnection=true, checked before Nest/env loading; never production |
 | generate-lessons.js | DEVELOPMENT_ONLY source generator; rewrites lesson source only when manually invoked; not a startup/build hook or deploy file |
 

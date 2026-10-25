@@ -8,6 +8,7 @@ import { InjectConnection } from '@nestjs/mongoose';
 import { Connection } from 'mongoose';
 import { CommunityImageStorage } from '../community/community-image.storage';
 import { telemetry } from './telemetry';
+import { TimelineWriteGate } from './timeline-gate';
 import {
   pendingChecks,
   ReadinessChecks,
@@ -48,6 +49,7 @@ export class ReadinessService
   private timer?: NodeJS.Timeout;
   private readonly timeout: number;
   private readonly interval: number;
+  readonly timelineGate: TimelineWriteGate;
   private readonly invalidate = () => {
     this.generation++;
     this.checkedAt = 0;
@@ -67,6 +69,23 @@ export class ReadinessService
   ) {
     this.timeout = config.get<number>('READINESS_TIMEOUT_MS') ?? 5000;
     this.interval = config.get<number>('READINESS_RECHECK_MS') ?? 15000;
+    this.timelineGate = new TimelineWriteGate(
+      connection,
+      config,
+      () => this.stopped,
+      () => {
+        const { checks } = this.snapshot();
+        return (
+          !this.stopped &&
+          [
+            checks.database,
+            checks.transactions,
+            checks.indexes,
+            checks.uploads,
+          ].every((value) => value === 'ok')
+        );
+      },
+    );
   }
   async onApplicationBootstrap() {
     for (const event of ['disconnected', 'disconnecting', 'close', 'error'])
@@ -87,7 +106,11 @@ export class ReadinessService
       !this.checkedAt ||
       Date.now() - this.checkedAt > this.interval + this.timeout;
     if (this.connection.readyState !== 1)
-      checks.database = checks.transactions = checks.indexes = 'failed';
+      checks.database =
+        checks.transactions =
+        checks.indexes =
+        checks.timeline =
+          'failed';
     if (this.stopped || expired) {
       for (const key of Object.keys(checks) as Array<keyof ReadinessChecks>)
         if (checks[key] === 'ok') checks[key] = 'pending';
@@ -116,7 +139,9 @@ export class ReadinessService
                     ? 'critical_index_unavailable'
                     : checks.uploads !== 'ok'
                       ? 'upload_storage_unavailable'
-                      : 'verification_expired',
+                      : checks.timeline !== 'ok'
+                        ? 'timeline_control_unavailable'
+                        : 'verification_expired',
       );
     return result;
   }
@@ -135,6 +160,7 @@ export class ReadinessService
             transactions: 'failed',
             indexes: 'failed',
             uploads: 'failed',
+            timeline: 'failed',
           };
           this.checkedAt = Date.now();
           this.transition('not_ready', 'readiness_timeout');
@@ -149,6 +175,7 @@ export class ReadinessService
       controller.signal,
       this.timeout,
       this.realRoot,
+      this.timelineGate,
     )
       .then((result) => {
         if (
@@ -184,6 +211,7 @@ export class ReadinessService
             transactions: 'failed',
             indexes: 'failed',
             uploads: 'failed',
+            timeline: 'failed',
           };
           this.checkedAt = Date.now();
           this.transition('not_ready', 'probe_failed');

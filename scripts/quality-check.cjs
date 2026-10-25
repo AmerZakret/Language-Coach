@@ -15,7 +15,7 @@ function snapshot() {
 }
 // Never pass inherited application credentials/configuration into quality checks.
 const safeEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) =>
-  !/^(CLIENT_PROTOCOL_POLICY|RELEASE_BUILD_ID|NODE_ENV|MONGODB_URI|JWT_SECRET|GEMINI_.*|AI_ENABLED|PRONUNCIATION_.*|WHISPER_.*|CORS_ORIGINS|UPLOAD_ROOT|VITE_.*|ALLOW_LOCAL_.*|TRUST_PROXY)$/.test(name)));
+  !/^(DATA_TIMELINE_ID|DATA_WRITE_MODE|CLIENT_PROTOCOL_POLICY|RELEASE_BUILD_ID|NODE_ENV|MONGODB_URI|JWT_SECRET|GEMINI_.*|AI_ENABLED|PRONUNCIATION_.*|WHISPER_.*|CORS_ORIGINS|UPLOAD_ROOT|VITE_.*|ALLOW_LOCAL_.*|TRUST_PROXY)$/.test(name)));
 // Keep disposable Mongo binaries in the ignored test dependency cache, not in
 // a developer database directory. CI may download only this test server binary.
 safeEnv.MONGOMS_DOWNLOAD_DIR ||= join(root, 'lingua_ai_backend/node_modules/.cache/mongodb-memory-server');
@@ -58,7 +58,7 @@ const jobs = {
   release() {
     const cwd = join(root, 'lingua_ai_backend');
     run(npm, ['run', 'build'], cwd);
-    const env = { CLIENT_PROTOCOL_POLICY: 'ENFORCE_MUTATIONS', RELEASE_BUILD_ID: qualityBuildId, NODE_ENV: 'production', MONGODB_URI: 'mongodb://db.example.invalid/quality',
+    const env = { DATA_TIMELINE_ID: '11111111-1111-4111-8111-111111111111', DATA_WRITE_MODE: 'CLOSED', CLIENT_PROTOCOL_POLICY: 'ENFORCE_MUTATIONS', RELEASE_BUILD_ID: qualityBuildId, NODE_ENV: 'production', MONGODB_URI: 'mongodb://db.example.invalid/quality',
       JWT_SECRET: randomBytes(48).toString('base64'), AI_ENABLED: 'false', PRONUNCIATION_ENABLED: 'false',
       CORS_ORIGINS: 'https://app.example.invalid', UPLOAD_ROOT: resolve(root, '.quality-upload-contract') };
     run(npm, ['run', 'validate:prod'], cwd, env); run(npm, ['run', 'preflight:deploy'], cwd, env);

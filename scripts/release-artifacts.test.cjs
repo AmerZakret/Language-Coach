@@ -24,6 +24,7 @@ function web() {
 test('9E backend runtime allowlist excludes tests, maps, declarations, tooling, destructive scripts and environment files', () => {
   assert.equal(validate('backend', backend()).files, 8);
   for (const name of ['dist/src/auth/auth.spec.js', 'dist/src/tooling/progress-audit-cli.js', 'dist/scripts/update-english-db.js',
+    'dist/src/tooling/timeline-control.js', 'dist/src/tooling/timeline-control-cli.js',
     'scripts/deployment-preflight.cjs', 'dist/src/main.js.map', 'dist/src/main.d.ts', '.env.production', 'test/fixture.js', 'node_modules/x.js']) {
     const fixture = backend(); fixture.set(name, Buffer.from('forbidden'));
     assert.throws(() => validate('backend', fixture), /Forbidden/, name);
