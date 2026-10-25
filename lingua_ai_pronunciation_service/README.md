@@ -6,7 +6,7 @@ this service's own environment; do not inherit backend browser CORS configuratio
 
 ## Production
 
-Python 3.12 and the direct dependencies in `requirements.txt` are the tested
+Python 3.12.4 (the tested 3.12 baseline) and the direct dependencies in `requirements.txt` are the tested
 baseline. Install in an isolated virtual environment. PyAV wheels include FFmpeg
 libraries; CTranslate2/faster-whisper require supported native CPU instructions.
 The default is CPU `base` / `int8`, two CPU threads, one model per process.
@@ -35,8 +35,8 @@ Set environment variables through the deployment secret/configuration mechanism:
 Run these from this directory:
 
 ```sh
-python config.py --production
-python main.py
+python -B config.py --production
+python -B main.py
 ```
 
 The first command validates config without loading/downloading a model. The second
@@ -44,7 +44,7 @@ uses Uvicorn with one worker, access logs disabled, 32 maximum concurrent ASGI
 connections, 5-second keepalive and 10-second HTTP graceful shutdown. Service
 events are JSON messages emitted through Python logging; configure the
 `pronunciation` logger at INFO with a message-only formatter in the process
-launcher/log collector. `python main.py` installs that formatter. Do not enable
+launcher/log collector. `python -B main.py` installs that formatter. Do not enable
 debug/trace request logging at the proxy or ASGI layer.
 Raw faster-whisper/multipart logs are disabled and PyAV retains its ignore-native-
 logs mode; classified service events replace library exception/text dumps.
@@ -122,6 +122,12 @@ Use the same token as backend, or explicitly set
 downloads require deliberate `WHISPER_ALLOW_DOWNLOAD=true` in development only.
 For iteration only: `uvicorn main:app --reload --host 127.0.0.1 --port 8001`.
 
-Install `requirements-dev.txt`, then run `python -m unittest -v test_service`.
+Install `requirements-dev.txt`, then run `python -B -m unittest -v test_service`.
 Tests use synthetic local audio, real PyAV decode and stub model loading/inference;
 no model is downloaded and no provider is called.
+
+## Release packaging
+
+See [Release packaging and checklist](../RELEASE_PACKAGING.md) for artifact allowlists,
+source-map policy, validated toolchains, build/version metadata and operator-only
+identity/signing/configuration requirements.

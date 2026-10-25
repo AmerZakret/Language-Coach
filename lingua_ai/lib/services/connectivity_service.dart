@@ -84,7 +84,7 @@ class ConnectivityService extends ChangeNotifier {
     var available = false;
     try {
       available = _networkCheck != null
-          ? await _networkCheck!()
+          ? await _networkCheck()
           : await _connectivity.checkConnectivity() != ConnectivityResult.none;
     } catch (_) {
       // A failed connectivity check must not stop periodic recovery probes.

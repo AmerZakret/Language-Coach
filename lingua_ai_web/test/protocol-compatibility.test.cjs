@@ -104,6 +104,7 @@ test('9C actual Vite manifest plugin emits only bounded public artifact/protocol
       require: name => {
         if (name === 'vite') return { defineConfig: value => value, loadEnv: () => env };
         if (name === '@vitejs/plugin-react' || name === '@tailwindcss/vite') return () => ({});
+        if (name === './package.json') return require('../package.json');
         if (name === 'path') return require('node:path');
         return load(resolve(__dirname, '..', name + '.ts'));
       } });

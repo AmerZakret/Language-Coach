@@ -1,3 +1,4 @@
+import packageMetadata from './package.json'
 import { CLIENT_PROTOCOL_REVISION } from './src/utils/clientProtocol'
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
@@ -13,7 +14,11 @@ export default defineConfig(({ command, mode }) => {
   if (!/^[A-Za-z0-9._-]{1,96}$/.test(buildId)) throw new Error('VITE_BUILD_ID must be a public identifier of 1 to 96 safe characters.')
   return {
     define: { 'import.meta.env.VITE_API_URL': JSON.stringify(apiUrl), __WEB_BUILD_ID__: JSON.stringify(buildId) },
+    build: { sourcemap: false },
     plugins: [
+      { name: 'release-artifact-metadata', generateBundle() {
+        this.emitFile({ type: 'asset', fileName: 'release-manifest.json', source: JSON.stringify({ component: 'web', appVersion: packageMetadata.version, buildId, protocolRevision: CLIENT_PROTOCOL_REVISION, artifactType: 'static-spa', apiEndpoint: apiUrl }) })
+      } },
       { name: 'public-release-identity', generateBundle() {
         this.emitFile({ type: 'asset', fileName: 'release.json', source: JSON.stringify({ buildId, protocolRevision: CLIENT_PROTOCOL_REVISION }) })
       } },

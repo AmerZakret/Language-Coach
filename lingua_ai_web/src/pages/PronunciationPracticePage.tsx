@@ -422,7 +422,7 @@ export function PronunciationPracticePage() {
               <AlertCircle size={36} className="mx-auto text-red-500" />
               <h3 className="font-bold text-sm text-red-600">{t('evaluation_failed')}</h3>
               <p className="text-xs leading-relaxed" style={{ color: "var(--l-text)" }}>{error}</p>
-              <p className="text-[10px]" style={{ color: "var(--l-muted)" }}>Please verify that uvicorn/whisper is running at http://localhost:8001</p>
+              <p className="text-[10px]" style={{ color: "var(--l-muted)" }}>Pronunciation feedback is temporarily unavailable. Check your connection and try again.</p>
             </div>
           )}
 

@@ -33,6 +33,7 @@ const jobs = {
     run(npm, ['run', 'build'], cwd); run(npm, ['test'], cwd); run(npm, ['run', 'test:e2e'], cwd);
     run(process.execPath, ['scripts/check-release-contract.cjs']);
     run(process.execPath, ['scripts/lint-ratchet.cjs', 'backend']);
+    run(process.execPath, ['scripts/check-release-artifacts.cjs', 'backend']);
   },
   web() {
     const cwd = join(root, 'lingua_ai_web');
@@ -40,6 +41,7 @@ const jobs = {
     run(npm, ['run', 'build'], cwd, { VITE_API_URL: 'https://api.example.invalid', VITE_BUILD_ID: qualityBuildId });
     run(process.execPath, ['scripts/check-release-contract.cjs']);
     run(process.execPath, ['scripts/lint-ratchet.cjs', 'web']);
+    run(process.execPath, ['scripts/check-release-artifacts.cjs', 'web']);
   },
   flutter() {
     const cwd = join(root, 'lingua_ai');
@@ -51,6 +53,7 @@ const jobs = {
     run(python, ['-B', '-m', 'unittest', '-v', 'test_service'], cwd);
     run(python, ['-B', join(root, 'scripts/check-python.py')], cwd);
     run(python, ['-B', '-m', 'pip', 'check'], cwd);
+    run(process.execPath, ['scripts/check-release-artifacts.cjs', 'pronunciation']);
   },
   release() {
     const cwd = join(root, 'lingua_ai_backend');
@@ -60,7 +63,7 @@ const jobs = {
       CORS_ORIGINS: 'https://app.example.invalid', UPLOAD_ROOT: resolve(root, '.quality-upload-contract') };
     run(npm, ['run', 'validate:prod'], cwd, env); run(npm, ['run', 'preflight:deploy'], cwd, env);
   },
-  hygiene() { run(process.execPath, ['--test', 'scripts/quality-tools.test.cjs']); run(process.execPath, ['scripts/check-hygiene.cjs']); },
+  hygiene() { run(process.execPath, ['--test', 'scripts/quality-tools.test.cjs', 'scripts/release-artifacts.test.cjs']); run(process.execPath, ['scripts/check-hygiene.cjs']); },
 };
 function main() {
   const selected = process.argv[2] || 'all';

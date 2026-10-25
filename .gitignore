@@ -70,3 +70,7 @@ dist-ssr/
 
 # Disposable local clean-install verification checkouts.
 /.phase9a-validation/
+
+# Locally assembled release artifacts and disposable packaging verification.
+/.release/
+/.release-validation/

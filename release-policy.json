@@ -1,0 +1,96 @@
+{
+  "schemaVersion": 1,
+  "toolchains": {
+    "node": "22.14.0",
+    "npm": "10.9.0",
+    "flutter": "3.41.7",
+    "dart": "3.11.5",
+    "python": "3.12.4"
+  },
+  "engines": {
+    "node": ">=22.14.0 <23",
+    "npm": ">=10.9.0 <11"
+  },
+  "backend": {
+    "sourceMaps": "DISABLED",
+    "runtimeDirectories": [
+      "ai-coach",
+      "auth",
+      "common",
+      "community",
+      "compatibility",
+      "config",
+      "flashcards",
+      "lessons",
+      "operations",
+      "progress",
+      "pronunciation",
+      "security",
+      "users"
+    ],
+    "rootModules": [
+      "app.module.js",
+      "app.controller.js",
+      "app.service.js",
+      "main.js"
+    ],
+    "launcherFiles": [
+      "scripts/start-production.cjs",
+      "scripts/production-entry.cjs",
+      "scripts/validate-production.cjs"
+    ],
+    "packageFields": [
+      "name",
+      "version",
+      "description",
+      "author",
+      "private",
+      "license",
+      "engines",
+      "packageManager",
+      "dependencies",
+      "scripts"
+    ]
+  },
+  "web": {
+    "sourceMaps": "DISABLED",
+    "rootFiles": [
+      "index.html",
+      "release.json",
+      "release-manifest.json"
+    ],
+    "assetDirectories": [
+      "assets",
+      "sounds"
+    ],
+    "extensions": [
+      ".js",
+      ".css",
+      ".png",
+      ".jpg",
+      ".jpeg",
+      ".webp",
+      ".svg",
+      ".ico",
+      ".woff",
+      ".woff2",
+      ".ttf",
+      ".wav",
+      ".mp3"
+    ]
+  },
+  "pronunciation": {
+    "sourceFiles": [
+      "main.py",
+      "config.py",
+      "audio.py",
+      "requirements.txt"
+    ]
+  },
+  "flutter": {
+    "androidApplicationId": "com.example.lingua_ai",
+    "androidNamespace": "com.example.lingua_ai",
+    "iosBundleId": "com.example.linguaAi",
+    "identityClassification": "PLACEHOLDER_RELEASE_BLOCKER"
+  }
+}

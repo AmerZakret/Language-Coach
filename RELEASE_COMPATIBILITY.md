@@ -112,8 +112,10 @@ Rolling back to a backend that does not support their declared generation can
 block mutations; keep discovery/auth/read access and forward-fix compatibility.
 A build rollback alone does not authorize queue-schema/protocol downgrades. Never
 blindly downgrade receipt, epoch, revision/barrier or durable-store contracts.
-This mechanism is not a disaster-restore generation fence and does not repair
-Community/AI online intent persistence; those remain separate work.
+This mechanism is not a disaster-restore generation fence. Phase 9D now persists
+Community create and AI send/clear intents before dispatch; see
+[CLIENT_RECOVERY.md](CLIENT_RECOVERY.md). Packaging/rollback must preserve those
+journals and their original protocols; see [RELEASE_PACKAGING.md](RELEASE_PACKAGING.md).
 
 Production traffic is still unauthorized until historical Mongo credential
 rotation and revocation are independently verified. Protocol/CI success proves

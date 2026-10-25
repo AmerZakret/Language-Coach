@@ -78,3 +78,10 @@ if a receipt is unavailable or the user has changed, manual review is required.
 Prefer read-only database credentials for production dry-runs and review the
 bounded report before separately authorizing any apply. These commands are
 examples only; no production connection or mutation is performed by tests.
+
+## Packaging boundary
+
+Run this tool from the reviewed release checkout after `npm run build`; its
+compiled CLI is intentionally excluded from the minimal backend runtime artifact.
+It is never a startup hook. See [Release packaging](../../../RELEASE_PACKAGING.md)
+for the OPERATOR_TOOL classification and separate runtime allowlist.

@@ -1,4 +1,4 @@
-name: Repository quality
+name: Repository quality and release artifacts
 on:
   push:
   pull_request:
@@ -114,5 +114,8 @@ jobs:
       - run: npm ci
         working-directory: lingua_ai_backend
       - run: node scripts/quality-check.cjs release
+      # Component quality commands validate their existing built artifacts.
+      # This cheap source gate also reports placeholder mobile identities.
+      - run: node scripts/check-release-artifacts.cjs repository
       - run: node scripts/quality-check.cjs hygiene
       - run: git diff --check && git diff --exit-code && test -z "$(git ls-files --others --exclude-standard)"

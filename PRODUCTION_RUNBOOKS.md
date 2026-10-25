@@ -305,8 +305,8 @@ in the deployment record. Existing package/app versions alone are not sufficient
 | Component | Minimum supported capability set |
 |---|---|
 | Backend | JWT sub ownership/unique backend guests; progress epochs/reset receipts; flashcard receipts; 7E Community desired-state/revisions/receipts and AI atomic pairs/clear barriers; 8A-8E production contracts |
-| Web | 7A same-owner Web Locks/auth coordination plus 7C owner/session/language guards and 7E stable mutation IDs/desired-state/revision-aware clients |
-| Flutter | Epoch/reset and mutation-ID aware clients; 7C session/cache guards, 7D durable queue migration/retention, 7E Community/AI contracts; 8A release endpoint/signing/permissions |
+| Web | 7A same-owner Web Locks/auth coordination plus 7C owner/session/language guards and 7E stable mutation IDs/desired-state/revision-aware clients; 9C protocol/build/update handling; 9D durable create/send/clear recovery |
+| Flutter | Epoch/reset and mutation-ID aware clients; 7C session/cache guards, 7D durable queue migration/retention, 7E Community/AI contracts; 8A release endpoint/signing/permissions; 9C protocol/build gating and 9D durable intent recovery |
 | Pronunciation | 8E dedicated-token authentication, bounded audio/inference, offline artifacts and live/ready lifecycle |
 
 Missing mutation keys/revisions/epochs may reject on the new backend; do not remove
@@ -315,9 +315,12 @@ appear to work while replay/ownership/clear semantics are unsafe. Do not mix tho
 versions or route writes randomly between incompatible backends. An old unprotected
 pronunciation service is not a safe rollback target. Roll new token-sending backend
 consumers before authentication-only service cutover; keep actual tokens aligned.
-Legacy unkeyed flashcard requests remain accepted for compatibility and bypass
-durable receipt protection; acceptance is not proof of safe retry or supported
-client capability. No overall minimum-client enforcement is built into these APIs.
+Phase 9C CLIENT_PROTOCOL_POLICY explicitly stages ALLOW_LEGACY then
+ENFORCE_MUTATIONS. Headerless unkeyed legacy flashcards are accepted only in the
+legacy stage and bypass durable receipts; declared current-protocol flashcards
+require stable keys in both modes. Enforcement rejects incompatible mutation
+writers without blocking auth/read/discovery. Verify the actual cohort before
+enabling enforcement; package version alone is not proof of capability.
 
 **Blind downgrade is prohibited. Prefer forward-fix.** Do not downgrade below
 epoch/reset, receipt, desired-state/revision, AI barrier or durable-storage contracts.
@@ -340,12 +343,12 @@ browsers retain the existing fail-closed queue policy; do not bypass it at rollo
 Use a maintenance notice and full reload/close instructions, revalidating index.html,
 immutable hashed assets and a deployment-record bundle digest. Managed environments
 can require browser restart and client cohort verification before reopening traffic.
-A future version marker could automate notification, but **no runtime deployment-
-version negotiation or enforced minimum-client gate currently exists**; auth/cache
-schemaVersion fields are not such a gate. Old tabs cannot be retroactively taught
-a marker. If unknown old writers cannot be excluded, keep the affected rollout
-contained and require a separately reviewed compatibility gate; do not claim forced
-reload has been enforced. No service-worker update system is introduced here.
+Current bundles use Phase 9C build/protocol metadata, release.json checks and
+update-required notices. The explicit protocol gate does not retroactively patch
+pre-7A tabs or force their reload. Close/reload all pre-7A tabs and verify the
+client cohort; do not clear auth, queues or Phase 9D durable-intent journals.
+Unsupported old protocols pause saved work without relabeling it. No service-worker
+update system is introduced here. See RELEASE_COMPATIBILITY.md and CLIENT_RECOVERY.md.
 
 ## Capacity inventory and safe monitoring
 
@@ -468,7 +471,8 @@ out of band; never copy deployment `.env` values into this repository.
   are public; no service/provider credentials in bundle or source maps.
 - [ ] Serve HTTPS/SPA fallback, revalidate HTML, retain compatible immutable assets;
   record bundle digest and execute old-tab reload/cohort policy. Web Locks required
-  for coordinated queued writes; no runtime version marker is assumed.
+  for coordinated queued writes; validate release.json/build/protocol metadata and
+  retain Phase 9D owner-scoped intent journals. Public source maps are disabled.
 
 ### Flutter release
 
@@ -557,3 +561,9 @@ restarts, database rewinds or cleanup that destroy replay/ownership evidence.
 
 No backup scheduler, restore executor, credential rotation automation, index mutator,
 orphan deletion, receipt archival, history rewrite or deployment is included in 8F.
+
+## Release packaging
+
+See [Release packaging and checklist](RELEASE_PACKAGING.md) for artifact allowlists,
+source-map policy, validated toolchains, build/version metadata and operator-only
+identity/signing/configuration requirements.

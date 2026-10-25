@@ -318,8 +318,9 @@ failure and timeout rejection release them. Capacity fails fast with 429, no que
 Before multipart buffering, Community holds owner 1/IP 2/process 4 HTTP permits;
 pronunciation holds owner 1/IP 2/process 2. Supplementary pronunciation feedback
 may use its existing fallback when budget/provider capacity is unavailable.
-Unsettled calls retain slots to bound concurrency. Broader deadlines/circuit breakers
-and Python inference concurrency remain later work. 8B shutdown bounds remain intact.
+Unsettled calls retain slots to bound concurrency. Phase 8D bounds external-call
+deadlines/retries and Phase 8E bounds Python inference concurrency. Circuit-breaker
+design remains deferred; 8B shutdown bounds remain intact.
 
 ### Client IP and CORS
 
@@ -585,3 +586,9 @@ complete route classification, metadata/error contract, web/Flutter build IDs,
 old-tab/update handling, queue preservation and rollback limits. Backend support
 must precede new client release. A green local preflight does not verify the
 compatible cohort, authorize a policy flip, or remediate historical credentials.
+
+## Release packaging
+
+See [Release packaging and checklist](RELEASE_PACKAGING.md) for artifact allowlists,
+source-map policy, validated toolchains, build/version metadata and operator-only
+identity/signing/configuration requirements.

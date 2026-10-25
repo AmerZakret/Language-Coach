@@ -91,3 +91,9 @@ that evidence is reconciled. A backup is not proof that no newer operation exist
 Recovery is intentionally limited to these online create/send/clear operations.
 It is not a general offline outbox and adds no disaster-restore generation fence.
 Server rollback consistency remains governed by the coordinated recovery runbook.
+
+## Packaging boundary
+
+Owner journals and native durable slots are client STATE, never release artifacts.
+Preserve them across updates/rollback and retain their original IDs/protocols. See
+[Release packaging](RELEASE_PACKAGING.md) for artifact/config/state separation.

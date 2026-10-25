@@ -179,8 +179,8 @@ logical review, not a retry of the quarantined action. Active study snapshots ar
 not refreshed by their own queue drain; same-render duplicate submissions are
 blocked. Server receipt/history exactly-once behavior remains covered by the full
 backend tests; web tests verify transport replay with one operation ID and a
-receipt-aware fake server. No Community/AI intent persistence or protocol gating
-is introduced here.
+receipt-aware fake server. That Phase 9B change did not add Community/AI intent
+persistence or protocol gating; Phases 9C/9D below now provide those contracts.
 
 ## Phase 9C compatibility and identity checks
 
@@ -233,3 +233,22 @@ mock recovery; the recovery suites execute the actual implementation.
 
 See [CLIENT_RECOVERY.md](CLIENT_RECOVERY.md) for the operation classification,
 capacity/no-TTL contract, failure semantics and conservative backup handling.
+
+## Release packaging
+
+See [Release packaging and checklist](RELEASE_PACKAGING.md) for artifact allowlists,
+source-map policy, validated toolchains, build/version metadata and operator-only
+identity/signing/configuration requirements.
+
+
+## Phase 9E artifact and packaging gates
+
+`node --test scripts/release-artifacts.test.cjs` exercises allowlists, map policy,
+credential categories, real Vite metadata generation, guarded destructive tooling,
+non-overwriting assembly, mobile identity/signing and toolchain/docs consistency.
+The root quality command includes these tests and component artifact checks.
+After builds, `node scripts/check-release-artifacts.cjs` is the read-only root
+release check. `node scripts/package-release.cjs COMPONENT NEW_DIRECTORY [BUILD_ID]`
+is a separate explicit writer for ignored/local deployment artifacts, not a deploy
+or sign command. See RELEASE_PACKAGING.md for clean installation and operator
+boundaries. Model caches and developer environments are never packaged.
