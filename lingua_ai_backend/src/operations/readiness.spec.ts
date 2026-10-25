@@ -5,6 +5,7 @@ import { getConnectionToken, MongooseModule } from '@nestjs/mongoose';
 import { MongoMemoryReplSet, MongoMemoryServer } from 'mongodb-memory-server';
 import { Connection, createConnection } from 'mongoose';
 import fs from 'node:fs/promises';
+import type { PathLike } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, relative, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -84,6 +85,7 @@ describe('8B readiness with disposable MongoDB and temporary storage only', () =
       connection,
       new ConfigService({
         NODE_ENV: 'production',
+        CLIENT_PROTOCOL_POLICY: 'ALLOW_LEGACY',
         READINESS_TIMEOUT_MS: 3000,
         READINESS_RECHECK_MS: 10000,
         AI_ENABLED: false,
@@ -493,10 +495,11 @@ describe('8B readiness with disposable MongoDB and temporary storage only', () =
     const realpath = fs.realpath;
     jest
       .spyOn(fs, 'realpath')
-      .mockImplementation(((path: any) =>
+      .mockImplementation((path: PathLike) =>
         String(path) === join(root, 'community')
           ? Promise.resolve(tmpdir())
-          : realpath(path)) as any);
+          : realpath(path),
+      );
     await service.refresh();
     expect(service.snapshot().checks.uploads).toBe('failed');
     expect(await fs.readdir(root)).toEqual([]);
@@ -557,10 +560,10 @@ describe('8B readiness with disposable MongoDB and temporary storage only', () =
     const held = new Promise<void>((done) => {
       resume = done;
     });
-    jest.spyOn(fs, 'realpath').mockImplementation((async (path: any) => {
+    jest.spyOn(fs, 'realpath').mockImplementation(async (path: PathLike) => {
       await held;
       return realpath(path);
-    }) as any);
+    });
     const start = Date.now();
     await service.onApplicationBootstrap();
     expect(Date.now() - start).toBeLessThan(1000);
@@ -616,6 +619,7 @@ describe('8B readiness with disposable MongoDB and temporary storage only', () =
           provide: ConfigService,
           useValue: new ConfigService({
             NODE_ENV: 'production',
+            CLIENT_PROTOCOL_POLICY: 'ALLOW_LEGACY',
             SHUTDOWN_GRACE_MS: grace,
             READINESS_TIMEOUT_MS: 1000,
           }),
@@ -804,10 +808,10 @@ describe('8B readiness with disposable MongoDB and temporary storage only', () =
       release = done;
     });
     const realpath = fs.realpath;
-    jest.spyOn(fs, 'realpath').mockImplementation((async (path: any) => {
+    jest.spyOn(fs, 'realpath').mockImplementation(async (path: PathLike) => {
       await held;
       return realpath(path);
-    }) as any);
+    });
     const flight = service.refresh();
     const start = Date.now();
     service.stop();
@@ -855,6 +859,7 @@ describe('8B readiness with disposable MongoDB and temporary storage only', () =
           PATH: process.env.PATH,
           SystemRoot: process.env.SystemRoot,
           NODE_ENV: 'production',
+          CLIENT_PROTOCOL_POLICY: 'ALLOW_LEGACY',
           MONGODB_URI: replica.getUri(connection.name),
           ALLOW_LOCAL_MONGODB: 'true',
           JWT_SECRET: randomUUID() + randomUUID(),

@@ -1,3 +1,5 @@
+import '../core/config/client_protocol.dart';
+import 'client_compatibility.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -14,6 +16,7 @@ import 'sync_retry_policy.dart';
 import 'package:http/http.dart' as http;
 
 class OfflineQueueAction {
+  final int? clientProtocolRevision;
   final String id;
   final String type;
   final String ownerNamespace;
@@ -30,7 +33,8 @@ class OfflineQueueAction {
   final DateTime? reconciledAt;
   final int? acknowledgedEpoch;
   OfflineQueueAction(
-      {required this.id,
+      {this.clientProtocolRevision,
+      required this.id,
       required this.type,
       required this.ownerNamespace,
       required this.payload,
@@ -46,6 +50,7 @@ class OfflineQueueAction {
       this.reconciledAt,
       this.acknowledgedEpoch});
   Map<String, dynamic> toJson() => {
+        if (clientProtocolRevision != null) 'clientProtocolRevision': clientProtocolRevision,
         'id': id,
         'type': type,
         'ownerNamespace': ownerNamespace,
@@ -84,6 +89,9 @@ class OfflineQueueAction {
         throw const FormatException('Malformed queue retry metadata');
       }
     }
+    if (json['clientProtocolRevision'] != null && (json['clientProtocolRevision'] is! int || json['clientProtocolRevision'] < 0 || json['clientProtocolRevision'] > 999999)) {
+      throw const FormatException('Malformed queue protocol metadata');
+    }
     if (json['id'] is! String ||
         (json['id'] as String).isEmpty ||
         json['type'] is! String ||
@@ -95,6 +103,7 @@ class OfflineQueueAction {
       throw const FormatException('Malformed queue action metadata');
     }
     return OfflineQueueAction(
+        clientProtocolRevision: json['clientProtocolRevision'] as int?,
         id: json['id'] as String,
         type: json['type'] as String,
         ownerNamespace: json['ownerNamespace'] as String,
@@ -114,7 +123,8 @@ class OfflineQueueAction {
   }
   OfflineQueueAction withPayload(Map<String, dynamic> value) =>
       OfflineQueueAction(
-          id: id,
+          clientProtocolRevision: clientProtocolRevision,
+      id: id,
           type: type,
           ownerNamespace: ownerNamespace,
           payload: value,
@@ -138,7 +148,8 @@ class OfflineQueueAction {
           int? status,
           DateTime? failed}) =>
       OfflineQueueAction(
-          id: id,
+          clientProtocolRevision: clientProtocolRevision,
+      id: id,
           type: type,
           ownerNamespace: ownerNamespace,
           payload: payload,
@@ -155,6 +166,7 @@ class OfflineQueueAction {
           acknowledgedEpoch: acknowledgedEpoch);
 
   OfflineQueueAction withReceipt(DateTime at, int epoch) => OfflineQueueAction(
+      clientProtocolRevision: clientProtocolRevision,
       id: id,
       type: type,
       ownerNamespace: ownerNamespace,
@@ -636,6 +648,7 @@ class OfflineQueueService {
       }
     }
     final action = OfflineQueueAction(
+        clientProtocolRevision: ClientProtocol.revision,
         id: operationId ?? createOperationId(),
         type: type,
         ownerNamespace: owner,
@@ -655,6 +668,7 @@ class OfflineQueueService {
           String? operationId,
           bool dispatched = false}) =>
       _locked(ownerNamespace, () async {
+    ClientCompatibility().ensureMutationAllowed();
         final state = await _read(ownerNamespace);
         _append(state, ownerNamespace, type, payload,
             operationId: operationId, dispatched: dispatched);
@@ -786,6 +800,7 @@ class OfflineQueueService {
       });
 
   Future<bool> processQueue(String userId, {bool waitForActive = false}) async {
+    if (ClientCompatibility().updateRequired) return false;
     final auth = AuthService();
     final session = auth.captureSession();
     final owner = session.ownerNamespace;
@@ -875,7 +890,7 @@ class OfflineQueueService {
             throw const InvalidQueuedPayload();
           }
           if (!session.isCurrent) return false;
-          await withDeferredUnauthorizedInvalidation(() =>
+          await ClientProtocol.withRecordedRevision(action.clientProtocolRevision, () => withDeferredUnauthorizedInvalidation(() =>
               http.runWithClient(() async {
                 switch (action.type) {
                   case 'reset-progress':
@@ -975,10 +990,11 @@ class OfflineQueueService {
                   default:
                     throw const InvalidQueuedPayload();
                 }
-              }, () => replayClient)).timeout(_timeout);
+              }, () => replayClient))).timeout(_timeout);
         } catch (e) {
           if (!session.isCurrent) return false;
           final failure = SyncFailure.classify(e);
+          if (failure.category == 'compatibility') { ClientCompatibility().requireUpdate(); return false; }
           await _locked(owner, () async {
             final state = await _read(owner);
             if (!session.isCurrent) return;

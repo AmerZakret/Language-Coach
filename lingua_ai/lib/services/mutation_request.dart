@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:math';
-import 'package:http/http.dart' as http;
+import 'backend_http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 import 'auth_service.dart';
 import 'api_response.dart';
@@ -42,7 +42,7 @@ Future<http.Response> mutationRequest(
     try {
       return await dispatch();
     } on ApiException catch (error) {
-      if (!session.isCurrent ||
+      if (!session.isCurrent || (error.retryAfterMs ?? 0) > 0 ||
           (error.kind != ApiFailure.network &&
               error.kind != ApiFailure.server)) {
         rethrow;
@@ -106,6 +106,6 @@ class PreparedMultipartMutation {
           next.files.add(http.MultipartFile.fromBytes(file.field, file.bytes,
               filename: file.filename, contentType: file.contentType));
         }
-        return http.Response.fromStream(await next.send());
+        return http.sendMultipart(next);
       }, session);
 }

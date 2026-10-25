@@ -1,6 +1,6 @@
 # LinguaAI
 
-LinguaAI is a modern full-stack language learning application designed to help users master English (or other languages) through interactive lessons, quizzes, progress tracking, writing/speaking practice, and an AI-powered conversational coach, featuring robust cross-platform synchronization and complete offline capability.
+LinguaAI is a modern full-stack language learning application designed to help users master English (or other languages) through interactive lessons, quizzes, progress tracking, writing/speaking practice, and an AI-powered conversational coach, featuring robust cross-platform synchronization and owner-scoped offline progress/flashcard support and bounded online mutation recovery.
 
 ## Project Overview
 The project is split into four main components:
@@ -10,11 +10,11 @@ The project is split into four main components:
 4. **lingua_ai_pronunciation_service**: Python FastAPI service running Whisper for audio transcription and pronunciation analysis.
 
 ## Technologies Used
-- **Mobile**: Flutter, Dart, SharedPreferences, connectivity_plus
+- **Mobile**: Flutter, Dart, native checksummed FileSyncStorage, SharedPreferences caches, connectivity_plus
 - **Web Frontend**: React, Vite, TypeScript, CSS (Vanilla), Axios, Lucide React
 - **Backend**: NestJS, TypeScript, Mongoose, JWT Passport authentication
 - **Pronunciation Engine**: Python, FastAPI, faster-whisper (Whisper model)
-- **Database**: MongoDB Atlas
+- **Database**: MongoDB transaction-capable replica set
 - **AI Engine**: Google Gemini API
 
 ## Folder Structure
@@ -31,13 +31,13 @@ Language-Coach/
 ```
 
 ## Security Note
-**API Keys & Secrets**: The Gemini API key and MongoDB connection strings MUST be kept secret. They are strictly confined to the backend `.env` file. The `.env` file is ignored by version control. The web and mobile frontends do not communicate directly with the database or Gemini APIs; all requests are securely proxied through the NestJS backend.
+**API Keys & Secrets**: The Gemini API key and MongoDB connection strings MUST be kept secret. Development may use an ignored backend `.env`; production receives secrets through external configuration. The `.env` file is ignored by version control. The web and mobile frontends do not communicate directly with the database or Gemini APIs; all requests are securely proxied through the NestJS backend.
 
 ## Environment Variables
 To run the backend locally, you must create a `.env` file inside the `lingua_ai_backend` directory (you can copy `.env.example`). Required variables:
 
 - `PORT` (e.g., 3000)
-- `MONGODB_URI` (Your MongoDB Atlas connection string)
+- `MONGODB_URI` (Explicit MongoDB URI; transactions require a replica set)
 - `JWT_SECRET` (Your JWT secret key for auth)
 - `NODE_ENV` (e.g., development)
 - `GEMINI_API_KEY` (Your Google Gemini API key)
@@ -45,10 +45,13 @@ To run the backend locally, you must create a `.env` file inside the `lingua_ai_
 
 ## How to Run
 
+For complete component test commands and disposable test infrastructure, see
+[Local test baseline](TESTING.md).
+
 ### 1. Run the NestJS Backend
 ```bash
 cd lingua_ai_backend
-npm install
+npm ci
 npm run start:dev
 ```
 The backend will run on `http://localhost:3000`.
@@ -57,7 +60,7 @@ The backend will run on `http://localhost:3000`.
 Make sure the backend is running first.
 ```bash
 cd lingua_ai_web
-npm install
+npm ci
 npm run dev
 ```
 The web app will run on `http://localhost:5173`.
@@ -98,3 +101,9 @@ with the [configuration contract](PRODUCTION_CONFIGURATION.md). The local backen
 ## Screenshots
 
 *(Add screenshots of the web dashboard, mobile app, and AI chat interface here)*
+
+## Release packaging
+
+See [Release packaging and checklist](RELEASE_PACKAGING.md) for artifact allowlists,
+source-map policy, validated toolchains, build/version metadata and operator-only
+identity/signing/configuration requirements.

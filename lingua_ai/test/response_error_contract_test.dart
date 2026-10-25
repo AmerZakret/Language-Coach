@@ -260,15 +260,15 @@ void main() {
     await http.runWithClient(() async {
       final api = FlashcardApiService();
       final results = [
-        await api.createFlashcard('word', 'translation', 'de'),
-        await api.updateFlashcard('card', 'word', 'translation'),
-        await api.reviewCard('card', 4)
+        await api.createFlashcard('word', 'translation', 'de', operationId: 'fixture-create'),
+        await api.updateFlashcard('card', 'word', 'translation', operationId: 'fixture-update'),
+        await api.reviewCard('card', 4, operationId: 'fixture-review')
       ];
       for (final result in results) {
         expect(result.id, 'card');
         expect(result.card, isNull);
       }
-      await api.deleteFlashcard('card');
+      await api.deleteFlashcard('card', operationId: 'fixture-delete');
     }, () => MockClient((_) async => http.Response('{"_id":"card"}', 200)));
     final complete = FlashcardMutationResult.fromJson({
       '_id': 'card',

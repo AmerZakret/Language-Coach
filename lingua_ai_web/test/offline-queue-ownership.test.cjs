@@ -106,7 +106,7 @@ function harness(saved = storage(), fakeTimers = false) {
     for (const interceptor of requestInterceptors) pending = pending.then(interceptor);
     return pending.then(prepared => {
       requests.push(prepared);
-      let result = Promise.resolve().then(() => control.dispatch(prepared)).then(reply => {
+      let result = Promise.resolve().then(() => prepared.url === '/auth/guest' ? control.fetchGuest().then(async response => { if (!response.ok) throw new Error('Guest login failed'); return { data: await response.json() }; }) : control.dispatch(prepared)).then(reply => {
         // Success fixtures implement the current epoch acknowledgement contract.
         if (prepared.url.includes('/progress/') && method === 'post') return { ...reply, data: { ...reply.data,
           data: { ...reply.data?.data, progressEpoch: reply.data?.data?.progressEpoch ?? prepared.data.progressEpoch } } };
@@ -126,6 +126,7 @@ function harness(saved = storage(), fakeTimers = false) {
   transport.delete = (url, config) => request('delete', url, config?.data, config);
 
   const sources = {
+    protocol: 'utils/clientProtocol.ts', compatibility: 'utils/releaseCompatibility.ts',
     reachability: 'utils/backendReachability.ts', coordinator: 'utils/syncCoordinator.ts',
     policy: 'utils/syncRetryPolicy.ts', storage: 'utils/progressStorage.ts', types: 'types/progress.ts',
     userKey: 'utils/userKey.ts', queueSession: 'utils/queueSession.ts', authStorage: 'utils/authSessionStorage.ts', coordination: 'utils/browserCoordination.ts',
@@ -150,6 +151,8 @@ function harness(saved = storage(), fakeTimers = false) {
       console: { log() {}, error() {} },
       fetch: (...args) => control.fetchGuest(...args),
       require: name => {
+        if (name.endsWith('/clientProtocol')) return load('protocol');
+        if (name.endsWith('/releaseCompatibility')) return load('compatibility');
         if (name === 'react') return react;
         if (name === 'axios') return { create: () => transport };
         if (name === '../api/authApi') return { fetchMe: () => control.fetchMe() };
@@ -205,7 +208,7 @@ test('registered A logout, B isolation, and A recovery preserve owner queues', a
   await h.enqueue();
   assert.equal(await h.queue.processOfflineQueue(B), true);
   assert.equal(h.requests.length, 1);
-  assert.equal(h.requests[0].headers.Authorization, `Bearer test-${B}`);
+  assert.equal(h.requests.find(request => request.url !== '/auth/guest').headers.Authorization, `Bearer test-${B}`);
   assert.equal(h.saved.getItem(key(`registered_${A}`)), savedA);
   await h.auth().logout();
   await h.auth().login(user(A), `test-${A}`);
@@ -312,9 +315,10 @@ test('new action has precisely the versioned ownership envelope without credenti
   await h.auth().login(user(A), `test-${A}`);
   await h.enqueue();
   const action = h.queue.getOfflineQueue()[0];
-  assert.deepEqual(Object.keys(action).sort(), ['createdAt', 'id', 'ownerNamespace', 'payload', 'schemaVersion', 'type']);
+  assert.deepEqual(Object.keys(action).sort(), ['clientProtocolRevision', 'createdAt', 'id', 'ownerNamespace', 'payload', 'schemaVersion', 'type']);
   assert.equal(action.ownerNamespace, `registered_${A}`);
   assert.equal(action.schemaVersion, 1);
+  assert.equal(action.clientProtocolRevision, 1);
   assert.ok(Number.isFinite(Date.parse(action.createdAt)));
   assert.ok(action.id);
   assert.ok(!h.saved.getItem(key(`registered_${A}`)).includes(`test-${A}`));
@@ -381,7 +385,7 @@ test('late auth profile cannot replace B owner with A while retaining B credenti
   assert.equal(h.auth().user.id, B);
   await h.enqueue();
   assert.equal(await h.queue.processOfflineQueue(B), true);
-  assert.equal(h.requests[0].headers.Authorization, `Bearer test-${B}`);
+  assert.equal(h.requests.find(request => request.url !== '/auth/guest').headers.Authorization, `Bearer test-${B}`);
 });
 
 for (const operation of ['profile-fetch', 'profile-update', 'progress-fetch', 'lesson-complete', 'progress-reset', 'card-fetch']) {
@@ -691,9 +695,9 @@ test('Phase 4F: recovery and overlapping coordinator triggers send exactly once 
     h.control.dispatch = async () => { started.resolve(); return release.promise; };
     h.recover(); await h.advanceTimers(30_000); await started.promise;
     h.coordinator.wake(); h.coordinator.wake(); await h.health.refresh(); await h.advanceTimers(0);
-    assert.equal(h.requests.length, 1); assert.equal(h.requests[0].headers.Authorization, `Bearer test-${B}`);
+    assert.equal(h.requests.filter(request => request.url !== '/auth/guest').length, 1); assert.equal(h.requests.find(request => request.url !== '/auth/guest').headers.Authorization, `Bearer test-${B}`);
     release.resolve({ data: {} }); await h.advanceTimers(0);
-    assert.equal(h.queue.getOfflineQueue().length, 0); assert.equal(h.requests.length, 1);
+    assert.equal(h.queue.getOfflineQueue().length, 0); assert.equal(h.requests.filter(request => request.url !== '/auth/guest').length, 1);
   } finally { h.stop(); }
 });
 
@@ -704,7 +708,7 @@ test('Phase 4F: local guest is blocked even with healthy backend and automatic c
     await h.auth().loginAsGuest(); await h.enqueue(); h.recover(); await h.advanceTimers(30_000);
     h.coordinator.wake(); await h.advanceTimers(0);
     assert.equal(h.session.getOfflineQueueSession().ownerNamespace, 'local_guest');
-    assert.equal(h.requests.length, 0); assert.equal(h.queue.getOfflineQueue().length, 1);
+    assert.equal(h.requests.filter(request => request.url !== '/auth/guest').length, 0); assert.equal(h.queue.getOfflineQueue().length, 1);
   } finally { h.stop(); }
 });
 

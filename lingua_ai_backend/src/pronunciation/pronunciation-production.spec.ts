@@ -16,6 +16,7 @@ describe('8E internal pronunciation authentication (mocked HTTP only)', () => {
   const credential = () => randomBytes(32).toString('hex');
   const production = (overrides = {}) => ({
     NODE_ENV: 'production',
+    CLIENT_PROTOCOL_POLICY: 'ALLOW_LEGACY',
     MONGODB_URI: 'mongodb://db.example.invalid/language',
     JWT_SECRET: credential(),
     AI_ENABLED: 'false',

@@ -1,3 +1,5 @@
+import { ClientProtocolGuard } from '../compatibility/client-protocol.guard';
+import { CompatibilityController } from '../compatibility/compatibility.controller';
 import { Global, Module } from '@nestjs/common';
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { AbuseControls } from './abuse-controls';
@@ -11,7 +13,9 @@ import { SafeExceptionFilter } from './safe-exception.filter';
 
 @Global()
 @Module({
+  controllers: [CompatibilityController],
   providers: [
+    { provide: APP_GUARD, useClass: ClientProtocolGuard },
     AbuseControls,
     ProviderBudget,
     HttpSecurity,

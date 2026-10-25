@@ -74,15 +74,21 @@ class _CommunityScreenState extends State<CommunityScreen> {
     super.initState();
     _visibleSession = AuthService().captureSession();
     AuthService().addListener(_onSessionChanged);
+    ConnectivityService().addListener(_onConnectivityChanged);
     // Default learningLanguage to current targetLanguage
     final targetLangCode = TargetLanguageService().currentLanguage;
     _learningLanguage = TargetLanguageService.toFullName(targetLangCode);
     _loadFeed();
   }
 
+  void _onConnectivityChanged() {
+    if (!ConnectivityService().isOffline) _loadFeed();
+  }
+
   @override
   void dispose() {
     AuthService().removeListener(_onSessionChanged);
+    ConnectivityService().removeListener(_onConnectivityChanged);
     _postTextController.dispose();
     super.dispose();
   }
@@ -101,6 +107,12 @@ class _CommunityScreenState extends State<CommunityScreen> {
     try {
       final posts = await _communityService.fetchPosts(
         language: _selectedLanguage, isCurrent: isCurrent,
+        onRecoveryIssue: () {
+          if (isCurrent()) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text(
+              'A previous post needs confirmation or recovery. Saved action is preserved.')));
+          }
+        },
       );
       if (!isCurrent()) return;
       setState(() { _posts = posts; _isLoading = false; });
@@ -175,7 +187,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
     } catch (e) {
       if (!isCurrent()) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${lang.getString('failed_share_post')}: $e')),
+        const SnackBar(content: Text('Could not confirm this post. Saved action is preserved; refresh to recover before posting again.')),
       );
     } finally {
       if (isCurrent()) {
@@ -234,7 +246,8 @@ class _CommunityScreenState extends State<CommunityScreen> {
       if (isCurrent()) _loadFeed();
     } catch (e) {
       if (!isCurrent()) return;
-      // Revert on error
+      // Show the last known state while an authoritative refresh reconciles it.
+      _loadFeed();
       setState(() {
         final index = _posts.indexWhere((p) => p.id == postId);
         if (index != -1) {
@@ -319,8 +332,9 @@ class _CommunityScreenState extends State<CommunityScreen> {
                             _loadFeed();
                           } catch (e) {
                             if (!statefulContext.mounted || !isCurrent()) return;
+                            _loadFeed();
                             ScaffoldMessenger.of(statefulContext).showSnackBar(
-                              SnackBar(content: Text('${lang.getString('failed_update_post')}: $e')),
+                              const SnackBar(content: Text('Edit outcome is uncertain or conflicted. Refresh the feed and check the latest revision before retrying.')),
                             );
                           } finally {
                             if (statefulContext.mounted && isCurrent()) setDialogState(() => isSaving = false);
@@ -384,8 +398,9 @@ class _CommunityScreenState extends State<CommunityScreen> {
                   Navigator.pop(dialogContext);
                   
                   if (!mounted) return;
+                  _loadFeed();
                   ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('${lang.getString('failed_delete_post')}: $e')),
+                    const SnackBar(content: Text('Deletion could not be confirmed. Check the refreshed feed before retrying.')),
                   );
                 }
               },

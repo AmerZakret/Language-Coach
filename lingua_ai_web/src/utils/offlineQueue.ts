@@ -1,3 +1,5 @@
+import { CLIENT_PROTOCOL_REVISION } from './clientProtocol';
+import { releaseCompatibility } from './releaseCompatibility';
 import { targetLanguageCode, tryTargetLanguageCode } from './targetLanguage';
 import { classifySyncFailure, retryDelay, withReplayTimeout, REPLAY_TIMEOUT_MS, InvalidQueuedPayload } from './syncRetryPolicy';
 import type { RetryState } from './syncRetryPolicy';
@@ -13,6 +15,7 @@ import { isSessionCurrent } from './queueSession';
 import { serializeFlashcardMutation } from './flashcardMutation';
 
 export interface OfflineAction extends RetryState {
+  readonly clientProtocolRevision?: number;
   readonly id: string;
   readonly type: 'reset-progress' | 'complete-lesson' | 'create-flashcard' | 'update-flashcard' | 'delete-flashcard' | 'review-flashcard';
   readonly ownerNamespace: string;
@@ -92,6 +95,7 @@ function readState(owner: string): QueueState {
     || !Array.isArray(state.startedCreates) || state.startedCreates.some(id => typeof id !== 'string')
     || !Array.isArray(state.actions) || state.actions.some(action => !action
       || action.schemaVersion !== 1 || typeof action.ownerNamespace !== 'string' || !action.ownerNamespace
+      || (action.clientProtocolRevision !== undefined && (!Number.isInteger(action.clientProtocolRevision) || action.clientProtocolRevision < 0 || action.clientProtocolRevision > 999999))
       || typeof action.createdAt !== 'string' || !Number.isFinite(Date.parse(action.createdAt)))) throw new Error('Offline queue has no supported ownership schema');
   state.failedActions ??= [];
   if (!Array.isArray(state.failedActions) || state.failedActions.some(a => a.ownerNamespace !== owner)) throw new Error('Failed queue owner mismatch');
@@ -207,6 +211,7 @@ export const isPendingBackendCard = (id: string, owner: string): boolean => {
     || [...state.actions, ...(state.failedActions || [])].some(a => a.type === 'create-flashcard' && a.payload.tempId === id);
 };
 export const pushToOfflineQueue = async (type: OfflineAction['type'], payload: any, ownerNamespace: string, newProgress = false): Promise<void> => {
+  releaseCompatibility.assertMutationAllowed();
   const session = getOfflineQueueSession();
   // Preserve intent before waiting: never relabel an old completion to a newer epoch.
   const intent = JSON.parse(JSON.stringify(payload));
@@ -245,7 +250,7 @@ export const pushToOfflineQueue = async (type: OfflineAction['type'], payload: a
         writeState(state); return;
       }
     }
-    state.actions.push({ id: `action_${Date.now()}_${Math.random().toString(36).slice(2)}`, type,
+    state.actions.push({ clientProtocolRevision: CLIENT_PROTOCOL_REVISION, id: `action_${Date.now()}_${Math.random().toString(36).slice(2)}`, type,
       ownerNamespace, payload: resolvePayload(state, type, payload), createdAt: new Date().toISOString(), schemaVersion: 1 });
     if (type === 'complete-lesson' || type === 'reset-progress') state.progressRevision = state.actions.at(-1)!.id;
     writeState(state);
@@ -260,6 +265,7 @@ export const clearOfflineQueue = async (): Promise<void> => {
 };
 
 export const processOfflineQueue = async (userId: string, waitForActive = false): Promise<boolean> => {
+  try { releaseCompatibility.assertMutationAllowed(); } catch { return false; }
   const session = getOfflineQueueSession();
   const owner = session.ownerNamespace;
   if (waitForActive && drainWaiters.has(owner)) {
@@ -304,7 +310,8 @@ export const processOfflineQueue = async (userId: string, waitForActive = false)
         });
         if (action === null) continue;
         if (!action || !isOfflineQueueSessionActive(session)) return false;
-        const config: AxiosRequestConfig & { offlineQueueSession: QueueSession } = {
+        const config: AxiosRequestConfig & { offlineQueueSession: QueueSession; clientProtocolRevision: number | null } = {
+          clientProtocolRevision: action.clientProtocolRevision ?? null,
           offlineQueueSession: session,
           timeout: REPLAY_TIMEOUT_MS,
           headers: { 'X-Idempotency-Key': action.id },
@@ -353,6 +360,7 @@ export const processOfflineQueue = async (userId: string, waitForActive = false)
         } catch (error) {
           if (!isOfflineQueueSessionActive(session)) return false;
           const failure = classifySyncFailure(error);
+          if (failure.category === 'compatibility') { releaseCompatibility.reject(); return false; }
           const retained = await mutateOwner(owner, session, latest => {
             const current = latest.actions.find(a => a.id === action.id);
             if (!current) return false; // Reset/cancellation won while HTTP awaited.

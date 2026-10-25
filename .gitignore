@@ -10,6 +10,9 @@
 .env.development
 .env.production
 *.env
+.env.*
+!.env.example
+!.env.*.example
 
 # Node.js
 node_modules/
@@ -23,6 +26,8 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .mypy_cache/
+# Local model artifacts; source and configuration templates remain tracked.
+model-cache/
 
 # Flutter/Dart
 .dart_tool/
@@ -62,3 +67,10 @@ dist/
 dist-ssr/
 *.local
 .eslintcache
+
+# Disposable local clean-install verification checkouts.
+/.phase9a-validation/
+
+# Locally assembled release artifacts and disposable packaging verification.
+/.release/
+/.release-validation/

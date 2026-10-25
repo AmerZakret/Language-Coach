@@ -218,17 +218,25 @@ class HttpTests(unittest.IsolatedAsyncioTestCase):
         config = config or settings()
         model = model or Model()
         app = main.create_app(config, loader or (lambda _: model))
-        async with app.router.lifespan_context(app):
-            for _ in range(100):
-                if app.state.runtime.ready:
-                    break
-                await asyncio.sleep(0.005)
-            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://internal") as client:
-                try:
-                    yield client, app.state.runtime, model
-                finally:
-                    if model.release:
-                        model.release.set()
+        startup_complete = asyncio.Event()
+        real_event = main.event
+
+        def observe_startup(name, *args, **kwargs):
+            real_event(name, *args, **kwargs)
+            if name in ("model.ready", "model.unavailable"):
+                startup_complete.set()
+
+        with patch("main.event", side_effect=observe_startup):
+            async with app.router.lifespan_context(app):
+                # A safety bound diagnoses a stuck fixture; no guessed number of
+                # scheduler turns determines whether model initialization finished.
+                await asyncio.wait_for(startup_complete.wait(), timeout=5)
+                async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://internal") as client:
+                    try:
+                        yield client, app.state.runtime, model
+                    finally:
+                        if model.release:
+                            model.release.set()
 
     async def post(self, client, state, data=None, mime="audio/wav", headers=None, filename="audio.wav"):
         return await client.post("/transcribe", files={"audio": (filename, wav() if data is None else data, mime)},
@@ -346,7 +354,17 @@ class HttpTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_timeout_retains_slot_and_temp_until_native_completion(self):
         release = threading.Event()
-        model = Model(release=release)
+        entered = asyncio.Event()
+        loop = asyncio.get_running_loop()
+
+        class ControlledModel(Model):
+            def transcribe(self, audio, **options):
+                result = super().transcribe(audio, **options)
+                loop.call_soon_threadsafe(entered.set)
+                release.wait()  # Only the test's finally block permits native exit.
+                return result
+
+        model = ControlledModel()
         files = []
         real_spool = tempfile.SpooledTemporaryFile
         def spool(*args, **kwargs):
@@ -355,18 +373,41 @@ class HttpTests(unittest.IsolatedAsyncioTestCase):
             files.append(file)
             return file
         self.enterContext(patch('starlette.formparsers.SpooledTemporaryFile', side_effect=spool))
-        async with self.service(config=settings(timeout=0.08), model=model) as (client, state, _):
-            response = await self.post(client, state)
-            self.assertEqual(response.status_code, 504)
-            self.assertEqual(response.json(), {"code": "INFERENCE_TIMEOUT"})
-            self.assertEqual(state.active, 1)
-            self.assertTrue(files and not files[0].closed)
-            self.assertEqual((await self.post(client, state)).status_code, 429)
-            release.set()
-            for _ in range(100):
-                if state.active == 0:
-                    break
-                await asyncio.sleep(0.005)
+        real_timeout = asyncio.timeout
+
+        @asynccontextmanager
+        async def timeout_after_entry(delay):
+            self.assertGreater(delay, 0)
+            # Exercise real asyncio deadline cancellation, but arm it only after
+            # decode completed and inference actually entered the native worker.
+            async with real_timeout(None) as deadline:
+                async def expire():
+                    await entered.wait()
+                    deadline.reschedule(loop.time())
+                trigger = asyncio.create_task(expire())
+                try:
+                    yield
+                finally:
+                    trigger.cancel()
+                    await asyncio.gather(trigger, return_exceptions=True)
+
+        async with self.service(model=model) as (client, state, _):
+            try:
+                with patch('main.asyncio.timeout', side_effect=timeout_after_entry):
+                    response = await asyncio.wait_for(self.post(client, state), timeout=5)
+                self.assertTrue(entered.is_set())
+                self.assertEqual(response.status_code, 504)
+                self.assertEqual(response.json(), {"code": "INFERENCE_TIMEOUT"})
+                self.assertEqual(state.active, 1)
+                self.assertTrue(files and not files[0].closed)
+                self.assertEqual((await self.post(client, state)).status_code, 429)
+            finally:
+                # Snapshot the worker future before releasing it. Its registered
+                # completion callbacks close the spool and return the permit.
+                pending = tuple(state.pending)
+                release.set()
+                if pending:
+                    await asyncio.wait_for(asyncio.gather(*pending), timeout=5)
             self.assertEqual(state.active, 0)
             self.assertTrue(files[0].closed)
             self.assertEqual((await self.post(client, state)).status_code, 200)

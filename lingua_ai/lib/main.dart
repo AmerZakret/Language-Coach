@@ -1,3 +1,4 @@
+import 'core/config/client_protocol.dart';
 import 'package:flutter/material.dart';
 import 'app.dart';
 import 'services/progress_service.dart';
@@ -15,6 +16,9 @@ import 'core/config/api_config.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   ApiConfig.validateReleaseConfiguration();
+  if (!ClientProtocol.validBuildId(ClientProtocol.buildId)) {
+    throw StateError('BUILD_ID must be a public identifier of 1 to 96 safe characters.');
+  }
 
   await ConnectivityService().init();
   await ThemeService().init();

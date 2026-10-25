@@ -1,3 +1,4 @@
+import { ClientProtocolError } from '../compatibility/client-protocol.error';
 import {
   ArgumentsHost,
   Catch,
@@ -71,6 +72,11 @@ export class SafeExceptionFilter implements ExceptionFilter {
   catch(error: any, host: ArgumentsHost) {
     const response = host.switchToHttp().getResponse<Response>();
     if (response.headersSent || response.destroyed) return;
+    if (error instanceof ClientProtocolError) {
+      response.setHeader('Cache-Control', 'no-store');
+      response.status(426).json(error.publicBody);
+      return;
+    }
     let status = error instanceof HttpException ? error.getStatus() : 500;
     if (
       error?.type === 'entity.too.large' ||

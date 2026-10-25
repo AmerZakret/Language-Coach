@@ -1,3 +1,4 @@
+import { releaseCompatibility } from './releaseCompatibility';
 import { coordinationAvailable } from './browserCoordination';
 import { backendReachability } from './backendReachability';
 import type { BackendReachability } from './backendReachability';
@@ -33,7 +34,7 @@ export class SyncCoordinator {
     this.timer = setTimeout(() => { void this.drain(); }, 0);
   };
   private schedule() {
-    if (!coordinationAvailable() || !this.started || !this.health.snapshot().backendReachable) return;
+    if (releaseCompatibility.snapshot().updateRequired || !coordinationAvailable() || !this.started || !this.health.snapshot().backendReachable) return;
     const session = getOfflineQueueSession();
     if (!isOfflineQueueSessionActive(session)) return;
     const first = getOfflineQueue()[0];
@@ -42,7 +43,7 @@ export class SyncCoordinator {
     this.timer = setTimeout(() => { void this.drain(); }, delay);
   }
   private async drain() {
-    if (!coordinationAvailable() || !this.started || this.running || !this.health.snapshot().backendReachable) return;
+    if (releaseCompatibility.snapshot().updateRequired || !coordinationAvailable() || !this.started || this.running || !this.health.snapshot().backendReachable) return;
     const session = getOfflineQueueSession();
     if (!isOfflineQueueSessionActive(session)) return;
     this.running = true;

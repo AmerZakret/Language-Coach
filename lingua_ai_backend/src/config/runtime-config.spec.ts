@@ -19,6 +19,7 @@ import {
 function production(overrides: Record<string, unknown> = {}) {
   return {
     NODE_ENV: 'production',
+    CLIENT_PROTOCOL_POLICY: 'ALLOW_LEGACY',
     MONGODB_URI: 'mongodb://db.example.invalid/language',
     JWT_SECRET: randomBytes(48).toString('base64'),
     PORT: '3000',
@@ -267,7 +268,7 @@ describe('Phase 8A production configuration (no external services)', () => {
       const bytes = readFileSync(resolve(root, file));
       if (bytes.includes(0)) continue;
       const source = bytes.toString('utf8');
-      const uris =
+      const uris: string[] =
         source.match(/mongodb(?:\+srv)?:\/\/[^\s'"`]+@[^\s'"`]+/g) || [];
       const redactionFixture = ['mongodb://', 'SECRET', '@HOST'].join('');
       if (

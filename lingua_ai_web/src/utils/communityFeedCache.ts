@@ -39,7 +39,7 @@ export function writeCommunityFeed(query: CommunityQuery, payload: GetCommunityP
   try { localStorage.setItem(communityCacheKey(query), JSON.stringify({ schemaVersion: 2, ...query, payload })); }
   catch { /* A cache storage failure must not reject a valid online feed. */ }
 }
-export function invalidateCommunityFeed(owner: string, change: { postId?: string; language?: string }): void {
+export function invalidateCommunityFeed(owner: string, change: { postId?: string; language?: string }, requireAcknowledgement = false): void {
   try {
     const ownerPrefix = `${prefix}${encodeURIComponent(owner)}_`;
     const language = change.language ? targetLanguageCode(change.language) : undefined;
@@ -51,10 +51,13 @@ export function invalidateCommunityFeed(owner: string, change: { postId?: string
         const query = communityQuery(owner, entry.language, entry.page, entry.limit);
         const feed = readCommunityFeed(query);
         if (feed && key === communityCacheKey(query) && ((language && (query.language === 'All' || query.language === language))
-          || (change.postId && feed.items.some(post => post._id === change.postId)))) localStorage.removeItem(key);
-      } catch { /* Never touch another owner's entries or unrelated storage. */ }
+          || (change.postId && feed.items.some(post => post._id === change.postId)))) {
+          try { localStorage.removeItem(key); }
+          catch { if (requireAcknowledgement) throw new Error('Post saved; cache acknowledgement needs recovery.'); }
+        }
+      } catch (error) { if (requireAcknowledgement && error instanceof Error && error.message === 'Post saved; cache acknowledgement needs recovery.') throw error; }
     }
-  } catch { /* Unavailable storage cannot turn a committed mutation into a failure. */ }
+  } catch (error) { if (requireAcknowledgement) throw error; }
 }
 export function communityNetworkFailure(error: unknown): boolean {
   const failure = error as { response?: unknown; request?: unknown; code?: string } | null;

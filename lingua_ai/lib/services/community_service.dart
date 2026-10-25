@@ -1,9 +1,11 @@
+import 'online_intent_dispatch.dart';
+import 'online_intent_service.dart';
 import 'mutation_request.dart';
 import '../core/localization/target_language.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
-import 'package:http/http.dart' as http;
+import 'backend_http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../core/config/api_config.dart';
@@ -54,8 +56,10 @@ class CommunityService {
       {String? language,
       int page = 1,
       int limit = 50,
-      bool Function()? isCurrent}) async {
+      bool Function()? isCurrent, void Function()? onRecoveryIssue}) async {
     final session = AuthService().captureSession();
+    try { await recoverOnlineIntents('community'); }
+    catch (_) { onRecoveryIssue?.call(); }
     final version = _feedVersions[session.ownerNamespace] ?? 0;
     final viewCurrent = isCurrent;
     isCurrent = () =>
@@ -117,16 +121,28 @@ class CommunityService {
     try {
       final session = expectedSession ?? AuthService().captureSession();
       _requireSession(session);
+      final saved = (await OnlineIntentService.list()).where((item) =>
+          item['kind'] == 'community-create' && item['language'] == TargetLanguage.code(learningLanguage));
+      _requireSession(session);
+      if (saved.isNotEmpty && imagePath != null && !kIsWeb && !await File(imagePath).exists()) {
+        final intent = saved.first;
+        final payload = Map<String, dynamic>.from(intent['payload']);
+        final fields = Map<String, String>.from(payload['fields']);
+        final files = payload['files'] as List;
+        if (fields['text'] != (text?.trim().isNotEmpty == true ? text!.trim() : null) ||
+            files.length != 1 || files.first['filename'] != imagePath.split(Platform.pathSeparator).last ||
+            (operationId != null && intent['id'] != operationId)) {
+          throw const IntentRecoveryRequired();
+        }
+        final result = await durableOnlineMutation('community-create', intent['language'], payload,
+            operationId: intent['id'], expectedSession: session);
+        _requireSession(session, isCurrent);
+        return CommunityPost.fromJson(result);
+      }
       final token = AuthService().token;
       final uri = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.communityPosts}');
-      final slot = '${session.revision}:create';
-      final id = _intents.operation(
-          slot, jsonEncode([learningLanguage, text, imagePath]),
-          operationId: operationId);
-      final uploadKey = '${session.revision}:community-create:$id';
-      _bindUpload(uploadKey, jsonEncode([learningLanguage, text, imagePath]));
       final request = http.MultipartRequest('POST', uri);
-      request.headers['X-Idempotency-Key'] = id;
+
 
       if (token.isNotEmpty) {
         request.headers['Authorization'] = 'Bearer $token';
@@ -138,8 +154,7 @@ class CommunityService {
         request.fields['text'] = text.trim();
       }
 
-      if (!_uploads.containsKey(uploadKey) &&
-          imagePath != null &&
+      if (imagePath != null &&
           imagePath.isNotEmpty) {
         if (kIsWeb) {
           final response = await http.get(Uri.parse(imagePath));
@@ -153,6 +168,9 @@ class CommunityService {
         } else {
           final file = File(imagePath);
           if (await file.exists()) {
+            if (await file.length() > 5 * 1024 * 1024) {
+              throw StateError('Image exceeds the recovery storage limit. No post was sent.');
+            }
             final multipartFile = await http.MultipartFile.fromPath(
               'image',
               imagePath,
@@ -166,31 +184,21 @@ class CommunityService {
         }
       }
 
-      final prepared = await _uploads.putIfAbsent(
-          uploadKey, () => PreparedMultipartMutation.prepare(request));
-      final response = await prepared.send(session);
-
-      if (response.statusCode == 200 || response.statusCode == 201) {
-        _requireSession(session);
-        final decoded = json.decode(response.body);
-        final post = CommunityPost.fromJson(decoded);
-        if (post.id.isEmpty) {
-          throw const FormatException('Missing post acknowledgement identity');
-        }
-        _uploads.remove(uploadKey);
-        _uploadPayloads.remove(uploadKey);
-        _intents.complete(slot, id);
-        _requireSession(session, isCurrent);
-        await _invalidate(session,
-            postId: post.id,
-            language: post.learningLanguage,
-            isCurrent: isCurrent);
-        _requireSession(session);
-        return post;
-      } else {
-        throw Exception(response.body);
-      }
-    } catch (e) {
+      final prepared = await PreparedMultipartMutation.prepare(request);
+      final result = await durableOnlineMutation('community-create',
+          TargetLanguage.code(learningLanguage), {
+            'fields': Map<String, String>.from(prepared.request.fields),
+            'files': prepared.files.map((file) => {
+              'field': file.field, 'filename': file.filename,
+              'contentType': file.contentType.toString(), 'bytes': base64Encode(file.bytes),
+            }).toList(),
+          }, operationId: operationId, expectedSession: session);
+      _requireSession(session);
+      final post = CommunityPost.fromJson(result);
+      await _invalidate(session, postId: post.id, language: post.learningLanguage);
+      _requireSession(session, isCurrent);
+      return post;
+    } catch (_) {
       rethrow;
     }
   }
@@ -317,10 +325,21 @@ class CommunityService {
       }
 
       final url = '${ApiConfig.baseUrl}${ApiConfig.communityPosts}/$postId';
-      final response = await mutationRequest(() {
-        _requireSession(session);
-        return http.delete(Uri.parse(url), headers: headers);
-      }, session);
+      late http.Response response;
+      try {
+        response = await mutationRequest(() {
+          _requireSession(session);
+          return http.delete(Uri.parse(url), headers: headers);
+        }, session);
+      } on ApiException catch (error) {
+        if (error.statusCode != 404) rethrow;
+        // A resource-specific not-found response confirms absence. No revision
+        // is ever advanced or guessed in order to force a deletion.
+        _requireSession(session, isCurrent);
+        _intents.complete(slot, id);
+        await _invalidate(session, postId: postId, language: learningLanguage, isCurrent: isCurrent);
+        return;
+      }
 
       _intents.complete(slot, id);
       if (response.statusCode != 200 && response.statusCode != 204) {

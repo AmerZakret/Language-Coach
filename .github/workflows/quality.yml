@@ -1,0 +1,121 @@
+name: Repository quality and release artifacts
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+env:
+  QUALITY_BUILD_ID: ci-${{ github.run_id }}-${{ github.run_attempt }}
+permissions:
+  contents: read
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  backend:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.14.0'
+      - uses: actions/cache@v4
+        with:
+          path: ~/.npm/_cacache
+          key: ${{ runner.os }}-${{ runner.arch }}-node22.14.0-npm10.9.0-${{ hashFiles('lingua_ai_backend/package-lock.json') }}
+      - run: npm install --global npm@10.9.0
+      - run: npm ci
+        working-directory: lingua_ai_backend
+      - run: node scripts/quality-check.cjs backend
+      - run: git diff --exit-code && test -z "$(git ls-files --others --exclude-standard)"
+  web:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.14.0'
+      # The real reset-route contract fixture uses Nest from backend dev deps.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.npm/_cacache
+          key: ${{ runner.os }}-${{ runner.arch }}-node22.14.0-npm10.9.0-${{ hashFiles('lingua_ai_backend/package-lock.json', 'lingua_ai_web/package-lock.json') }}
+      - run: npm install --global npm@10.9.0
+      - run: npm ci
+        working-directory: lingua_ai_backend
+      - run: npm ci
+        working-directory: lingua_ai_web
+      - run: node scripts/quality-check.cjs web
+      - run: git diff --exit-code && test -z "$(git ls-files --others --exclude-standard)"
+  flutter:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.14.0'
+      - uses: actions/cache@v4
+        with:
+          path: ~/.npm/_cacache
+          key: ${{ runner.os }}-${{ runner.arch }}-node22.14.0-npm10.9.0-${{ hashFiles('lingua_ai_backend/package-lock.json') }}
+      - run: npm install --global npm@10.9.0
+      - run: npm ci
+        working-directory: lingua_ai_backend
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.7'
+          channel: stable
+      - run: node scripts/quality-check.cjs flutter
+      - run: git diff --exit-code && test -z "$(git ls-files --others --exclude-standard)"
+  pronunciation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.14.0'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12.4'
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-${{ runner.arch }}-python3.12.4-${{ hashFiles('lingua_ai_pronunciation_service/requirements*.txt') }}
+      - run: python -m venv .venv
+      - run: ../.venv/bin/python -m pip install -r requirements.txt -r requirements-dev.txt
+        working-directory: lingua_ai_pronunciation_service
+        # Use the root venv, not a developer service environment.
+      - run: node scripts/quality-check.cjs pronunciation
+        env:
+          QUALITY_PYTHON: ${{ github.workspace }}/.venv/bin/python
+      - run: git diff --exit-code && test -z "$(git ls-files --others --exclude-standard)"
+  release-hygiene:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.14.0'
+      - uses: actions/cache@v4
+        with:
+          path: ~/.npm/_cacache
+          key: ${{ runner.os }}-${{ runner.arch }}-node22.14.0-npm10.9.0-${{ hashFiles('lingua_ai_backend/package-lock.json') }}
+      - run: npm install --global npm@10.9.0
+      - run: npm ci
+        working-directory: lingua_ai_backend
+      - run: node scripts/quality-check.cjs release
+      # Component quality commands validate their existing built artifacts.
+      # This cheap source gate also reports placeholder mobile identities.
+      - run: node scripts/check-release-artifacts.cjs repository
+      - run: node scripts/quality-check.cjs hygiene
+      - run: git diff --check && git diff --exit-code && test -z "$(git ls-files --others --exclude-standard)"

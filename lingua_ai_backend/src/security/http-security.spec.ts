@@ -132,6 +132,7 @@ describe('8C real HTTP policy pipeline (signed JWTs, disposable files, no extern
   beforeEach(async () => {
     config = new ConfigService({
       NODE_ENV: 'production',
+      CLIENT_PROTOCOL_POLICY: 'ALLOW_LEGACY',
       JWT_SECRET: randomBytes(48).toString('hex'),
       CORS_ORIGINS: 'https://app.example.invalid',
       TRUST_PROXY: 'false',
@@ -498,6 +499,7 @@ describe('8C real HTTP policy pipeline (signed JWTs, disposable files, no extern
     expect(() =>
       validateEnvironment({
         NODE_ENV: 'production',
+        CLIENT_PROTOCOL_POLICY: 'ALLOW_LEGACY',
         MONGODB_URI: 'mongodb://db.example.invalid/test',
         JWT_SECRET: randomBytes(48).toString('hex'),
         AI_ENABLED: false,

@@ -1,6 +1,6 @@
 import { targetLanguageCode, targetLanguageTtsLocale } from '../utils/targetLanguage';
 import type { TargetLanguageCode } from '../types/language';
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { ArrowLeft, ArrowRight, Plus, Edit2, Trash2, BookOpen, GraduationCap, X, Calendar, MessageSquare, AlertCircle, Volume2, Star, Play, Pause, Shuffle, Maximize2, Lightbulb } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
@@ -9,7 +9,7 @@ import { useTargetLanguage } from "../context/TargetLanguageContext";
 import apiClient from "../api/apiClient";
 import { useSync } from "../context/SyncContext";
 import { useNetwork } from "../context/NetworkContext";
-import { pushToOfflineQueue, isPendingBackendCard } from "../utils/offlineQueue";
+import { pushToOfflineQueue, isPendingBackendCard, processOfflineQueue, getFailedOfflineActions, subscribeOfflineQueue } from "../utils/offlineQueue";
 import { getUserProgressKey } from "../utils/userKey";
 import { useSessionGuard } from "../utils/useSessionGuard";
 import { getSessionRequestConfig } from "../utils/queueSession";
@@ -73,6 +73,18 @@ export function FlashcardsPage() {
   const captureContext = useSessionGuard(queueOwner, targetLanguage);
   const userId = user?.id || user?.email || (isGuest ? 'guest@lingua.ai' : 'unknown');
   const { isOffline } = useNetwork();
+  const reviewInFlight = useRef<symbol | null>(null);
+  const [failedReviewCount, setFailedReviewCount] = useState(0);
+  useEffect(() => {
+    const isCurrent = captureContext();
+    const refresh = () => {
+      if (!isCurrent()) return;
+      try { setFailedReviewCount(getFailedOfflineActions().filter(action => action.type === 'review-flashcard').length); }
+      catch { setFailedReviewCount(-1); } // Preserve corrupt storage; submissions still fail closed.
+    };
+    refresh();
+    return subscribeOfflineQueue(refresh);
+  }, [captureContext]);
   const pendingMutationIds = useRef(new Map<string, string>());
   const mutationRequest = (operation: string, payload: object) => {
     const key = `${queueOwner}|${targetLanguage}|${operation}|${JSON.stringify(payload)}`;
@@ -85,9 +97,6 @@ export function FlashcardsPage() {
   };
 
   const { syncRevision, lastDrainSucceeded } = useSync();
-  useEffect(() => {
-    if (!isOffline && syncRevision > 0 && lastDrainSucceeded) void fetchCards();
-  }, [isOffline, syncRevision, lastDrainSucceeded, captureContext]);
 
   // View & Modal states
   const [view, setView] = useState<"list" | "study">("list");
@@ -130,46 +139,7 @@ export function FlashcardsPage() {
   const [hintVisible, setHintVisible] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
-  useEffect(() => {
-    pendingMutationIds.current.clear();
-    setAllCards([]);
-    setDueCards([]);
-    setOriginalDueCards([]);
-    setModal(null);
-    setSelectedCard(null);
-    setDeleteConfirmId(null);
-    setSuccessMsg(null);
-    setIsPlaying(false);
-    setView('list');
-    setStudyResults([]);
-    fetchCards();
-  }, [user, targetLanguage, captureContext]);
-
-  useEffect(() => {
-    const handleFullscreenChange = () => {
-      setIsFullscreen(!!document.fullscreenElement);
-    };
-    document.addEventListener("fullscreenchange", handleFullscreenChange);
-    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
-  }, []);
-
-  // Slideshow automatic player
-  useEffect(() => {
-    let timer: any;
-    if (isPlaying && view === "study" && !studyFinished) {
-      timer = setInterval(() => {
-        if (!flipped) {
-          setFlipped(true);
-        } else {
-          // Record automatic default pass (score 4)
-          handleStudyScore(4, false);
-        }
-      }, 4000);
-    }
-    return () => clearInterval(timer);
-  }, [isPlaying, flipped, currentStudyIndex, dueCards, view, studyFinished]);
-
-  const fetchCards = async () => {
+  const fetchCards = useCallback(async () => {
     const isCurrent = captureContext();
     if (!isCurrent()) return;
     const requestConfig = getSessionRequestConfig();
@@ -215,7 +185,107 @@ export function FlashcardsPage() {
     } finally {
       if (isCurrent()) setLoading(false);
     }
-  };
+  }, [captureContext, localOnly, targetLanguage, t, userId]);
+
+  const handleStudyScore = useCallback(async (score: number) => {
+    const isCurrent = captureContext();
+    if (!isCurrent() || reviewInFlight.current) return;
+    const card = dueCards[currentStudyIndex];
+    if (!card) return;
+    const submission = Symbol('review');
+    reviewInFlight.current = submission;
+    try {
+      if (localOnly) {
+        const { all } = await mutateLocalGuestCards<CardData>(targetLanguage,
+          latest => latest.map(current => current._id === card._id ? reviewedCard(current, score) : current), isCurrent);
+        if (!isCurrent()) return;
+        setAllCards(all);
+      } else {
+        // Persist BEFORE the first HTTP attempt, even online. The queue owns the
+        // one operation ID, retry policy, receipt replay and matching-ID ack.
+        await pushToOfflineQueue('review-flashcard', { cardId: card._id, score }, queueOwner);
+        if (!isCurrent()) return;
+        const updatedAll = allCards.map(current => current._id === card._id ? reviewedCard(current, score) : current);
+        setAllCards(updatedAll);
+        try { localStorage.setItem(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(updatedAll)); }
+        catch { setError('Review is pending. The local card preview could not be cached.'); }
+        if (!isOffline) {
+          // A failed/ambiguous attempt remains durable. The application sync
+          // coordinator also resumes this work after reconnect or page disposal.
+          try { await processOfflineQueue(userId, true); }
+          catch { if (isCurrent()) setError('Review is pending and will sync when available.'); }
+        }
+      }
+      if (!isCurrent()) return;
+      setStudyResults(previous => [...previous, score]);
+      if (currentStudyIndex + 1 >= dueCards.length) {
+        setStudyFinished(true);
+        setIsPlaying(false);
+      } else {
+        setCurrentStudyIndex(previous => previous + 1);
+        setFlipped(false);
+        setHintVisible(false);
+      }
+    } catch {
+      if (isCurrent()) {
+        setIsPlaying(false);
+        setError('Review could not be saved. Refresh your cards before continuing. Pending reviews are retained.');
+      }
+    } finally {
+      if (reviewInFlight.current === submission) reviewInFlight.current = null;
+    }
+  }, [captureContext, dueCards, currentStudyIndex, localOnly, targetLanguage, queueOwner, allCards, userId, isOffline]);
+
+  useEffect(() => {
+    // Keep the active study snapshot stable when its own queued review drains.
+    if (view !== 'list' || isOffline || syncRevision === 0 || !lastDrainSucceeded) return;
+    // A sync notification schedules a refresh; it never resets study state in
+    // the same render/effect commit. Cleanup cancels superseded notifications.
+    let active = true;
+    void Promise.resolve().then(() => { if (active) return fetchCards(); });
+    return () => { active = false; };
+  }, [view, isOffline, syncRevision, lastDrainSucceeded, fetchCards]);
+
+  useEffect(() => {
+    pendingMutationIds.current.clear();
+    reviewInFlight.current = null;
+    setAllCards([]);
+    setDueCards([]);
+    setOriginalDueCards([]);
+    setModal(null);
+    setSelectedCard(null);
+    setDeleteConfirmId(null);
+    setSuccessMsg(null);
+    setIsPlaying(false);
+    setView('list');
+    setStudyResults([]);
+    fetchCards();
+  }, [user, targetLanguage, captureContext, fetchCards]);
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, []);
+
+  // Slideshow automatic player
+  useEffect(() => {
+    let timer: any;
+    if (isPlaying && view === "study" && !studyFinished) {
+      timer = setInterval(() => {
+        if (!flipped) {
+          setFlipped(true);
+        } else {
+          // Record automatic default pass (score 4)
+          void handleStudyScore(4);
+        }
+      }, 4000);
+    }
+    return () => clearInterval(timer);
+  }, [isPlaying, flipped, view, studyFinished, handleStudyScore]);
+
 
   const handleOpenAdd = () => {
     setFormData({ targetWord: "", turkishTranslation: "", exampleSentence: "", note: "" });
@@ -396,50 +466,6 @@ export function FlashcardsPage() {
     setView("study");
   };
 
-  const handleStudyScore = async (score: number, _manual: boolean = true) => {
-    const isCurrent = captureContext();
-    if (!isCurrent()) return;
-    const card = dueCards[currentStudyIndex];
-    if (card) {
-      if (localOnly) {
-        try {
-          const { all } = await mutateLocalGuestCards<CardData>(targetLanguage,
-            latest => latest.map(current => current._id === card._id ? reviewedCard(current, score) : current), isCurrent);
-          if (!isCurrent()) return;
-          setAllCards(all);
-        } catch (error) { if (isCurrent()) setError((error as Error).message); return; }
-      } else if (isOffline || isPendingBackendCard(card._id, queueOwner)) {
-        try { await pushToOfflineQueue('review-flashcard', { cardId: card._id, score }, queueOwner); }
-        catch (error) { if (isCurrent()) setError((error as Error).message); return; }
-        if (!isCurrent()) return;
-        const updatedCard = reviewedCard(card, score);
-
-        const updatedAll = allCards.map(c => c._id === card._id ? updatedCard : c);
-        setAllCards(updatedAll);
-        localStorage.setItem(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(updatedAll));
-
-      } else {
-        try {
-          await apiClient.put(`/flashcards/${card._id}/review`, { score }, {
-            ...getSessionRequestConfig(), headers: { 'X-Idempotency-Key': createFlashcardOperationId() },
-          });
-        } catch (e) {
-          console.error("Failed to save review to backend", e);
-        }
-      }
-    }
-
-    if (!isCurrent()) return;
-    setStudyResults((prev) => [...prev, score]);
-    if (currentStudyIndex + 1 >= dueCards.length) {
-      setStudyFinished(true);
-      setIsPlaying(false);
-    } else {
-      setCurrentStudyIndex((prev) => prev + 1);
-      setFlipped(false);
-      setHintVisible(false);
-    }
-  };
 
   const speakWord = (text: string, langKey?: string, e?: React.MouseEvent) => {
     const isCurrent = captureContext();
@@ -542,6 +568,18 @@ export function FlashcardsPage() {
           <AlertCircle size={18} />
           <span style={{ fontSize: "13px", fontWeight: 600 }}>{error}</span>
           <button onClick={() => setError(null)} className="ml-2 hover:opacity-70"><X size={14} /></button>
+        </div>
+      )}
+      {failedReviewCount < 0 && (
+        <div role="alert" className="p-4 mb-4 rounded-xl">
+          Saved review work cannot be read. It has been preserved. Recover local storage before submitting reviews.
+        </div>
+      )}
+      {failedReviewCount > 0 && (
+        <div role="alert" className="p-4 mb-4 rounded-xl" style={{ background: "var(--l-surface)", border: "1px solid #F59E0B" }}>
+          {failedReviewCount} review(s) could not be saved and were retained for inspection. They will not retry automatically.
+          Refresh your cards to reconcile server state, then review the affected cards again.
+          <button onClick={() => { void fetchCards(); }} className="ml-2 underline">Refresh cards</button>
         </div>
       )}
       {successMsg && (
@@ -913,7 +951,7 @@ export function FlashcardsPage() {
                               key={i}
                               onClick={(e) => {
                                 e.stopPropagation();
-                                handleStudyScore(i, true);
+                                void handleStudyScore(i);
                               }}
                               className="flex flex-col items-center py-2.5 rounded-xl border hover:-translate-y-0.5 transition-all duration-200"
                               style={{ background: c.bg, borderColor: c.border }}

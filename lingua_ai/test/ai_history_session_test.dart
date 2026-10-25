@@ -1,3 +1,4 @@
+import 'package:lingua_ai/services/online_intent_service.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -47,6 +48,7 @@ void main() {
     await ProgressService().init();
   });
   setUp(() async {
+    OnlineIntentService.clock = () => DateTime.now().millisecondsSinceEpoch;
     auth.logout();
     await settle();
     await prefs.clear();
@@ -192,7 +194,7 @@ void main() {
     }));
   });
 
-  testWidgets('AI language ABA starts a new send intent after an uncertain old send', (tester) async {
+  testWidgets('9D AI language ABA recovers the original uncertain intent before a fresh intentional send', (tester) async {
     final keys = <String>[];
     await http.runWithClient(() async {
       await login(a);
@@ -204,14 +206,18 @@ void main() {
       expect(keys, hasLength(2));
       ScaffoldMessenger.of(tester.element(find.byType(TextField))).hideCurrentSnackBar();
       await tester.pumpAndSettle();
+      OnlineIntentService.clock = () => DateTime.now().millisecondsSinceEpoch + 300001;
       await languages.setLanguage('de', syncToBackend: false);
       await languages.setLanguage('en', syncToBackend: false);
       await tester.pumpAndSettle();
+      expect(keys, hasLength(3));
+      expect(keys.toSet(), hasLength(1));
       await tester.enterText(find.byType(TextField), 'hello');
       await tester.tap(find.byIcon(Icons.send_rounded));
       await tester.pumpAndSettle();
-      expect(keys, hasLength(3));
-      expect(keys[0], keys[1]); expect(keys[2], isNot(keys[0]));
+      expect(keys, hasLength(4));
+      expect(keys[0], keys[2]); expect(keys[3], isNot(keys[0]));
+      OnlineIntentService.clock = () => DateTime.now().millisecondsSinceEpoch;
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox.shrink());
     }, () => MockClient((request) async {

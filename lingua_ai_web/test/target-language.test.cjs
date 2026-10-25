@@ -18,6 +18,8 @@ function harness() {
       compilerOptions: { module: ts.ModuleKind.CommonJS, esModuleInterop: true },
     }).outputText, { module, exports: module.exports, crypto: require('node:crypto').webcrypto, FormData, Blob,
       require: name => {
+        if (name.endsWith('/onlineIntents')) return {};
+        if (name.endsWith('/intentRecovery')) return require('./helpers/isolatedIntentBoundary.cjs').isolatedIntentBoundary(client);
         if (name.endsWith('/apiClient')) return { __esModule: true, default: client };
         if (name.endsWith('/queueSession')) return { isSessionCurrent: () => true, getSessionRequestConfig: () => ({ sessionSnapshot: { userId: 'owner' } }) };
         if (name === 'axios') return require('axios');

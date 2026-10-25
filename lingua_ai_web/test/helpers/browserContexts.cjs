@@ -59,7 +59,7 @@ function origin() {
       createElement:(type,props,...children)=>({type,props:{...props,children:children.length===1?children[0]:children}}),
     };
     const requestInterceptors=[],responseInterceptors=[];
-    tab.dispatch=async req=>req.url.includes('complete-lesson')?{data:{data:{progressEpoch:req.data.progressEpoch}}}
+    tab.dispatch=async req=>req.url === '/auth/guest' ? {data:await (await tab.fetchGuest()).json()} : req.url.includes('complete-lesson')?{data:{data:{progressEpoch:req.data.progressEpoch}}}
       : req.url.startsWith('/progress/') && req.method==='delete'?{data:{progressEpoch:req.data.expectedEpoch+1}}
       : {data:{_id:`server-${req.headers['X-Idempotency-Key']}`}};
     const transport={interceptors:{request:{use:fn=>requestInterceptors.push(fn)},response:{use:(success,failure)=>responseInterceptors.push({success,failure})}}};
@@ -80,8 +80,8 @@ function origin() {
       const module={exports:{}};modules.set(full,module);
       const code=readFileSync(full,'utf8').replaceAll('import.meta.env.VITE_API_URL','undefined');
       const compiled=ts.transpileModule(code,{fileName:full,compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.React,esModuleInterop:true,target:ts.ScriptTarget.ES2022}}).outputText;
-      vm.runInNewContext(compiled,{module,exports:module.exports,crypto:require('node:crypto').webcrypto,FormData,Blob,localStorage:tab.localStorage,navigator:tab.navigator,window:tab.window,
-        AbortController,Date,console:{error(){},log(){}},fetch:()=>tab.fetchGuest(),
+      vm.runInNewContext(compiled,{module,exports:module.exports,crypto:require('node:crypto').webcrypto,FormData,Blob,TextEncoder,btoa,atob,localStorage:tab.localStorage,navigator:tab.navigator,window:tab.window,
+        AbortController,Date:class extends Date { static now() { return shared.now ?? Date.now(); } },console:{error(){},log(){}},fetch:()=>tab.fetchGuest(),
         setTimeout:(fn,ms)=>{const timer=setTimeout(()=>{tab.timers.delete(timer);if(!tab.closed)fn();},ms);tab.timers.add(timer);return timer;},
         clearTimeout:timer=>{clearTimeout(timer);tab.timers.delete(timer);},
         require:path=>{

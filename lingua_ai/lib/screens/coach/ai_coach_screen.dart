@@ -21,6 +21,7 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
   final ScrollController _scrollController = ScrollController();
   final AiCoachApiService _apiService = AiCoachApiService();
   
+  String? _recoveryMessage;
   bool _isLoading = false;
   bool _isHistoryLoading = true;
   int _historyRequestRevision = 0;
@@ -31,13 +32,19 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
     super.initState();
     TargetLanguageService().addListener(_loadHistory);
     AuthService().addListener(_loadHistory);
+    ConnectivityService().addListener(_onConnectivityChanged);
     _loadHistory();
+  }
+
+  void _onConnectivityChanged() {
+    if (!ConnectivityService().isOffline) _loadHistory();
   }
 
   @override
   void dispose() {
     TargetLanguageService().removeListener(_loadHistory);
     AuthService().removeListener(_loadHistory);
+    ConnectivityService().removeListener(_onConnectivityChanged);
     _messageController.dispose();
     _scrollController.dispose();
     super.dispose();
@@ -78,8 +85,10 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
     });
 
     try {
+      var recoveryPending = false;
       final history = await _apiService.getHistory(
         targetLanguage: targetLanguage,
+        onRecoveryIssue: () { recoveryPending = true; },
       );
 
       if (isCurrent()) {
@@ -92,6 +101,7 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
             });
           }
           _isHistoryLoading = false;
+          _recoveryMessage = recoveryPending ? 'A previous action is awaiting confirmation or needs recovery. Saved work is preserved; refresh to recover.' : null;
         });
         _scrollToBottom();
       }
@@ -99,6 +109,7 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
       if (isCurrent()) {
         setState(() {
           _isHistoryLoading = false;
+          _recoveryMessage = 'Could not confirm a previous action. Saved work is preserved; refresh to recover or update the client if required.';
         });
       }
     }
@@ -125,24 +136,25 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
     final languageRevision = TargetLanguageService().languageVersion;
     final historyRevision = _historyRequestRevision;
 
-    setState(() {
-      _messages.add({
-        'text': text,
-        'isBot': false,
-      });
-      _isLoading = true;
-    });
-    _messageController.clear();
-    _scrollToBottom();
-
+    setState(() => _isLoading = true);
     try {
       final language = LanguageService().currentLanguage;
+      final operationId = await _apiService.prepareMessage(
+          message: text, language: language, targetLanguage: targetLanguageCode);
+      if (!isCurrent()) return;
+      setState(() {
+        _messages.removeWhere((item) => item['_id'] == 'pending:$operationId');
+        _messages.add({'_id': 'pending:$operationId', 'text': text, 'isBot': false});
+      });
+      _messageController.clear();
+      _scrollToBottom();
 
       final response = await _apiService.sendMessage(
         message: text,
         language: language,
         targetLanguage: targetLanguageCode,
         intentContext: languageRevision,
+        operationId: operationId,
       );
 
       if (!isCurrent()) return;
@@ -172,7 +184,7 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
           _historyRequestRevision == historyRevision + 1;
       if (mounted && sameLanguage && canHandleApiError(session, e) && (isCurrent() || ownInvalidation)) {
         if (session.isCurrent && _messages.isNotEmpty) {
-          setState(() => _messages.removeLast());
+          setState(() => _recoveryMessage = 'Could not confirm this message. Saved action is preserved; refresh to recover before sending a different message.');
           _messageController.text = text;
         }
         final errorMsg = e.toString().replaceAll('Exception: ', '');
@@ -247,7 +259,9 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
           }
         });
       } catch (e) {
-        if (isCurrent()) debugPrint('Failed to clear chat: $e');
+        if (isCurrent()) {
+          setState(() => _recoveryMessage = 'Could not confirm the clear. The original operation is saved; refresh to recover.');
+        }
       } finally {
         if (isCurrent()) {
           setState(() => _isLoading = false);
@@ -361,7 +375,12 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
               ),
             ],
           ),
-          body: SafeArea(
+          bottomSheet: _recoveryMessage == null ? null : MaterialBanner(
+        content: Text(_recoveryMessage!), actions: [
+          TextButton(onPressed: _loadHistory, child: const Text('Recover pending action')),
+        ],
+      ),
+      body: SafeArea(
             child: isOffline
                 ? _buildOfflineScreen(lang)
                 : Column(

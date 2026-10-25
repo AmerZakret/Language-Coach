@@ -1,10 +1,11 @@
+import 'client_compatibility.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'auth_service.dart';
 
-enum ApiFailure { network, unauthorized, client, server }
+enum ApiFailure { network, unauthorized, client, server, compatibility }
 
 const _deferUnauthorizedInvalidation = #deferUnauthorizedInvalidation;
 
@@ -19,8 +20,9 @@ class ApiException implements Exception {
   final int? statusCode;
   final bool sessionInvalidated;
   final String? code;
+  final int? retryAfterMs;
   const ApiException(this.kind, this.message,
-      [this.statusCode, this.sessionInvalidated = false, this.code]);
+      [this.statusCode, this.sessionInvalidated = false, this.code, this.retryAfterMs]);
   @override
   String toString() => message;
 }
@@ -87,10 +89,17 @@ Future<http.Response> apiRequest(
   } on FormatException {
     // Use the safe status-specific message for non-JSON responses.
   }
+  if (status == 426 && ClientCompatibility.isCompatibilityCode(code)) {
+    ClientCompatibility().requireUpdate();
+    throw ApiException(ApiFailure.compatibility, 'Client update or pending-work reconciliation is required. Saved work is preserved.', 426, false, code);
+  }
   final invalidated = status == 401 &&
       Zone.current[_deferUnauthorizedInvalidation] != true &&
       AuthService().invalidateSession(session);
-  throw ApiException(kind, message, status, invalidated, code);
+  final retrySeconds = int.tryParse(response.headers['retry-after'] ?? '');
+  final retryAfterMs = [429, 503].contains(status) && retrySeconds != null
+      ? retrySeconds.clamp(0, 300) * 1000 : null;
+  throw ApiException(kind, message, status, invalidated, code, retryAfterMs);
 }
 
 Map<String, dynamic> parsePublicUser(dynamic value) {

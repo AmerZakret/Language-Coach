@@ -2,6 +2,10 @@
 
 A clean NestJS backend for the LinguaAI English learning application.
 
+Run `npm ci`, `npm test` (includes its fresh production build), and
+`npm run test:e2e` for complete local verification. E2e owns disposable Mongo and
+uploads and ignores developer configuration. See [Local test baseline](../TESTING.md).
+
 ## Getting Started
 
 Production requirements, offline preflight, credential rotation and client release
@@ -11,7 +15,7 @@ Build first, inject `NODE_ENV=production` and the required configuration, then r
 
 1.  **Install dependencies**:
     ```bash
-    npm install
+    npm ci
     ```
 2.  **Configure environment**:
     Copy `.env.example` to `.env` and update your `MONGODB_URI`.
@@ -37,18 +41,18 @@ Build first, inject `NODE_ENV=production` and the required configuration, then r
     *   Body: `{ "email": "john@example.com", "password": "securepassword" }`
 
 ### 3. Lessons
-*   **GET `/lessons`**: Get a list of all 8 beginner lessons.
+*   **GET `/lessons`**: Get the target-language lesson catalog.
 *   **GET `/lessons/:id`**: Get full lesson details including questions.
 
 ### 4. User Progress
 *   **GET `/progress/:userId`**: Get XP, streak, and completed lessons for a user.
 *   **POST `/progress/:userId/complete-lesson`**: Mark a lesson as finished.
-    *   Body: `{ "lessonId": "1", "score": 100 }`
+    *   Body: `{ "lessonId": "en_b_1", "score": 100, "progressEpoch": 0 }`
 
 ### 5. AI Coach
 *   **POST `/ai-coach/chat`**: Send a message to the AI Coach.
-    *   Body: `{ "userId": "uuid", "message": "How are you?" }`
-    *   Note: Currently returns a placeholder response; real AI integration coming soon.
+    *   Body: `{ "message": "How are you?", "language": "en", "targetLanguage": "en" }` plus stable `X-Idempotency-Key` and `X-Client-Protocol` headers
+    *   Gemini-backed when `AI_ENABLED=true` with backend-only `GEMINI_API_KEY` and explicit `GEMINI_MODEL`. Disabled/unavailable providers return safe classified errors. JWT subject supplies ownership; committed replay avoids another provider call.
 
 ## Tech Stack
 *   **Framework**: NestJS
@@ -192,10 +196,11 @@ committed before clear is removed; one committed after clear is retained. Replay
 of either operation does not write the barrier or history. In particular a lost
 clear acknowledgement followed by a new send and a late clear retry preserves
 the new pair. Clear acknowledgements reconcile current history in both clients.
-Client clear intents capture the send they supersede, preserving any later
-send's retry key when an older clear is acknowledged. Web connectivity changes
-retain unresolved keys. Both clients merge send receipts by durable message ID
-after history reload, preventing duplicate displayed pairs.
+Clients persist Community create and AI send/clear intents before dispatch,
+retaining original IDs/protocols across restart. An unresolved clear pauses later
+conversation mutations until reconciliation. A replayed old clear receipt cannot
+delete later sends. Both clients reconcile authoritative history and message IDs;
+see [Client recovery](../CLIENT_RECOVERY.md).
 
 Safe error contracts: `IDEMPOTENCY_CONFLICT` and `STALE_RESOURCE_REVISION` are
 409; invalid keys/revisions are 400; `PROVIDER_UNAVAILABLE` and
@@ -216,3 +221,9 @@ replica set; tests use disposable replica sets and mocked providers exclusively.
 There are no TTL indexes, automatic cleanup jobs, replay-age limits or production
 backfills. Receipt/result storage grows intentionally; capacity planning remains
 necessary. All earlier flashcard/progress receipt policies remain in force.
+
+## Release packaging
+
+See [Release packaging and checklist](../RELEASE_PACKAGING.md) for artifact allowlists,
+source-map policy, validated toolchains, build/version metadata and operator-only
+identity/signing/configuration requirements.

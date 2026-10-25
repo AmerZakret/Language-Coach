@@ -107,7 +107,7 @@ describe('8F operator runbook safety contracts', () => {
     expect(prose).toContain('Do not delete Flutter durable slots');
   });
 
-  test('minimum capabilities and downgrade/old-tab restrictions do not invent enforcement', () => {
+  test('minimum capabilities and downgrade/old-tab restrictions reflect staged protocol enforcement', () => {
     const compatibility = section(
       'Compatibility minimums and downgrade restrictions',
     );
@@ -117,12 +117,13 @@ describe('8F operator runbook safety contracts', () => {
       'Prefer forward-fix',
       'Older Flutter binaries',
       'Close/reload all pre-7A tabs',
-      'No overall minimum-client enforcement',
+      'CLIENT_PROTOCOL_POLICY',
+      'ENFORCE_MUTATIONS',
       'Web IndexedDB',
     ])
       expect(compatibility).toContain(requirement);
     expect(compatibility.replace(/\s+/g, ' ')).toContain(
-      'no runtime deployment- version negotiation',
+      'explicit protocol gate does not retroactively patch',
     );
     expect(compatibility).toContain('Do not clear site data or owner queues');
   });
@@ -197,6 +198,7 @@ describe('8F operator runbook safety contracts', () => {
 describe('8F local deployment preflight (no connections or writes)', () => {
   const production = () => ({
     NODE_ENV: 'production',
+    CLIENT_PROTOCOL_POLICY: 'ALLOW_LEGACY',
     MONGODB_URI: 'mongodb://db.example.invalid/language',
     JWT_SECRET: randomBytes(48).toString('base64'),
     AI_ENABLED: 'false',

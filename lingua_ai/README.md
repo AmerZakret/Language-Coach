@@ -4,18 +4,24 @@ See [Production configuration](../PRODUCTION_CONFIGURATION.md) for mandatory
 release `API_URL`, Android signing, and platform permission requirements. Release
 startup rejects development endpoints; debug builds retain local convenience.
 
-A new Flutter project.
+## Local release-quality validation
 
-## Getting Started
+Use Flutter 3.41.7 / Dart 3.11.5 with the checked-in lock:
 
-This project is a starting point for a Flutter application.
+```sh
+flutter pub get --enforce-lockfile
+flutter test
+flutter analyze
+flutter test test/release_config_test.dart test/protocol_compatibility_test.dart
+```
 
-A few resources to get you started if this is your first Flutter project:
+Android applicationId/namespace `com.example.lingua_ai` and iOS bundle ID
+`com.example.linguaAi` are placeholders that block public/store release until
+approved identities are assigned. Current version is `1.0.0+1`; no final release
+number is chosen. Signing remains operator-owned; no debug-key release fallback.
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+## Release packaging
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+See [Release packaging and checklist](../RELEASE_PACKAGING.md) for artifact allowlists,
+source-map policy, validated toolchains, build/version metadata and operator-only
+identity/signing/configuration requirements.

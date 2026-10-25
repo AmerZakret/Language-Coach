@@ -226,7 +226,7 @@ void main() {
       'type',
       'ownerNamespace',
       'payload',
-      'createdAt',
+      'createdAt', 'clientProtocolRevision',
       'schemaVersion'
     });
     expect(action.id, isNotEmpty);

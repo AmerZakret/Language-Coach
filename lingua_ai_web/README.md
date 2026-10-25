@@ -1,77 +1,28 @@
 # React + TypeScript + Vite
 
+Run `npm ci`, then `npm test` for the full Node/browser-context suite. See
+[Local test baseline](../TESTING.md) for test requirements and the documented
+prototype-only status of `src/new_components`; those files are not release inputs.
+
 Production builds require explicit `VITE_API_URL`; localhost fallback is development
 only. See [Production configuration](../PRODUCTION_CONFIGURATION.md) for endpoint
 validation and the deliberate self-hosted override.
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+## Production artifact
 
-Currently, two official plugins are available:
+Use Node 22.14.0 / npm 10.9.0 (declared Node 22/npm 10 compatibility lines).
+Build with explicit `VITE_API_URL=https://api.example.invalid` and public
+`VITE_BUILD_ID=candidate-build` for local validation. Production maps are disabled.
+The artifact includes SPA output, `release.json` for current-tab compatibility and
+`release-manifest.json` for safe component/version/build/protocol/API metadata.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+Serve index.html fallback for application routes, real 404s for missing metadata/
+assets, revalidated HTML and release.json, and immutable hashed assets. Preserve
+saved queues/intents during reload or rollback. The current large main chunk is
+an accepted release advisory with a separate bundle-analysis follow-up.
 
-## React Compiler
+## Release packaging
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
-
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
-
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
-
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
-
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+See [Release packaging and checklist](../RELEASE_PACKAGING.md) for artifact allowlists,
+source-map policy, validated toolchains, build/version metadata and operator-only
+identity/signing/configuration requirements.

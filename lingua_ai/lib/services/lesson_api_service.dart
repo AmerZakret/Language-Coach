@@ -1,6 +1,6 @@
 import '../core/localization/target_language.dart';
 import 'dart:convert';
-import 'package:http/http.dart' as http;
+import 'backend_http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/lesson.dart';
 import '../core/config/api_config.dart';

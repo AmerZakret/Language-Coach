@@ -19,6 +19,7 @@ const card = id => ({ _id: `card-${id}`, userId: id, targetWord: id,
   turkishTranslation: 'translation', interval: 0, easinessFactor: 2.5,
   nextReviewDate: new Date().toISOString(), reviewCount: 0 });
 const copy = value => JSON.parse(JSON.stringify(value));
+const translate = text => text;
 
 function harness(initial = {}) {
   const lockManager = locks();
@@ -89,14 +90,15 @@ function harness(initial = {}) {
     },
   };
   const jsx = (type, props) => ({ type, props });
-  const sources = { userKey: 'utils/userKey.ts', queueSession: 'utils/queueSession.ts', authStorage: 'utils/authSessionStorage.ts', coordination: 'utils/browserCoordination.ts', localGuestCards: 'utils/localGuestCards.ts',
+  const sources = {
+    protocol: 'utils/clientProtocol.ts', compatibility: 'utils/releaseCompatibility.ts', userKey: 'utils/userKey.ts', queueSession: 'utils/queueSession.ts', authStorage: 'utils/authSessionStorage.ts', coordination: 'utils/browserCoordination.ts', localGuestCards: 'utils/localGuestCards.ts',
     policy: 'utils/syncRetryPolicy.ts', guard: 'utils/useSessionGuard.ts', auth: 'context/AuthContext.tsx',
     storage: 'utils/progressStorage.ts', types: 'types/progress.ts',
     progress: 'context/ProgressContext.tsx', target: 'context/TargetLanguageContext.tsx',
     cards: 'pages/FlashcardsPage.tsx', queue: 'utils/offlineQueue.ts', authPage: 'components/auth/AuthPage.tsx',
     profile: 'pages/ProfilePage.tsx', writing: 'pages/WritingPracticePage.tsx', pronunciation: 'pages/PronunciationPracticePage.tsx', language: 'utils/targetLanguage.ts', mutation: 'utils/flashcardMutation.ts', communityCache: 'utils/communityFeedCache.ts', community: 'pages/CommunityPage.tsx', coach: 'pages/AiCoachPage.tsx' };
   const exposed = {
-    cards: 'fetchCards, handleSaveCard, handleDeleteCard, handleStudyScore, handleOpenAdd, handleOpenEdit, setFormData, allCards, dueCards, loading, error, successMsg, modal, studyResults',
+    cards: 'fetchCards, handleSaveCard, handleDeleteCard, handleStudyScore, handleOpenAdd, handleOpenEdit, setFormData, allCards, dueCards, loading, error, successMsg, modal, studyResults, startStudy, studyFinished, currentStudyIndex',
     authPage: 'handleSubmit, setEmail, setPassword, loading, error',
     profile: 'handleSave, setName, saved, resetConfirm, setResetConfirm',
     writing: 'handleSubmit, setTopic, setText, feedback, error, loading',
@@ -128,6 +130,9 @@ function harness(initial = {}) {
       navigator: { locks: lockManager },
       document: { addEventListener() {}, removeEventListener() {} }, window: { confirm: () => true },
       require: path => {
+        if (path.endsWith('/onlineIntents')) return { subscribeIntentAcknowledgements: () => () => {} };
+        if (path.endsWith('/clientProtocol')) return load('protocol');
+        if (path.endsWith('/releaseCompatibility')) return load('compatibility');
         if (path === 'react') return react;
         if (path === 'react/jsx-runtime') return { jsx, jsxs: jsx, Fragment: 'fragment' };
         if (path === 'lucide-react') return new Proxy({}, { get: (_, name) => String(name) });
@@ -143,6 +148,7 @@ function harness(initial = {}) {
         if (path.endsWith('/writingTopics')) return h.writingTopics || (h.writingTopics = { writingTopics: { en: { en: ['Topic'] } } });
         if (path.endsWith('/communityFeedCache')) return load('communityCache');
         if (path.endsWith('/aiCoachApi')) return {
+          prepareSendMessage: async (...args) => h.prepareSendMessage ? h.prepareSendMessage(...args) : ({ id: 'prepared-by-durable-api' }),
           sendMessage: (...args) => h.sendMessage(...args),
           clearChatHistory: (...args) => h.clearChatHistory(...args),
           checkWriting: (...args) => h.checkWriting(...args),
@@ -165,7 +171,7 @@ function harness(initial = {}) {
         if (path.endsWith('/TargetLanguageContext')) return { useTargetLanguage: () => ({ targetLanguage: h.language }) };
         if (path.endsWith('/NetworkContext')) return { useNetwork: () => ({ isOffline: h.isOffline }) };
         if (path.endsWith('/ThemeContext')) return { useTheme: () => ({ isDark: false }) };
-        if (path.endsWith('/LanguageContext')) return { useLanguage: () => ({ t: text => text, language: 'en' }) };
+        if (path.endsWith('/LanguageContext')) return { useLanguage: () => ({ t: translate, language: 'en' }) };
         if (path.endsWith('/SoundContext')) return { useSound: () => ({}) };
         if (path.endsWith('/levelUtils')) return { getLevelFromXp: () => 'Beginner' };
         if (path.endsWith('/ProgressContext')) return { useProgress: () => ({ progress: progress(), resetProgress: () => h.resetProgress(), addXp: xp => calls.push(['xp', xp]) }) };
@@ -183,6 +189,10 @@ function harness(initial = {}) {
         };
         if (path.endsWith('/apiClient')) return Object.fromEntries(['get', 'post', 'put', 'delete'].map(method => [method,
           (url, data, config) => {
+            if (url === '/auth/guest') return Promise.resolve(h.fetchGuest()).then(async response => {
+              if (!response.ok) throw new Error('Guest login failed');
+              return { data: await response.json() };
+            });
             calls.push([method, url]);
             if (url.includes('/progress/') && method === 'post') {
               const id = url.split('/')[2]; calls.push(['complete', id, data.lessonId, data.score]);
@@ -213,7 +223,7 @@ function harness(initial = {}) {
   h.mountAuth = () => { h.authRunner = runner('auth', 'AuthProvider'); };
   h.auth = () => h.authRunner.result.props.value;
   h.login = async id => { await h.settle(); await h.auth().login(user(id), `test-${id}`); h.authRunner.render(); };
-  h.mount = (name, symbol) => { h.progressQueue = name === 'progress'; h.child = runner(name, symbol); };
+  h.mount = (name, symbol) => { h.progressQueue = name === 'progress' || name === 'cards'; h.child = runner(name, symbol); };
   h.settle = async () => {
     for (let i = 0; i < 5; i++) {
       await tick();
@@ -391,7 +401,8 @@ for (const backendGuest of [true, false]) {
     const mutations = [];
     h.transport = async (method, url, data, config) => {
       if (method === 'get') return { data: savedCard ? [savedCard] : [] };
-      const session = (method === 'delete' ? data : config).sessionSnapshot;
+      const request = method === 'delete' ? data : config;
+      const session = request.sessionSnapshot || request.offlineQueueSession;
       assert.equal(session.userId, A); assert.equal(session.token, `test-${A}`);
       assert.equal(session.ownerNamespace, `${backendGuest ? 'guest' : 'registered'}_${A}`);
       mutations.push(method);
@@ -883,7 +894,7 @@ test('Phase 5C: online create, update, delete and review carry distinct idempote
   const keys = h.mutations.map(call => call.config.headers['X-Idempotency-Key']);
   assert.ok(keys.every(key => typeof key === 'string' && /^[A-Za-z0-9._:-]{1,128}$/.test(key)));
   assert.equal(new Set(keys).size, 4);
-  assert.ok(h.mutations.every(call => call.config.sessionSnapshot.userId === A));
+  assert.ok(h.mutations.every(call => (call.config.sessionSnapshot || call.config.offlineQueueSession).userId === A));
 });
 
 for (const operation of ['create', 'update', 'delete']) {
@@ -1316,7 +1327,7 @@ test('older like response cannot overwrite a newer reaction result', async () =>
 });
 
 
-test('7E Community create retry retains logical key; acknowledged same-content action gets a fresh key', async () => {
+test('9D Community UI delegates identity to durable API and preserves draft until acknowledgement', async () => {
   const h = await communityHarness();
   h.fetchCommunity = async () => communityFeed();
   let attempts = 0;
@@ -1329,7 +1340,8 @@ test('7E Community create retry retains logical key; acknowledged same-content a
   assert.equal(calls[0][2], calls[1][2]);
   h.child.exposed.setNewPostText('draft'); h.child.render();
   await h.child.exposed.handleCreatePost({ preventDefault() {} }); await h.settle();
-  assert.notEqual(h.calls.filter(call => call[0] === 'community-create').at(-1)[2], calls[0][2]);
+  assert.equal(h.calls.filter(call => call[0] === 'community-create').length, 3);
+  assert.ok(h.calls.filter(call => call[0] === 'community-create').every(call => call[2] === undefined));
 });
 
 test('7E AI lost clear ack -> later send -> clear retry reconciles later history with original clear ID', async () => {
@@ -1353,7 +1365,7 @@ test('7E AI lost clear ack -> later send -> clear retry reconciles later history
   assert.deepEqual(copy(h.child.exposed.messages), history);
 });
 
-test('7E AI send retry retains key until acknowledged; independent intentional sends get fresh keys', async () => {
+test('9D AI UI delegates identity to durable API; retries render one user message', async () => {
   const h = await communityHarness(), keys = [];
   h.getChatHistory = async () => [];
   let sends = 0;
@@ -1362,10 +1374,11 @@ test('7E AI send retry retains key until acknowledged; independent intentional s
   await h.child.exposed.handleSend('hello'); await h.settle();
   await h.child.exposed.handleSend('hello'); await h.settle();
   await h.child.exposed.handleSend('hello'); await h.settle();
-  assert.equal(keys[0], keys[1]); assert.notEqual(keys[1], keys[2]);
+  assert.deepEqual(keys, ['prepared-by-durable-api', 'prepared-by-durable-api', 'prepared-by-durable-api']);
+  assert.equal(h.child.exposed.messages.filter(message => message.role === 'user').length, 2);
 });
 
-test('7E old Community acknowledgement cannot retire a newer unresolved create intent', async () => {
+test('9D old Community acknowledgement cannot clear a newer draft', async () => {
   const h = await communityHarness(), older = deferred();
   h.fetchCommunity = async () => communityFeed();
   let attempts = 0;
@@ -1379,11 +1392,12 @@ test('7E old Community acknowledgement cannot retire a newer unresolved create i
   assert.equal(h.child.exposed.newPostText, 'newer');
   await h.child.exposed.handleCreatePost({ preventDefault() {} });
   const calls = h.calls.filter(call => call[0] === 'community-create');
-  assert.notEqual(calls[0][2], calls[1][2]);
-  assert.equal(calls[1][2], calls[2][2]);
+  assert.equal(calls[0][1].get('text'), 'older');
+  assert.equal(calls[1][1].get('text'), 'newer');
+  assert.equal(calls[2][1].get('text'), 'newer');
 });
 
-test('7E newly selected images with identical metadata are distinct logical creates', async () => {
+test('9D Community UI passes original image bytes to the durable API rather than manufacturing keys', async () => {
   const h = await communityHarness();
   h.fetchCommunity = async () => communityFeed();
   h.communityMutation = async () => { throw new Error('Lost acknowledgement'); };
@@ -1397,7 +1411,10 @@ test('7E newly selected images with identical metadata are distinct logical crea
   h.child.exposed.setNewPostImage(second); h.child.render();
   await h.child.exposed.handleCreatePost({ preventDefault() {} });
   const keys = h.calls.filter(call => call[0] === 'community-create').map(call => call[2]);
-  assert.equal(keys[0], keys[1]); assert.notEqual(keys[1], keys[2]);
+  assert.deepEqual(keys, [undefined, undefined, undefined]);
+  const forms = h.calls.filter(call => call[0] === 'community-create').map(call => call[1]);
+  assert.equal(await forms[0].get('image').text(), 'one');
+  assert.equal(await forms[2].get('image').text(), 'two');
 });
 
 test('7E AI send retains unresolved ID across connectivity loss and recovery', async () => {
@@ -1429,13 +1446,14 @@ test('7E connectivity recovery retains old clear receipt rather than erasing a l
 });
 
 test('7E same-render duplicate AI send dispatch cannot duplicate the displayed pair', async () => {
-  const h = await communityHarness(), result = deferred();
+  const h = await communityHarness(), result = deferred(), started = deferred();
   h.getChatHistory = async () => [];
   let calls = 0;
-  h.sendMessage = () => { calls++; return result.promise; };
+  h.sendMessage = () => { calls++; started.resolve(); return result.promise; };
   h.mount('coach', 'AiCoachPage'); await h.settle();
   const send = h.child.exposed.handleSend;
   const first = send('hello'), second = send('hello');
+  await started.promise;
   assert.equal(calls, 1);
   result.resolve({ reply: 'reply' }); await Promise.all([first, second]); await h.settle();
   assert.equal(h.child.exposed.messages.length, 2);
@@ -1471,4 +1489,159 @@ test('7E receipt replay after history reconciliation applies the durable pair on
   h.isOffline = false; h.child.render(); await h.settle();
   await h.child.exposed.handleSend('hello'); await h.settle();
   assert.equal(keys[0], keys[1]); assert.deepEqual(copy(h.child.exposed.messages), pair);
+});
+
+// Phase 9B: execute the real study handler and real owner-locked durable queue.
+async function reviewHarness(offline = false) {
+  const h = await onlineMutationHarness(); h.isOffline = offline; h.child.render();
+  h.queue = h.load('queue');
+  return h;
+}
+const queueKey = `linguaai_offline_queue_registered_${A}`;
+function retryNow(h) {
+  const state = JSON.parse(h.localStorage.getItem(queueKey));
+  state.actions.forEach(action => { action.nextAttemptAt = new Date(0).toISOString(); });
+  h.localStorage.setItem(queueKey, JSON.stringify(state));
+}
+test('9B online review persists before dispatch, acknowledges, and advances once', async () => {
+  const h = await reviewHarness();
+  const transport = h.transport;
+  h.transport = (method, url, data, config) => {
+    if (url.endsWith('/review')) {
+      const pending = h.queue.getOfflineQueue();
+      assert.equal(pending.length, 1);
+      assert.equal(pending[0].id, config.headers['X-Idempotency-Key']);
+      assert.equal(h.child.exposed.studyResults.length, 0);
+    }
+    return transport(method, url, data, config);
+  };
+  await h.child.exposed.handleStudyScore(4); await h.settle();
+  assert.equal(h.queue.getOfflineQueue().length, 0);
+  assert.deepEqual(copy(h.child.exposed.studyResults), [4]);
+  const updated = h.child.exposed.allCards[0];
+  assert.equal(updated.reviewCount, 1); assert.equal(updated.interval, 1); assert.equal(updated.easinessFactor, 2.5);
+});
+test('9B transient online review survives page disposal and reconnect with the same ID', async () => {
+  const h = await reviewHarness(); h.failMutation = true;
+  await h.child.exposed.handleStudyScore(4); await h.settle();
+  const pending = h.queue.getOfflineQueue()[0];
+  assert.equal(pending.lastErrorCategory, 'network');
+  assert.deepEqual(copy(h.child.exposed.studyResults), [4], 'advance only after durable persistence');
+  h.child.unmount(); h.failMutation = false; retryNow(h);
+  assert.equal(await h.queue.processOfflineQueue(A), true);
+  assert.equal(h.mutations.length, 2);
+  assert.ok(h.mutations.every(call => call.config.headers['X-Idempotency-Key'] === pending.id));
+  assert.equal(h.queue.getOfflineQueue().length, 0);
+});
+test('9B offline review queues without HTTP; reconnect sends the original operation', async () => {
+  const h = await reviewHarness(true);
+  await h.child.exposed.handleStudyScore(2); await h.settle();
+  const pending = h.queue.getOfflineQueue()[0];
+  assert.equal(h.mutations.length, 0); assert.equal(pending.payload.score, 2);
+  assert.equal(h.child.exposed.allCards[0].reviewCount, 0); assert.equal(h.child.exposed.allCards[0].interval, 1);
+  assert.equal(await h.queue.processOfflineQueue(A), true);
+  assert.equal(h.mutations[0].config.headers['X-Idempotency-Key'], pending.id);
+});
+test('9B lost review acknowledgement replays one logical history entry', async () => {
+  const h = await reviewHarness(); const receipts = new Map(); let history = 0;
+  h.transport = async (method, url, data, config) => {
+    const id = config.headers['X-Idempotency-Key'];
+    if (!receipts.has(id)) { receipts.set(id, { score: data.score }); history++; throw new Error('lost acknowledgement'); }
+    assert.equal(receipts.get(id).score, data.score);
+    return { data: card(A) };
+  };
+  await h.child.exposed.handleStudyScore(5); await h.settle();
+  const id = h.queue.getOfflineQueue()[0].id; retryNow(h);
+  assert.equal(await h.queue.processOfflineQueue(A), true);
+  assert.equal(history, 1); assert.equal(receipts.size, 1); assert.ok(receipts.has(id));
+});
+test('9B owner switch never dispatches A pending review under B credentials', async () => {
+  const h = await reviewHarness(true);
+  await h.child.exposed.handleStudyScore(4); await h.settle();
+  const saved = h.localStorage.getItem(queueKey);
+  await h.switchToB(); assert.equal(await h.queue.processOfflineQueue(B), true);
+  assert.equal(h.mutations.length, 0); assert.equal(h.localStorage.getItem(queueKey), saved);
+  assert.equal(h.queue.getOfflineQueue().length, 0);
+});
+for (const status of [400, 409]) test(`9B permanent review ${status} is retained in quarantine and surfaced`, async () => {
+  const h = await reviewHarness();
+  h.transport = async () => { throw { response: { status, data: { code: 'INVALID_REVIEW' } } }; };
+  await h.child.exposed.handleStudyScore(4); await h.settle();
+  assert.equal(h.queue.getOfflineQueue().length, 0);
+  assert.equal(h.queue.getFailedOfflineActions().length, 1);
+  assert.equal(h.queue.getFailedOfflineActions()[0].payload.score, 4);
+  const rendered = JSON.stringify(h.child.result);
+  assert.match(rendered, /retained for inspection/);
+  assert.match(rendered, /will not retry automatically/);
+  const calls = h.calls.length; await h.queue.processOfflineQueue(A);
+  assert.equal(h.calls.length, calls);
+});
+test('9B unavailable durable storage prevents study advancement and HTTP', async () => {
+  const h = await reviewHarness(); const save = h.localStorage.setItem;
+  h.localStorage.setItem = (key, value) => { if (key === queueKey) throw new Error('quota'); save(key, value); };
+  await h.child.exposed.handleStudyScore(4); await h.settle();
+  assert.equal(h.mutations.length, 0); assert.equal(h.child.exposed.studyResults.length, 0);
+  assert.match(h.child.exposed.error, /could not be saved/);
+});
+test('9B matching acknowledgement preserves a concurrently appended pending review', async () => {
+  const h = await reviewHarness(); const entered = deferred(), release = deferred();
+  h.transport = async () => { entered.resolve(); await release.promise; return { data: card(A) }; };
+  const first = h.child.exposed.handleStudyScore(4); await entered.promise;
+  const firstId = h.queue.getOfflineQueue()[0].id;
+  // Same-render duplicate clicks cannot start another logical review.
+  await h.child.exposed.handleStudyScore(4);
+  await h.queue.pushToOfflineQueue('review-flashcard', { cardId: 'another-card', score: 3 }, `registered_${A}`);
+  const secondId = h.queue.getOfflineQueue()[1].id;
+  release.resolve(); await first; await h.settle();
+  const pending = h.queue.getOfflineQueue(); assert.equal(pending.length, 1);
+  assert.equal(pending[0].id, secondId); assert.notEqual(secondId, firstId);
+  assert.deepEqual(copy(h.child.exposed.studyResults), [4]);
+});
+
+test('9B a review sync notification cannot replace the active deck or skip its next card', async () => {
+  const h = await reviewHarness();
+  const transport = h.transport;
+  h.transport = (method, ...args) => method === 'get'
+    ? Promise.resolve({ data: [card(A), { ...card(A), _id: 'second-card' }] }) : transport(method, ...args);
+  await h.child.exposed.fetchCards(); await h.settle();
+  h.child.exposed.startStudy(); h.child.render();
+  await h.child.exposed.handleStudyScore(4); await h.settle();
+  assert.equal(h.child.exposed.currentStudyIndex, 1);
+  const gets = h.calls.filter(([method]) => method === 'get').length;
+  h.syncRevision = 1; h.child.render(); await h.settle();
+  assert.equal(h.calls.filter(([method]) => method === 'get').length, gets);
+  assert.equal(h.child.exposed.dueCards[1]._id, 'second-card');
+  await h.child.exposed.handleStudyScore(5); await h.settle();
+  assert.deepEqual(copy(h.child.exposed.studyResults), [4, 5]);
+  assert.equal(h.child.exposed.studyFinished, true);
+  assert.equal(h.mutations[1].url, '/flashcards/second-card/review');
+});
+
+test('9B corrupt review storage is preserved, surfaced, and cannot advance study or dispatch', async () => {
+  const h = await reviewHarness();
+  h.localStorage.setItem(queueKey, '{invalid');
+  h.child.unmount(); h.mount('cards', 'FlashcardsPage'); await h.settle();
+  assert.match(JSON.stringify(h.child.result), /Saved review work cannot be read/);
+  await h.child.exposed.handleStudyScore(4); await h.settle();
+  assert.equal(h.child.exposed.studyResults.length, 0); assert.equal(h.mutations.length, 0);
+  assert.equal(h.localStorage.getItem(queueKey), '{invalid');
+});
+
+
+test('9D AI preparation failure cannot dispatch or replace the original pending bubble with a different draft', async () => {
+  const h = await communityHarness();
+  h.getChatHistory = async () => [];
+  let sends = 0;
+  h.sendMessage = async () => { sends++; throw new Error('Lost acknowledgement'); };
+  h.prepareSendMessage = async data => {
+    if (data.message !== 'original') throw new Error('Saved action needs recovery');
+    return { id: 'durable-operation' };
+  };
+  h.mount('coach', 'AiCoachPage'); await h.settle();
+  await h.child.exposed.handleSend('original'); await h.settle();
+  assert.equal(h.child.exposed.messages.length, 1);
+  assert.equal(h.child.exposed.messages[0]._id, 'pending:durable-operation');
+  await h.child.exposed.handleSend('different draft'); await h.settle();
+  assert.equal(sends, 1); assert.equal(h.child.exposed.messages.length, 1);
+  assert.equal(h.child.exposed.messages[0].message, 'original');
 });

@@ -1,3 +1,4 @@
+import 'widgets/client_compatibility_boundary.dart';
 import 'package:flutter/material.dart';
 import 'core/theme/app_theme.dart';
 import 'core/routes/app_routes.dart';
@@ -22,6 +23,7 @@ class LinguaAIApp extends StatelessWidget {
           theme: AppTheme.lightTheme,
           darkTheme: AppTheme.darkTheme,
           themeMode: themeService.isDarkMode ? ThemeMode.dark : ThemeMode.light,
+          builder: (context, child) => ClientCompatibilityBoundary(child: child ?? const SizedBox.shrink()),
           initialRoute: initial,
           routes: AppRoutes.getRoutes(),
         );

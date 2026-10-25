@@ -56,13 +56,13 @@ void main() {
     'progress reset': () => progress.resetProgress(a,
         expectedEpoch: 0, operationId: 'session-reset'),
     'flashcard create': () =>
-        cards.createFlashcard('word', 'translation', 'en'),
+        cards.createFlashcard('word', 'translation', 'en', operationId: 'fixture-create'),
     'flashcard update': () =>
-        cards.updateFlashcard('card', 'word', 'translation'),
-    'flashcard delete': () => cards.deleteFlashcard('card'),
+        cards.updateFlashcard('card', 'word', 'translation', operationId: 'fixture-update'),
+    'flashcard delete': () => cards.deleteFlashcard('card', operationId: 'fixture-delete'),
     'flashcard due': () => cards.getDueCards(),
     'flashcard all': () => cards.getAllCards(),
-    'flashcard review': () => cards.reviewCard('card', 4),
+    'flashcard review': () => cards.reviewCard('card', 4, operationId: 'fixture-review'),
     'pronunciation assess': () => PronunciationService().assessPronunciation(
         audioPath: audioPath, targetText: 'Hello', targetLanguage: 'en'),
     'community fetch': () => community.fetchPosts(),
