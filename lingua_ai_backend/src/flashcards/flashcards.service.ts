@@ -36,7 +36,6 @@ export class FlashcardsService implements OnModuleInit {
     } catch (e) {
       if (e?.code !== 26 && e?.code !== 27) throw new Error('Development schema initialization failed for flashcards');
     }
-
   }
 
   /**
