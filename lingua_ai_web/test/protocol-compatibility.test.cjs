@@ -10,6 +10,18 @@ const owner = `registered_${A}`;
 const metadata = overrides => ({ currentProtocolRevision: 1, minimumMutationRevision: 1, policy: 'ENFORCE_MUTATIONS', buildId: 'backend-build', ...overrides });
 const body = () => ({ response: { status: 426, data: { code: 'CLIENT_PROTOCOL_UNSUPPORTED' } } });
 
+test('10B server-v2 legacy discovery keeps the current v1 client transitional without adding a timeline', async () => {
+  const o = origin(), tab = o.tab(); await tab.install();
+  tab.load('utils/releaseCompatibility.ts').releaseCompatibility.observeMetadata(metadata({
+    currentProtocolRevision: 2, minimumMutationRevision: 1, policy: 'ALLOW_LEGACY',
+    timelineAwareProtocolRevision: 2, dataTimelineId: '11111111-1111-4111-8111-111111111111', timelineWriteState: 'OPEN',
+  }));
+  await tab.client.post('/ai-coach/chat', { message: 'fixture' });
+  assert.equal(tab.requests[0].headers['X-Client-Protocol'], '1');
+  assert.equal(tab.requests[0].headers['X-Data-Timeline'], undefined);
+  tab.close();
+});
+
 test('9C central transport declares protocol for auth, guest, reads and keyed writes without losing headers', async () => {
   const o = origin(), tab = o.tab(); await tab.install();
   tab.fetchGuest = async () => ({ ok: true, json: async () => ({ user: user(), access_token: 'fixture' }) });
@@ -92,7 +104,7 @@ test('9C a new compatible build prompts reload; an incompatible manifest stops w
 test('9C source-executed identities remain independent; synthetic build injection needs no file writes', () => {
   const development = releaseIdentity(), ci = releaseIdentity('ci-synthetic.12');
   assert.equal(development.web.buildId, 'development'); assert.equal(ci.web.buildId, 'ci-synthetic.12');
-  assert.equal(ci.backend.currentProtocolRevision, ci.web.protocolRevision); assert.equal(ci.web.protocolRevision, 1);
+  assert.equal(ci.backend.currentProtocolRevision, 2); assert.equal(ci.backend.minimumMutationRevision, 1); assert.equal(ci.clientsTimelineAware, false); assert.equal(ci.web.protocolRevision, 1);
   assert.notEqual(ci.web.buildId, String(ci.web.protocolRevision));
 });
 test('9C actual Vite manifest plugin emits only bounded public artifact/protocol identity', () => {

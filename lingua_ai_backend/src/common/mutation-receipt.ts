@@ -1,15 +1,45 @@
-import { observedTransaction } from '../operations/observed-transaction';
-import { receiptEvent } from '../operations/telemetry';
-import { BadRequestException, ConflictException, Injectable, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
-import { InjectConnection, InjectModel, MongooseModule, Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Module } from '@nestjs/common';
-import { ClientSession, Connection, Document, Model, Schema as MongoSchema } from 'mongoose';
+import {
+  BadRequestException,
+  ConflictException,
+  HttpException,
+  Injectable,
+  Module,
+  OnModuleInit,
+  ServiceUnavailableException,
+} from '@nestjs/common';
+import {
+  InjectModel,
+  MongooseModule,
+  Prop,
+  Schema,
+  SchemaFactory,
+} from '@nestjs/mongoose';
+import {
+  ClientSession,
+  Document,
+  Model,
+  Schema as MongoSchema,
+  mongo,
+} from 'mongoose';
 import { createHash } from 'node:crypto';
 import { initializeDevelopmentIndexes } from '../operations/schema-startup';
+import { TIMELINE_ID_PATTERN } from '../operations/timeline-contract';
+import {
+  MutationTimeline,
+  MutationTimelineModule,
+} from '../operations/mutation-timeline';
+import { receiptEvent } from '../operations/telemetry';
 
 // NEVER_EXPIRE: deleted resources and cleared histories cannot prove safe replay.
 @Schema({ timestamps: true })
 export class MutationReceipt extends Document {
+  @Prop({
+    type: String,
+    immutable: true,
+    match: new RegExp(TIMELINE_ID_PATTERN),
+  })
+  dataTimelineId?: string;
+
   @Prop({ required: true }) userId: string;
   @Prop({ required: true }) operationType: string;
   @Prop({ required: true }) operationId: string;
@@ -21,63 +51,134 @@ MutationReceiptSchema.index({ userId: 1, operationType: 1, operationId: 1 }, { u
 
 @Injectable()
 export class MutationReceipts implements OnModuleInit {
-  constructor(@InjectConnection() private readonly connection: Connection,
-    @InjectModel(MutationReceipt.name) private readonly receipts: Model<MutationReceipt>) {}
+  constructor(
+    @InjectModel(MutationReceipt.name)
+    private readonly receipts: Model<MutationReceipt>,
+    private readonly timeline: MutationTimeline,
+  ) {}
   async onModuleInit() { await initializeDevelopmentIndexes(this.receipts); }
-
-  async execute(userId: string, operationId: string | undefined, operationType: string,
-    input: Record<string, unknown>, work: (session: ClientSession) => Promise<any>) {
-    try { return await this.executeTransaction(userId, operationId, operationType, input, work); }
-    catch (error) {
-      if (error?.getStatus) throw error;
-      throw new ServiceUnavailableException({ code: 'RETRYABLE_SERVER_FAILURE', message: 'Mutation could not be acknowledged. Retry the same operation.' });
-    }
-  }
-
-  private async executeTransaction(userId: string, operationId: string | undefined, operationType: string,
-    input: Record<string, unknown>, work: (session: ClientSession) => Promise<any>) {
-    if (typeof operationId !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(operationId))
-      throw new BadRequestException({ code: 'INVALID_OPERATION_ID', message: 'A valid X-Idempotency-Key is required' });
+  async execute<T>(
+    userId: string,
+    operationId: string | undefined,
+    operationType: string,
+    input: Record<string, unknown>,
+    work: (session: ClientSession) => Promise<T>,
+    prepare?: () => Promise<void>,
+  ): Promise<T> {
+    const scope = await this.timeline.admission();
+    if (
+      typeof operationId !== 'string' ||
+      !/^[A-Za-z0-9._:-]{1,128}$/.test(operationId)
+    )
+      throw new BadRequestException({
+        code: 'INVALID_OPERATION_ID',
+        message: 'A valid X-Idempotency-Key is required',
+      });
     const requestHash = createHash('sha256').update(JSON.stringify(
-      Object.fromEntries(Object.entries(input).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)))).digest('hex');
+          Object.fromEntries(
+            Object.entries(input).sort(([a], [b]) =>
+              a < b ? -1 : a > b ? 1 : 0,
+            ),
+          ),
+        ),
+      )
+      .digest('hex');
     const identity = { userId, operationType, operationId };
-    const replay = (receipt: MutationReceipt) => {
-      if (receipt.requestHash !== requestHash) {
+    const replay = (existing: MutationReceipt): T => {
+      this.timeline.assertReceipt(existing, scope);
+      if (existing.requestHash !== requestHash) {
         receiptEvent('receipt.conflict', operationType, userId, operationId);
-        throw new ConflictException({ code: 'IDEMPOTENCY_CONFLICT', message: 'Operation key payload changed' });
+        throw new ConflictException({
+          code: 'IDEMPOTENCY_CONFLICT',
+          message: 'Operation key payload changed',
+        });
       }
       receiptEvent('receipt.replay', operationType, userId, operationId);
-      return receipt.result;
+      return existing.result as T;
     };
-    const completed = await this.receipts.findOne(identity).exec();
-    if (completed) return replay(completed);
-    const session = await this.connection.startSession();
     let created = false;
+    const run = () =>
+      this.timeline.transaction(
+        operationType,
+        async (session) => {
+          created = false;
+          const existing = await this.receipts
+            .findOne(identity)
+            .session(session)
+            .exec();
+          if (existing) return replay(existing);
+          const [claim] = await this.receipts.create(
+            [
+              {
+                ...identity,
+                requestHash,
+                dataTimelineId: scope.dataTimelineId,
+              },
+            ],
+            { session },
+          );
+          const result = await work(session);
+          const durableResult = JSON.parse(JSON.stringify(result)) as T;
+          await this.receipts
+            .updateOne(
+              { _id: claim._id },
+              { $set: { result: durableResult } },
+              { session },
+            )
+            .exec();
+          created = true;
+          return durableResult;
+        },
+        scope,
+      );
     try {
-      const outcome = await observedTransaction(session, 'community_ai', async () => {
-        created = false;
-        const existing = await this.receipts.findOne(identity).session(session).exec();
-        if (existing) return replay(existing);
-        const [claim] = await this.receipts.create([{ ...identity, requestHash }], { session });
-        const result = await work(session);
-        // Store a detached JSON result, including IDs/dates, as durable replay evidence.
-        const durableResult = JSON.parse(JSON.stringify(result));
-        await this.receipts.updateOne({ _id: claim._id }, { $set: { result: durableResult } }, { session }).exec();
-        created = true;
-        return durableResult;
-      }, { readConcern: { level: 'snapshot' }, writeConcern: { w: 'majority' } });
-      if (created) receiptEvent('receipt.created', operationType, userId, operationId);
-      return outcome;
-    } catch (error) {
-      if (error?.code === 11000) {
-        const winner = await this.receipts.findOne(identity).exec();
-        if (winner) return replay(winner);
+      if (prepare) {
+        const probe = await this.timeline.transaction(
+          operationType + '-prepare',
+          async (session) => {
+            const existing = await this.receipts
+              .findOne(identity)
+              .session(session)
+              .exec();
+            return existing
+              ? { found: true as const, result: replay(existing) }
+              : { found: false as const };
+          },
+          scope,
+        );
+        if (probe.found) return probe.result;
+        await this.timeline.fresh(scope);
+        await this.timeline.run(scope, prepare);
       }
-      throw error;
-    } finally { await session.endSession(); }
+      let result: T;
+      try {
+        result = await run();
+      } catch (error) {
+        if (!(error instanceof mongo.MongoServerError) || error.code !== 11000)
+          throw error;
+        result = await run();
+      }
+      if (created)
+        receiptEvent('receipt.created', operationType, userId, operationId);
+      return result;
+    } catch (error) {
+      if (error instanceof HttpException) throw error;
+      throw new ServiceUnavailableException({
+        code: 'RETRYABLE_SERVER_FAILURE',
+        message:
+          'Mutation could not be acknowledged. Retry the same operation.',
+      });
+    }
   }
 }
-
-@Module({ imports: [MongooseModule.forFeature([{ name: MutationReceipt.name, schema: MutationReceiptSchema }])],
-  providers: [MutationReceipts], exports: [MutationReceipts] })
+@Module({
+  imports: [
+    MutationTimelineModule,
+    MongooseModule.forFeature([
+      { name: MutationReceipt.name, schema: MutationReceiptSchema },
+    ]),
+  ],
+  providers: [MutationReceipts],
+  exports: [MutationReceipts],
+})
 export class MutationReceiptModule {}

@@ -104,3 +104,17 @@ isolation and audit limitations are in
 Mongo audit rolls back with Mongo. Keep independent external audit and issued-ID
 history; this tool cannot guarantee external retention or discover unannounced
 restores. The fence API is a foundation for 10B, not current domain/client fencing.
+
+
+## Phase 10B operator domain-write boundary
+
+Progress audit --apply/rollback and catalog replacement/provisioning require hard
+maintenance isolation: ingress closed, application/background processes drained,
+matching expected timeline and both external and Mongo write controls CLOSED.
+Retain independent operator evidence and backup boundaries. These tools use
+separate operator authority, not public client headers, and must never be run
+against OPEN application traffic. Normal startup no longer seeds a lesson catalog.
+
+For restore reopening use ENFORCE_MUTATIONS with a proven v2-capable client cohort;
+ALLOW_LEGACY is not restore-safe. The timeline CLI additionally refuses to open
+known restored metadata while the production policy permits legacy clients.

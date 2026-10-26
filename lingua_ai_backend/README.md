@@ -227,3 +227,21 @@ necessary. All earlier flashcard/progress receipt policies remain in force.
 See [Release packaging and checklist](../RELEASE_PACKAGING.md) for artifact allowlists,
 source-map policy, validated toolchains, build/version metadata and operator-only
 identity/signing/configuration requirements.
+
+
+## Phase 10B restore fencing
+
+The backend supports protocol 2 and public X-Data-Timeline mutation preconditions.
+Current web/Flutter clients remain v1. Explicit ALLOW_LEGACY is pre-restore migration
+only; ENFORCE_MUTATIONS requires v2 plus a matching timeline. Every public durable
+writer and authoritative receipt replay uses the shared control-document transaction
+fence. Registration, guest identity creation, profile updates and image allocation
+are included. Public no-store /compatibility remains available when CLOSED.
+
+New receipts carry immutable timeline provenance without changing global operation
+uniqueness. Unknown historical provenance is not relabeled for v2. See
+[production configuration](../PRODUCTION_CONFIGURATION.md),
+[restore runbooks](../PRODUCTION_RUNBOOKS.md), [compatibility](../RELEASE_COMPATIBILITY.md)
+and [testing](../TESTING.md). Catalog seeding is now explicit operator/test setup;
+normal application boot performs no lesson-data writes. No production/store release
+is authorized; operator tooling remains separate under RELEASE_PACKAGING.md.

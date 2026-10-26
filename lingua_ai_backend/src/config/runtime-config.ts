@@ -105,6 +105,7 @@ export function corsOptions(config: Pick<ConfigService, 'get'>): CorsOptions {
       'X-Resource-Revision',
       'X-Request-ID',
       CLIENT_PROTOCOL_HEADER,
+      'X-Data-Timeline',
     ],
     exposedHeaders: ['Retry-After', 'X-Request-ID'],
     origin: (origin, done) => done(null, originAllowed(config, origin)),

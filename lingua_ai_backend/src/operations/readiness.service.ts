@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Optional,
   OnApplicationBootstrap,
   OnModuleDestroy,
 } from '@nestjs/common';
@@ -9,6 +10,7 @@ import { Connection } from 'mongoose';
 import { CommunityImageStorage } from '../community/community-image.storage';
 import { telemetry } from './telemetry';
 import { TimelineWriteGate } from './timeline-gate';
+import { TimelineRuntimeState } from './mutation-timeline';
 import {
   pendingChecks,
   ReadinessChecks,
@@ -66,12 +68,31 @@ export class ReadinessService
     @InjectConnection() private readonly connection: Connection,
     private readonly config: ConfigService,
     private readonly images: CommunityImageStorage,
+    @Optional() sharedGate?: TimelineWriteGate,
+    @Optional() state?: TimelineRuntimeState,
   ) {
     this.timeout = config.get<number>('READINESS_TIMEOUT_MS') ?? 5000;
     this.interval = config.get<number>('READINESS_RECHECK_MS') ?? 15000;
-    this.timelineGate = new TimelineWriteGate(
-      connection,
-      config,
+    this.timelineGate =
+      sharedGate ??
+      new TimelineWriteGate(
+        connection,
+        config,
+        () => this.stopped,
+        () => {
+          const { checks } = this.snapshot();
+          return (
+            !this.stopped &&
+            [
+              checks.database,
+              checks.transactions,
+              checks.indexes,
+              checks.uploads,
+            ].every((value) => value === 'ok')
+          );
+        },
+      );
+    state?.bind(
       () => this.stopped,
       () => {
         const { checks } = this.snapshot();

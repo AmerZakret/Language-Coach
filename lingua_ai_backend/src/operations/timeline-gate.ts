@@ -93,9 +93,39 @@ export class TimelineWriteGate {
   private check(row: TimelineControl, expected: string): TimelineControl {
     if (row.dataTimelineId !== expected)
       throw new TimelineControlError('TIMELINE_MISMATCH');
-    if (row.writeState !== 'OPEN' || this.draining())
+    if (
+      row.writeState !== 'OPEN' ||
+      this.draining() ||
+      (row.sourceTimelineId !== undefined &&
+        this.config.get('CLIENT_PROTOCOL_POLICY') !== 'ENFORCE_MUTATIONS')
+    )
       throw new TimelineControlError('WRITES_CLOSED');
     return row;
+  }
+  async discovery(): Promise<{
+    dataTimelineId: string | null;
+    timelineWriteState: 'OPEN' | 'CLOSED' | 'UNAVAILABLE';
+  }> {
+    try {
+      const row = await readTimelineControl(this.connection, this.timeout());
+      if (row.dataTimelineId !== this.config.get('DATA_TIMELINE_ID'))
+        return { dataTimelineId: null, timelineWriteState: 'UNAVAILABLE' };
+      return {
+        dataTimelineId: row.dataTimelineId,
+        timelineWriteState:
+          row.writeState === 'OPEN' &&
+          (row.sourceTimelineId === undefined ||
+            this.config.get('CLIENT_PROTOCOL_POLICY') ===
+              'ENFORCE_MUTATIONS') &&
+          this.config.get('DATA_WRITE_MODE') === 'OPEN' &&
+          !this.draining() &&
+          this.infrastructureReady()
+            ? 'OPEN'
+            : 'CLOSED',
+      };
+    } catch {
+      return { dataTimelineId: null, timelineWriteState: 'UNAVAILABLE' };
+    }
   }
   /** Fresh control-only check; readiness composes this with topology/index/storage probes. */
   async resolveControl(): Promise<TimelineControl> {

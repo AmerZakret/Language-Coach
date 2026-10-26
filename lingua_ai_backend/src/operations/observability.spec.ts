@@ -1,3 +1,4 @@
+import { UnitTimelineModule } from '../../test/timeline-fixture';
 import {
   Body,
   Controller,
@@ -287,6 +288,8 @@ describe('8D structured operational diagnostics', () => {
         imports: [
           ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true }),
           SecurityModule,
+          UnitTimelineModule,
+          UnitTimelineModule,
         ],
         controllers: [DiagnosticFixture, HealthController],
         providers: [

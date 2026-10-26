@@ -252,3 +252,31 @@ release check. `node scripts/package-release.cjs COMPONENT NEW_DIRECTORY [BUILD_
 is a separate explicit writer for ignored/local deployment artifacts, not a deploy
 or sign command. See RELEASE_PACKAGING.md for clean installation and operator
 boundaries. Model caches and developer environments are never packaged.
+
+
+## Phase 10B server fencing
+
+Run backend `npm test` and `npm run test:e2e`, plus `node scripts/quality-check.cjs`
+for the complete repository baseline. `src/operations/mutation-timeline.spec.ts`
+uses only mongodb-memory-server replica sets, isolated temporary upload roots and
+mocked providers. It covers v1/v2 rollout, 400/426/428/409/503, CORS/auth/ownership,
+receipt provenance/uniqueness, lost-receipt restores, account/profile writes,
+in-flight close, image compensation and public CLOSED-state discovery.
+
+The mandatory destructive AI-clear test commits A's clear, restores pre-clear
+messages while removing its receipt/barrier, installs B, sends a B message and
+replays the original A clear key. It verifies 409 before receipt/barrier/delete
+work, no provider call, and preservation of restored plus later messages.
+
+Isolated domain fixtures explicitly call test/timeline-fixture.ts with synthetic
+configuration and disposable loopback Mongo; no runtime or NODE_ENV bootstrap is
+added. Non-database unit suites inject a named UnitTimelineModule test double.
+Catalog fixtures seed reviewed lesson data explicitly; application startup no
+longer inserts lessons. Runtime route metadata plus the public writer inventory
+fail tests when new public mutations lack classification.
+
+Release checks assert server protocol 2, web/Flutter protocol 1, legacy minimum 1
+and clientsTimelineAware=false for this stage. Only client tests recognize that
+staging state; client runtime/queue/cache behavior is unchanged. Four/six concurrent
+transactions exercise real shared-record contention and bounded retries, not load
+characterization. No production Mongo/provider/network action is part of testing.

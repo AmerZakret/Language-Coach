@@ -2,7 +2,7 @@
 
 ## Identity and protocol ownership
 
-Protocol revision **1** is the first explicit generation. The backend definition in
+Protocol revision **2** (server), with current web/Flutter clients still at **1** is the first explicit generation. The backend definition in
 `src/compatibility/protocol-contract.ts` is authoritative; web and Flutter each
 have one client constant, checked against it by runtime contract tests.
 It is a behavioral contract, independent of these unchanged packaging versions:
@@ -120,3 +120,38 @@ journals and their original protocols; see [RELEASE_PACKAGING.md](RELEASE_PACKAG
 Production traffic is still unauthorized until historical Mongo credential
 rotation and revocation are independently verified. Protocol/CI success proves
 neither credential remediation nor live infrastructure readiness.
+
+
+## Phase 10B staged server-v2/client-v1 contract
+
+The server supports revisions 1 and 2. Revision 1 retains the Phase 9 payload/queue
+contract; revision 2 adds X-Data-Timeline (canonical public UUID v4) for durable
+mutations and reset-receipt recovery. Web/Flutter runtime constants and durable
+queues remain v1 until 10C/10D. Release checks explicitly assert this temporary
+asymmetry and report clientsTimelineAware=false; this is not release authorization.
+
+ALLOW_LEGACY advertises minimumMutationRevision=1 and accepts pre-restore v1 writers,
+while v2 always requires its matching timeline. ENFORCE_MUTATIONS advertises minimum
+2 and rejects v1/missing protocol with 426. Future revisions above 2 are rejected.
+The compatibility response also includes timelineAwareProtocolRevision=2,
+dataTimelineId (matching known control or null) and timelineWriteState
+(OPEN/CLOSED/UNAVAILABLE), with no-store and no internal control/audit metadata.
+
+Malformed timeline is 400 INVALID_DATA_TIMELINE; missing v2 timeline is 428
+SERVER_TIMELINE_REQUIRED; changed timeline is 409 SERVER_TIMELINE_CHANGED; unscoped
+historical receipt under v2 is 409 RECEIPT_TIMELINE_UNVERIFIED. CLOSED/unavailable
+control is safe 503 BACKEND_NOT_READY. None is authentication failure. These errors
+require preserving the original durable intent for later client reconciliation;
+current clients have not implemented timeline reconciliation yet.
+
+All durable DB mutations and authoritative receipt replays use the current shared
+control fence, including legacy writes. This cannot prove where a v1 intent began.
+After restore, keep hard isolation/CLOSED latches until a timeline-aware cohort
+exists and ENFORCE_MUTATIONS is configured before opening fresh B. Known restore
+provenance blocks legacy-mode write readiness. An unannounced restore with unchanged
+external control remains undetectable; enforced operator procedure is mandatory.
+
+Receipt uniqueness stays global across timelines. Historical receipts are never
+relabelled or bulk assigned a timeline. Legacy unscoped replay is transitional only;
+v2 conservatively refuses it. The server validates timeline before receipt replay,
+epoch/revision checks, AI barrier/provider work, file allocation and domain effects.

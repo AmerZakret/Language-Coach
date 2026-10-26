@@ -107,6 +107,7 @@ describe('10A control plane (disposable replica set only)', () => {
     config = new ConfigService({
       DATA_TIMELINE_ID: A,
       DATA_WRITE_MODE: 'OPEN',
+      CLIENT_PROTOCOL_POLICY: 'ENFORCE_MUTATIONS',
       NODE_ENV: 'production',
       READINESS_TIMEOUT_MS: 2000,
     });
@@ -349,7 +350,11 @@ describe('10A control plane (disposable replica set only)', () => {
     );
     const future = new TimelineWriteGate(
       connection,
-      new ConfigService({ DATA_TIMELINE_ID: B, DATA_WRITE_MODE: 'OPEN' }),
+      new ConfigService({
+        DATA_TIMELINE_ID: B,
+        DATA_WRITE_MODE: 'OPEN',
+        CLIENT_PROTOCOL_POLICY: 'ENFORCE_MUTATIONS',
+      }),
       () => false,
       () => true,
     );
@@ -392,6 +397,7 @@ describe('10A control plane (disposable replica set only)', () => {
         new ConfigService({
           DATA_TIMELINE_ID: A,
           DATA_WRITE_MODE: 'OPEN',
+          CLIENT_PROTOCOL_POLICY: 'ENFORCE_MUTATIONS',
           RELEASE_BUILD_ID: `build-${i}`,
           CURRENT_CLIENT_PROTOCOL: i,
         }),
@@ -810,8 +816,13 @@ describe('10A explicit bounded production configuration', () => {
         ...local,
         DATA_TIMELINE_ID: A,
         DATA_WRITE_MODE: 'OPEN',
+        CLIENT_PROTOCOL_POLICY: 'ENFORCE_MUTATIONS',
       }),
-    ).toMatchObject({ DATA_TIMELINE_ID: A, DATA_WRITE_MODE: 'OPEN' });
+    ).toMatchObject({
+      DATA_TIMELINE_ID: A,
+      DATA_WRITE_MODE: 'OPEN',
+      CLIENT_PROTOCOL_POLICY: 'ENFORCE_MUTATIONS',
+    });
     expect(validateEnvironment(production()).DATA_TIMELINE_ID).toBe(A);
   });
 });

@@ -117,6 +117,17 @@ export async function main(args = process.argv.slice(2)) {
       parsed.options.get('--confirm-database') !== connection.name
     )
       throw new Error('DATABASE_CONFIRMATION_MISMATCH');
+    if (
+      parsed.action === 'open' &&
+      config.CLIENT_PROTOCOL_POLICY !== 'ENFORCE_MUTATIONS'
+    ) {
+      const current = await readTimelineControl(
+        connection,
+        config.READINESS_TIMEOUT_MS,
+      );
+      if (current.sourceTimelineId)
+        throw new OperatorControlError('RESTORE_REQUIRES_TIMELINE_ENFORCEMENT');
+    }
     const row = parsed.request
       ? await applyControlRequest(
           connection,

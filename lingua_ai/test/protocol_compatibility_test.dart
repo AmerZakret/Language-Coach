@@ -40,13 +40,15 @@ void main() {
     SyncStorage.backend = PreferencesSyncStorage();
   });
   test(
-      '9C Flutter constant matches source-executed backend/web revisions; build identity is independent',
+      '10B server v2 and Flutter/web v1 are explicit; build identity is independent',
       () async {
     final result = await Process.run(
         'node', ['../scripts/check-release-contract.cjs', '--json']);
     expect(result.exitCode, 0, reason: result.stderr.toString());
     final data = jsonDecode(result.stdout.toString()) as Map;
-    expect(ClientProtocol.revision, data['backend']['currentProtocolRevision']);
+    expect(data['backend']['currentProtocolRevision'], 2);
+    expect(data['backend']['minimumMutationRevision'], ClientProtocol.revision);
+    expect(data['clientsTimelineAware'], false);
     expect(ClientProtocol.header, data['backend']['protocolHeader']);
     expect(ClientProtocol.revision, data['web']['protocolRevision']);
     expect(ClientProtocol.developmentBuildId, 'development');

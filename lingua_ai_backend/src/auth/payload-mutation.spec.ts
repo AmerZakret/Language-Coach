@@ -1,3 +1,6 @@
+import { Lesson } from '../lessons/schemas/lesson.schema';
+import { allLessons } from '../lessons/data';
+import { initializeTestTimeline } from '../../test/timeline-fixture';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
@@ -63,6 +66,10 @@ describe('Phase 5C validation and mutation contracts', () => {
     operations = module.get(getModelToken(FlashcardOperation.name));
     posts = module.get(getModelToken(CommunityPost.name));
     await app.init();
+    await initializeTestTimeline(app);
+    await app
+      .get<Model<Lesson>>(getModelToken(Lesson.name))
+      .insertMany(allLessons);
     await Promise.all([users.init(), cards.init(), operations.init(), posts.init()]);
   });
   beforeEach(async () => {

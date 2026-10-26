@@ -14,6 +14,13 @@ import { normalizedRoute } from '../operations/request-diagnostics';
 // Only fixed messages/statuses are reflected, even if an exception carries a
 // familiar code alongside an unsafe provider body or internal error object.
 const known: Record<string, [number, string]> = {
+  SERVER_TIMELINE_REQUIRED: [428, 'A data timeline is required.'],
+  SERVER_TIMELINE_CHANGED: [409, 'Timeline reconciliation is required.'],
+  RECEIPT_TIMELINE_UNVERIFIED: [
+    409,
+    'Receipt timeline provenance is unavailable.',
+  ],
+  INVALID_DATA_TIMELINE: [400, 'A canonical data timeline is required.'],
   IDEMPOTENCY_CONFLICT: [409, 'Operation key payload changed.'],
   STALE_RESOURCE_REVISION: [409, 'Resource changed. Refresh before retrying.'],
   INVALID_RESOURCE_REVISION: [400, 'A valid resource revision is required.'],

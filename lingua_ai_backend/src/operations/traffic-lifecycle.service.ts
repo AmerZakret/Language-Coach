@@ -52,9 +52,12 @@ export class TrafficLifecycle implements NestInterceptor, OnModuleDestroy {
       }));
   }
   readonly middleware = (req: Request, res: Response, next: NextFunction) => {
-    const health = ['/health', '/health/live', '/health/ready'].includes(
-      req.path.replace(/\/+$/, ''),
-    );
+    const health = [
+      '/health',
+      '/health/live',
+      '/health/ready',
+      '/compatibility',
+    ].includes(req.path.replace(/\/+$/, ''));
     if (
       !health &&
       (this.stopping ||

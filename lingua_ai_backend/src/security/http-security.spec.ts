@@ -1,3 +1,5 @@
+import { UnitTimelineModule } from '../../test/timeline-fixture';
+import { unitTimeline } from '../../test/timeline-fixture';
 import {
   Body,
   Controller,
@@ -117,7 +119,7 @@ describe('8C real HTTP policy pipeline (signed JWTs, disposable files, no extern
     priorRoot = process.env.UPLOAD_ROOT;
     root = await mkdtemp(join(tmpdir(), 'lingua-8c-http-'));
     process.env.UPLOAD_ROOT = root;
-    images = new CommunityImageStorage();
+    images = new CommunityImageStorage(unitTimeline);
     png = await sharp({
       create: { width: 2, height: 2, channels: 3, background: '#123456' },
     })
@@ -156,6 +158,7 @@ describe('8C real HTTP policy pipeline (signed JWTs, disposable files, no extern
         PassportModule,
         JwtModule.register({ secret: config.get<string>('JWT_SECRET') }),
         SecurityModule,
+        UnitTimelineModule,
       ],
       controllers: [
         AuthController,

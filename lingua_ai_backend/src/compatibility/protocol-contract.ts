@@ -1,4 +1,4 @@
-export const CURRENT_CLIENT_PROTOCOL = 1;
+export const CURRENT_CLIENT_PROTOCOL = 2;
 export const MINIMUM_MUTATION_PROTOCOL = CURRENT_CLIENT_PROTOCOL;
 export const CLIENT_PROTOCOL_HEADER = 'X-Client-Protocol';
 export type ProtocolPolicy = 'ALLOW_LEGACY' | 'ENFORCE_MUTATIONS';
@@ -16,14 +16,14 @@ export const PROTOCOL_ROUTES = [
   ['GET', '/health/ready', none],
   ['GET', '/compatibility', none],
   ['POST', '/auth/login', none],
-  ['POST', '/auth/register', none],
-  ['POST', '/auth/guest', none],
+  ['POST', '/auth/register', required],
+  ['POST', '/auth/guest', required],
   ['GET', '/users/me', optional],
-  ['PATCH', '/users/profile', optional],
+  ['PATCH', '/users/profile', required],
   ['GET', '/lessons', optional],
   ['GET', '/lessons/:id', optional],
   ['GET', '/progress/:userId', optional],
-  ['GET', '/progress/:userId/reset-receipts/:operationId', optional],
+  ['GET', '/progress/:userId/reset-receipts/:operationId', required],
   ['POST', '/progress/:userId/complete-lesson', required],
   ['DELETE', '/progress/:userId', required],
   ['GET', '/flashcards/all', optional],
@@ -58,8 +58,32 @@ export function protocolMetadata(
 ) {
   return {
     currentProtocolRevision: CURRENT_CLIENT_PROTOCOL,
-    minimumMutationRevision: MINIMUM_MUTATION_PROTOCOL,
+    minimumMutationRevision:
+      policy === 'ALLOW_LEGACY' ? 1 : MINIMUM_MUTATION_PROTOCOL,
+    timelineAwareProtocolRevision: 2,
     policy,
     buildId,
   };
 }
+
+// Exhaustive public write inventory. Runtime metadata tests reject unclassified routes.
+export const PUBLIC_WRITER_INVENTORY = [
+  ['POST', '/auth/login', 'NO_DURABLE_WRITE'],
+  ['POST', '/auth/register', 'FENCED'],
+  ['POST', '/auth/guest', 'FENCED'],
+  ['PATCH', '/users/profile', 'FENCED'],
+  ['POST', '/progress/:userId/complete-lesson', 'FENCED'],
+  ['DELETE', '/progress/:userId', 'FENCED'],
+  ['POST', '/flashcards', 'FENCED'],
+  ['PUT', '/flashcards/:id', 'FENCED'],
+  ['DELETE', '/flashcards/:id', 'FENCED'],
+  ['PUT', '/flashcards/:id/review', 'FENCED'],
+  ['POST', '/community/posts', 'FENCED'],
+  ['PUT', '/community/posts/:id', 'FENCED'],
+  ['DELETE', '/community/posts/:id', 'FENCED'],
+  ['POST', '/community/posts/:id/like', 'FENCED'],
+  ['POST', '/ai-coach/chat', 'FENCED'],
+  ['DELETE', '/ai-coach/clear', 'FENCED'],
+  ['POST', '/ai-coach/writing-check', 'STATELESS'],
+  ['POST', '/pronunciation/assess', 'STATELESS'],
+] as const;

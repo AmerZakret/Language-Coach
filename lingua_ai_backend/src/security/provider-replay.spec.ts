@@ -1,3 +1,4 @@
+import { initializeTestTimeline } from '../../test/timeline-fixture';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { getModelToken, MongooseModule } from '@nestjs/mongoose';
@@ -75,6 +76,7 @@ describe('8C provider budget with 7E durable transactions (disposable replica se
     users = module.get(getModelToken(User.name));
     messages = module.get(getModelToken(ChatMessage.name));
     await app.init();
+    await initializeTestTimeline(app);
     await Promise.all([
       users.init(),
       messages.init(),

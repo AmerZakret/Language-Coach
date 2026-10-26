@@ -3,20 +3,12 @@ import { CommunityModule } from '../community/community.module';
 import { HealthController } from './health.controller';
 import { ReadinessService } from './readiness.service';
 import { TrafficLifecycle } from './traffic-lifecycle.service';
-import { TimelineWriteGate } from './timeline-gate';
+import { MutationTimelineModule } from './mutation-timeline';
 
 @Module({
-  imports: [CommunityModule],
+  imports: [CommunityModule, MutationTimelineModule],
   controllers: [HealthController],
-  providers: [
-    ReadinessService,
-    TrafficLifecycle,
-    {
-      provide: TimelineWriteGate,
-      useFactory: (readiness: ReadinessService) => readiness.timelineGate,
-      inject: [ReadinessService],
-    },
-  ],
-  exports: [ReadinessService, TrafficLifecycle, TimelineWriteGate],
+  providers: [ReadinessService, TrafficLifecycle],
+  exports: [ReadinessService, TrafficLifecycle, MutationTimelineModule],
 })
 export class OperationsModule {}

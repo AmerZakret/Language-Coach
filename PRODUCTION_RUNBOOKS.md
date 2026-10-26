@@ -573,9 +573,8 @@ identity/signing/configuration requirements.
 
 ## Phase 10A timeline control procedure
 
-**Server control foundation only.** No domain transaction/receipt timeline fence
-is wired until 10B. No client queue timeline exists until 10C/10D. Protocol remains
-revision 1. Existing offline restore/replay restrictions above continue to apply;
+**10A foundation, extended by the 10B server procedure below.** Server protocol
+2 fencing now exists; client queue timelines still await 10C/10D. Existing offline restore/replay restrictions above continue to apply;
 OPEN readiness alone does not establish restore safety or authorize traffic.
 
 External prerequisites: retain an independent durable operator record containing
@@ -678,3 +677,61 @@ readiness diagnostics include TIMELINE_CONTROL_UNAVAILABLE, TIMELINE_MISMATCH an
 WRITES_CLOSED, logged on diagnostic transitions rather than every request. CLI
 success emits a public operator_timeline action with resulting control metadata;
 failures omit raw Mongo errors, paths, credentials and stack traces.
+
+
+## Phase 10B rollout and restore reopening
+
+Backend protocol 2 support does not migrate existing web/Flutter clients: both
+remain v1. ALLOW_LEGACY may be used only for pre-restore migration while control
+and deployment expectation match and writes are intentionally OPEN. All server
+transactions are fenced, but a legacy offline intent still has no origin proof.
+Public/store release and production traffic remain unauthorized.
+
+After a real restore: retain hard ingress/process/DB endpoint isolation and CLOSED
+external latch throughout full DB/upload reconciliation. Issue fresh B externally;
+close the actual restored Mongo control, install B CLOSED, and preserve independent
+audit/issued-ID evidence. A timeline-aware client cohort must exist before reopening.
+Set CLIENT_PROTOCOL_POLICY to ENFORCE_MUTATIONS on the operator environment and
+all replacement instances before the separate open step. The CLI refuses to open
+known restored metadata in ALLOW_LEGACY; the write gate also refuses known restored
+metadata with a legacy-permitting policy. Never use old v1 clients for a post-restore
+canary. Missing provenance on older backups does not waive these operator rules.
+
+Inspect discovery without sending mutations: GET /compatibility is public/no-store
+and works while general readiness is CLOSED. Unknown/mismatched control yields
+no trusted public timeline. Verify exact server-v2/client-cohort capability and
+both control latches; a revision/build label alone is insufficient. Readiness must
+pass on every replacement instance before independently authorized traffic.
+
+Inventory existing mutationreceipts, flashcardoperations and progressresets without
+bulk rewriting them. Their global operation identities and indefinite retention
+remain unchanged. New receipts carry immutable dataTimelineId. V2 replay of missing
+provenance requires reconciliation (409 RECEIPT_TIMELINE_UNVERIFIED); cross-timeline
+receipt reuse is rejected (409 SERVER_TIMELINE_CHANGED), even with a current header.
+Do not delete/relabel a receipt, replace its operation ID, or weaken its unique index
+to make a retry succeed. The reset recovery GET also checks timeline provenance.
+
+Every public durable writer is FENCED: progress completion/reset, all flashcard
+mutations, Community create/update/delete/reaction, AI send/clear, registration,
+guest identity creation and profile updates. Image allocation has fresh admission,
+owned-file compensation and a separate final DB fence. Login is NO_DURABLE_WRITE;
+writing feedback and pronunciation assessment are STATELESS (bounded ephemeral
+spools/provider effects only). Ordinary GET handlers have no incidental persistence
+writes. Runtime lesson bootstrapping has been removed; reviewed catalog provisioning
+is an explicit operator task, including in local/disposable setups.
+
+Progress audit --apply/rollback, local lesson replacement/generation and timeline
+control are OPERATOR_ONLY. Domain repair/replacement tools require hard maintenance,
+all public/background writers drained, and both external and Mongo write controls
+intentionally CLOSED, with matching expected timeline and retained operator evidence.
+Do not attach public client headers to these tools. Their separate operator authority
+is not permission to run them during OPEN application traffic. No operator tool is
+invoked by startup, readiness, preflight or CI against real infrastructure.
+
+Observe timeline_request_missing, timeline_request_mismatch, timeline_write_blocked,
+timeline_fence_conflict and receipt_timeline_conflict, plus transaction retry counters.
+Legacy admissions are counted without per-request log spam. Shared-document contention
+causes real bounded transaction retries; do not substitute read-only assertions or
+remove the fence. Tests exercise four/six concurrent operations, not a production
+throughput benchmark. Characterize transaction rate, retry/latency distribution and
+fleet capacity in 10E before any release decision.
