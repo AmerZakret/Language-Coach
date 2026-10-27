@@ -1,3 +1,4 @@
+import { dataTimeline, TimelineRecoveryRequired } from '../utils/dataTimeline';
 import { prepareOnlineIntent } from '../utils/onlineIntents';
 import { getSessionRequestConfig, isSessionCurrent } from '../utils/queueSession';
 import { durableMutation, recoverBeforeRead } from './intentRecovery';
@@ -37,8 +38,10 @@ export const sendMessage = async (data: ChatRequest, operationId?: string): Prom
 
 export const getChatHistory = async (targetLanguage: TargetLanguage | TargetLanguageCode): Promise<ChatMessage[]> => {
   const session = getSessionRequestConfig().sessionSnapshot;
+  const timeline = dataTimeline.context();
   await recoverBeforeRead('ai', targetLanguageCode(targetLanguage));
   if (!isSessionCurrent(session)) throw new Error('Chat session changed');
+  if (!dataTimeline.isContext(timeline)) throw new TimelineRecoveryRequired();
   const response = await apiClient.get<ChatMessage[]>(`/ai-coach/history`, {
     ...{ sessionSnapshot: session },
     params: { targetLanguage: targetLanguageCode(targetLanguage) }

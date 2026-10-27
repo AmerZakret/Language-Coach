@@ -1,3 +1,5 @@
+import { dataTimeline } from '../utils/dataTimeline';
+import { readTimelineCache, writeTimelineCache } from '../utils/timelineCache';
 import { targetLanguageCode, targetLanguageTtsLocale } from '../utils/targetLanguage';
 import type { TargetLanguageCode } from '../types/language';
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -85,15 +87,15 @@ export function FlashcardsPage() {
     refresh();
     return subscribeOfflineQueue(refresh);
   }, [captureContext]);
-  const pendingMutationIds = useRef(new Map<string, string>());
+  const pendingMutationIds = useRef(new Map<string, { id: string; dataTimelineId: string }>());
   const mutationRequest = (operation: string, payload: object) => {
     const key = `${queueOwner}|${targetLanguage}|${operation}|${JSON.stringify(payload)}`;
     let id = pendingMutationIds.current.get(key);
     if (!id) {
-      id = createFlashcardOperationId();
+      id = { id: createFlashcardOperationId(), ...dataTimeline.capture() };
       pendingMutationIds.current.set(key, id);
     }
-    return { key, config: { ...getSessionRequestConfig(), headers: { 'X-Idempotency-Key': id } } };
+    return { key, config: { ...getSessionRequestConfig(), dataTimelineId: id.dataTimelineId, headers: { 'X-Idempotency-Key': id.id } } };
   };
 
   const { syncRevision, lastDrainSucceeded } = useSync();
@@ -147,8 +149,8 @@ export function FlashcardsPage() {
     setError(null);
     try {
       if (localOnly) {
-        const cachedAll = localStorage.getItem(`flashcards_all_${userId}_${targetLanguage}`);
-        const cachedDue = localStorage.getItem(`flashcards_due_${userId}_${targetLanguage}`);
+        const cachedAll = readTimelineCache(`flashcards_all_${userId}_${targetLanguage}`, localOnly);
+        const cachedDue = readTimelineCache(`flashcards_due_${userId}_${targetLanguage}`, localOnly);
         const all = cachedAll ? JSON.parse(cachedAll) as CardData[] : null;
         if (all) setAllCards(all);
         if (all || cachedDue) {
@@ -167,13 +169,13 @@ export function FlashcardsPage() {
       setDueCards(dueRes.data);
       setOriginalDueCards(dueRes.data);
 
-      localStorage.setItem(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(allRes.data));
-      localStorage.setItem(`flashcards_due_${userId}_${targetLanguage}`, JSON.stringify(dueRes.data));
+      writeTimelineCache(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(allRes.data), localOnly);
+      writeTimelineCache(`flashcards_due_${userId}_${targetLanguage}`, JSON.stringify(dueRes.data), localOnly);
     } catch (e) {
       if (!isCurrent()) return;
       console.error("Failed to fetch cards from server, loading cached.", e);
-      const cachedAll = localStorage.getItem(`flashcards_all_${userId}_${targetLanguage}`);
-      const cachedDue = localStorage.getItem(`flashcards_due_${userId}_${targetLanguage}`);
+      const cachedAll = readTimelineCache(`flashcards_all_${userId}_${targetLanguage}`, localOnly);
+      const cachedDue = readTimelineCache(`flashcards_due_${userId}_${targetLanguage}`, localOnly);
       if (cachedAll) setAllCards(JSON.parse(cachedAll));
       if (cachedDue) {
         setDueCards(JSON.parse(cachedDue));
@@ -207,7 +209,7 @@ export function FlashcardsPage() {
         if (!isCurrent()) return;
         const updatedAll = allCards.map(current => current._id === card._id ? reviewedCard(current, score) : current);
         setAllCards(updatedAll);
-        try { localStorage.setItem(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(updatedAll)); }
+        try { writeTimelineCache(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(updatedAll), localOnly); }
         catch { setError('Review is pending. The local card preview could not be cached.'); }
         if (!isOffline) {
           // A failed/ambiguous attempt remains durable. The application sync
@@ -353,8 +355,8 @@ export function FlashcardsPage() {
         setDueCards(updatedDue);
         setOriginalDueCards([newCard, ...originalDueCards]);
         
-        localStorage.setItem(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(updatedAll));
-        localStorage.setItem(`flashcards_due_${userId}_${targetLanguage}`, JSON.stringify(updatedDue));
+        writeTimelineCache(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(updatedAll), localOnly);
+        writeTimelineCache(`flashcards_due_${userId}_${targetLanguage}`, JSON.stringify(updatedDue), localOnly);
         
         showSuccess(t("flashcard_created"));
       } else if (modal === "edit" && selectedCard) {
@@ -369,8 +371,8 @@ export function FlashcardsPage() {
         setDueCards(updatedDue);
         setOriginalDueCards(originalDueCards.map(c => c._id === selectedCard._id ? { ...c, ...formData } : c));
         
-        localStorage.setItem(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(updatedAll));
-        localStorage.setItem(`flashcards_due_${userId}_${targetLanguage}`, JSON.stringify(updatedDue));
+        writeTimelineCache(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(updatedAll), localOnly);
+        writeTimelineCache(`flashcards_due_${userId}_${targetLanguage}`, JSON.stringify(updatedDue), localOnly);
         
         showSuccess(t("flashcard_updated"));
       }
@@ -423,8 +425,8 @@ export function FlashcardsPage() {
       setDueCards(updatedDue);
       setOriginalDueCards(originalDueCards.filter(c => c._id !== cardId));
       
-      localStorage.setItem(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(updatedAll));
-      localStorage.setItem(`flashcards_due_${userId}_${targetLanguage}`, JSON.stringify(updatedDue));
+      writeTimelineCache(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(updatedAll), localOnly);
+      writeTimelineCache(`flashcards_due_${userId}_${targetLanguage}`, JSON.stringify(updatedDue), localOnly);
       
       showSuccess(t("flashcard_deleted"));
       setDeleteConfirmId(null);

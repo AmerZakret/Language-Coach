@@ -40,7 +40,7 @@ void main() {
     SyncStorage.backend = PreferencesSyncStorage();
   });
   test(
-      '10B server v2 and Flutter/web v1 are explicit; build identity is independent',
+      '10C server/web v2 and Flutter v1 are explicit; build identity is independent',
       () async {
     final result = await Process.run(
         'node', ['../scripts/check-release-contract.cjs', '--json']);
@@ -50,7 +50,9 @@ void main() {
     expect(data['backend']['minimumMutationRevision'], ClientProtocol.revision);
     expect(data['clientsTimelineAware'], false);
     expect(ClientProtocol.header, data['backend']['protocolHeader']);
-    expect(ClientProtocol.revision, data['web']['protocolRevision']);
+    expect(data['web']['protocolRevision'], 2);
+    expect(ClientProtocol.revision, 1);
+    expect(data['web']['timelineAware'], true);
     expect(ClientProtocol.developmentBuildId, 'development');
     expect(ClientProtocol.validBuildId(ClientProtocol.buildId), true);
     expect(ClientProtocol.buildId,

@@ -63,14 +63,15 @@ async function mount(localStorage, fetch, fetchMe = async () => {
     vm.runInNewContext(ts.transpileModule(readFileSync(join(__dirname, '../src/utils', name + '.ts'), 'utf8'),
       {compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText, {
       module:loaded, exports:loaded.exports, localStorage, navigator:{locks:lockManager}, window:{addEventListener(){}},
-      require: path => path === './userKey' ? keyModule.exports : loadUtility(path.replace('./','')),
+      require: path => path === './dataTimeline' ? require('./helpers/timelineFixture.cjs').isolatedTimeline : path === './userKey' ? keyModule.exports : loadUtility(path.replace('./','')),
     });
     return loaded.exports;
   }
   const sessionModule = {exports:loadUtility('queueSession')};
   vm.runInNewContext(compiled, {
-    module, exports: module.exports, localStorage, fetch,
+    module, exports: module.exports, localStorage, fetch, navigator: { onLine: true },
     require: name => {
+      if (name.endsWith('/dataTimeline')) return require('./helpers/timelineFixture.cjs').isolatedTimeline;
       if (name === 'react') return react;
       if (name === '../api/apiClient') return { __esModule: true, default: { post: async () => { const response = await fetch(); if (!response.ok) throw new Error('Guest login failed'); return { data: await response.json() }; } } };
       if (name === '../api/authApi') return { fetchMe };

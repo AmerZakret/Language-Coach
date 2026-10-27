@@ -18,8 +18,8 @@ for (const kind of ['community-create', 'ai-send', 'ai-clear']) test(`9D ${kind}
   const server = async req => {
     const stored = JSON.parse(o.values.get(journalKey)).intents[0];
     assert.equal(stored.id, req.headers['X-Idempotency-Key']);
-    assert.equal(stored.protocol, 1); assert.equal(stored.ownerNamespace, owner);
-    assert.equal(req.headers['X-Client-Protocol'], '1');
+    assert.equal(stored.protocol, 2); assert.equal(stored.ownerNamespace, owner);
+    assert.equal(req.headers['X-Client-Protocol'], '2');
     assert.ok(!JSON.stringify(stored).includes(`token-${A}`));
     if (!receipts.has(stored.id)) {
       mutations++; if (kind === 'ai-send') providerCalls++;
@@ -71,7 +71,7 @@ for (const status of [401, 426, 429, 503, 409, 400]) test(`9D HTTP ${status} pre
     await tab.load('api/intentRecovery.ts').recoverOnlineIntents('ai', 'en');
     assert.equal(o.values.get(journalKey), before);
   }
-  assert.equal(intent.protocol, 1); assert.equal(typeof intent.id, 'string');
+  assert.equal(intent.protocol, 2); assert.equal(typeof intent.id, 'string');
   assert.ok(!o.values.get(journalKey).includes(`token-${A}`)); tab.close();
 });
 

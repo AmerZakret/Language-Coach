@@ -1,4 +1,5 @@
 export interface ProgressState {
+  readonly dataTimelineId?: string;
   progressEpoch?: number;
   available?: boolean;
   lessonScores?: Record<string, number>;

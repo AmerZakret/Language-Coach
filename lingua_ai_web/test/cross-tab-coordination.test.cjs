@@ -4,7 +4,7 @@ const {origin,A,B,user,ownerKey,tick,deferred}=require('./helpers/browserContext
 const owner=`registered_${A}`;
 const completion=(lesson='one',epoch=0)=>({lessonId:lesson,score:73,progressEpoch:epoch,targetLanguage:'en',_lessonLanguageBound:true,xpReward:10});
 const create=(temp='local_one')=>({tempId:temp,targetWord:temp,turkishTranslation:'translation',targetLanguage:'en'});
-async function pair(){const o=origin(),a=o.tab(),b=o.tab();await a.install();o.values.set(`progress_epoch_${owner}`,'0');return {o,a,b};}
+async function pair(){const o=origin(),a=o.tab(),b=o.tab();await a.install();o.values.set(`progress_epoch_${owner}`,require('./helpers/timelineFixture.cjs').envelope(0));return {o,a,b};}
 const queueState=(o,who=owner)=>JSON.parse(o.values.get(ownerKey(who))||'{"actions":[],"tempIds":{},"failedActions":[]}');
 const state=(o)=>JSON.parse(o.values.get('linguaai_session_v1'));
 
@@ -65,7 +65,7 @@ test('reset barrier survives in-flight completion acknowledgement from another t
  const first=a.queue.processOfflineQueue(A,true);await started.promise;
  await b.queue.pushToOfflineQueue('reset-progress',{expectedEpoch:0},owner,true);const id=queueState(o).actions[0].id;
  reply.resolve();assert.equal(await first,true);assert.equal(queueState(o).actions.length,1);assert.equal(queueState(o).actions[0].id,id);
- assert.equal(await b.queue.processOfflineQueue(A,true),true);assert.equal(o.values.get(`progress_epoch_${owner}`),'1');
+ assert.equal(await b.queue.processOfflineQueue(A,true),true);assert.equal(o.values.get(`progress_epoch_${owner}`),require('./helpers/timelineFixture.cjs').envelope(1));
  await assert.rejects(a.queue.pushToOfflineQueue('complete-lesson',completion('old',0),owner,true),/Progress changed/);
  await a.queue.pushToOfflineQueue('complete-lesson',completion('fresh',1),owner,true);assert.equal(queueState(o).actions[0].payload.progressEpoch,1);
 });
@@ -77,7 +77,7 @@ test('serialized server snapshots cannot lower epoch or overwrite a concurrent p
  assert.equal(await a.queue.saveServerProgress(owner,'English',revision,snapshot),false);
  const gate=deferred(),started=deferred();const held=b.navigator.locks.request(`linguaai:queue:storage:${owner}`,async()=>{started.resolve();await gate.promise;});await started.promise;
  const save=a.queue.saveServerProgress(owner,'English',a.queue.getProgressQueueRevision(owner),snapshot);
- o.values.set(`progress_epoch_${owner}`,'1');gate.resolve();await held;assert.equal(await save,false);assert.equal(o.values.get(`progress_epoch_${owner}`),'1');
+ o.values.set(`progress_epoch_${owner}`,require('./helpers/timelineFixture.cjs').envelope(1));gate.resolve();await held;assert.equal(await save,false);assert.equal(o.values.get(`progress_epoch_${owner}`),require('./helpers/timelineFixture.cjs').envelope(1));
 });
 
 test('tab teardown releases a held mutation lock and a waiting tab preserves durable action',async()=>{
@@ -117,11 +117,11 @@ test('cross-tab A to B blocks old draft before render, updates auth and remounts
  const {o,a,b}=await pair();await a.mount();await b.mount();await a.queue.pushToOfflineQueue('complete-lesson',completion(),owner);
  const oldIntent=a.session.getSessionRequestConfig(),oldKey=a.tree.props.children.props.key;
  await b.authStorage.replaceStoredSession(user(B),`token-${B}`);
- await assert.rejects(a.client.post('/community/posts',{text:'A draft'}),/Session changed/);assert.equal(a.requests.length,0);
+ await assert.rejects(a.client.post('/community/posts',{text:'A draft'}, a.timeline.capture()),/Session changed/);assert.equal(a.requests.length,0);
  await o.flush();assert.equal(a.auth.user.id,B);assert.equal(a.auth.token,`token-${B}`);assert.notEqual(a.tree.props.children.props.key,oldKey);
- await assert.rejects(a.client.post('/community/posts',{text:'A stale callback'},oldIntent),/Session changed/);
+ await assert.rejects(a.client.post('/community/posts',{text:'A stale callback'},{ ...a.timeline.capture(), ...oldIntent }),/Session changed/);
  assert.equal(await a.queue.processOfflineQueue(A,true),false);assert.equal(queueState(o).actions[0].ownerNamespace,owner);
- await a.client.post('/community/posts',{text:'fresh B draft'});assert.equal(a.requests[0].headers.Authorization,`Bearer token-${B}`);
+ await a.client.post('/community/posts',{text:'fresh B draft'}, a.timeline.capture());assert.equal(a.requests[0].headers.Authorization,`Bearer token-${B}`);
  await b.auth.logout();await o.flush();assert.equal(a.auth.user,null);assert.equal(queueState(o).actions.length,1);
 });
 
@@ -130,7 +130,7 @@ for(const [from,to]of [[user(A),user(B,true)],[user(A,true),user(B)],[user(A),{i
   const o=origin(),a=o.tab(),b=o.tab();await a.install(from,from.id==='guest'?null:`token-${from.id}`);await a.mount();await b.mount();
   const old=a.session.getOfflineQueueSession();await a.queue.pushToOfflineQueue('create-flashcard',create(),old.ownerNamespace);
   await b.authStorage.replaceStoredSession(to,to.id==='guest'?null:`token-${to.id}`);
-  await assert.rejects(a.client.post('/community/posts',{text:'old intent'}),/Session changed/);await o.flush();
+  await assert.rejects(a.client.post('/community/posts',{text:'old intent'}, a.timeline.capture()),/Session changed/);await o.flush();
   assert.equal(a.auth.user.id,to.id);assert.equal(a.auth.token,to.id==='guest'?null:`token-${to.id}`);assert.equal(queueState(o,old.ownerNamespace).actions[0].ownerNamespace,old.ownerNamespace);
   assert.equal(await a.queue.processOfflineQueue(from.id,true),false);assert.equal(a.requests.length,0);
  });
@@ -164,14 +164,14 @@ test('unsupported browser rejects coordinated mutations, preserves existing work
  await assert.rejects(a.queue.pushToOfflineQueue('create-flashcard',create(),owner),/Web Locks/);
  await assert.rejects(a.queue.preparePendingProgress(owner),/Web Locks/);await assert.rejects(a.queue.clearOfflineQueue(),/Web Locks/);
  assert.equal(await a.queue.processOfflineQueue(A,true),false);assert.equal(o.values.get(ownerKey(owner)),raw);
- await a.client.post('/community/posts',{text:'current online intent'});assert.equal(a.requests[0].headers.Authorization,`Bearer token-${A}`);
+ await a.client.post('/community/posts',{text:'current online intent'}, a.timeline.capture());assert.equal(a.requests[0].headers.Authorization,`Bearer token-${A}`);
 });
 
 test('legacy mixed identity is not assigned: only verified profile binds migrated token',async()=>{
  const o=origin();o.values.set('linguaai_user',JSON.stringify(user(A)));o.values.set('linguaai_token',`token-${B}`);
  const a=o.tab(),profile=deferred();a.fetchMe=()=>profile.promise;a.render();await o.flush();
  assert.equal(state(o).user,null);assert.equal(state(o).pendingVerification,true);assert.equal(a.session.isOfflineQueueSessionActive(a.session.getOfflineQueueSession()),false);
- await assert.rejects(a.client.post('/community/posts',{text:'unverified'}),/verification/);
+ await assert.rejects(a.client.post('/community/posts',{text:'unverified'}, a.timeline.capture()),/verification/);
  profile.resolve(user(B));await o.flush();assert.equal(state(o).user.id,B);assert.equal(state(o).token,`token-${B}`);assert.equal(a.auth.user.id,B);
 });
 
@@ -179,19 +179,19 @@ test('an interrupted React render cannot expose a new token to the committed old
  const {o,a,b}=await pair();await a.mount();await b.mount();const committed=a.tree;
  await b.authStorage.replaceStoredSession(user(B),`token-${B}`);await tick();a.render(false);
  assert.equal(a.tree,committed);assert.equal(a.auth.user.id,A);
- await assert.rejects(a.client.post('/community/posts',{text:'old A draft'}),/Session changed/);
+ await assert.rejects(a.client.post('/community/posts',{text:'old A draft'}, a.timeline.capture()),/Session changed/);
  assert.equal(a.requests.length,0);
- a.render();await a.client.post('/community/posts',{text:'new B intent'});
+ a.render();await a.client.post('/community/posts',{text:'new B intent'}, a.timeline.capture());
  assert.equal(a.requests[0].headers.Authorization,`Bearer token-${B}`);
 });
 
 test('a stale same-owner token generation cannot dispatch or start guest login from the old UI',async()=>{
  const {o,a,b}=await pair();await a.mount();await b.mount();
  await b.authStorage.replaceStoredSession(user(A),'replacement-token');
- await assert.rejects(a.client.post('/community/posts',{text:'old-token intent'}),/Session changed/);
+ await assert.rejects(a.client.post('/community/posts',{text:'old-token intent'}, a.timeline.capture()),/Session changed/);
  await assert.rejects(a.auth.loginAsGuest(),/Session changed/);
  assert.equal(state(o).token,'replacement-token');assert.equal(a.requests.length,0);
- await o.flush();await a.client.post('/community/posts',{text:'fresh intent'});
+ await o.flush();await a.client.post('/community/posts',{text:'fresh intent'}, a.timeline.capture());
  assert.equal(a.requests[0].headers.Authorization,'Bearer replacement-token');
 });
 
@@ -212,9 +212,9 @@ test('local guest card mutations reload the latest local snapshot and never enqu
 test('unsupported browser 401 invalidates this tab without overwriting shared auth or owner data',async()=>{
  const o=origin(),a=o.tab(false),b=o.tab(false);await a.install();await a.mount();await b.mount();
  const persisted=o.values.get('linguaai_session_v1');a.dispatch=async()=>{throw {response:{status:401}};};
- await assert.rejects(a.client.post('/community/posts',{text:'expired-token intent'}));await o.flush();
+ await assert.rejects(a.client.post('/community/posts',{text:'expired-token intent'}, a.timeline.capture()));await o.flush();
  assert.equal(a.auth.user,null);assert.equal(o.values.get('linguaai_session_v1'),persisted);
- await assert.rejects(a.client.post('/community/posts',{}, {sessionSnapshot:{...b.session.getOfflineQueueSession()}}),/Session changed/);
+ await assert.rejects(a.client.post('/community/posts',{}, { ...a.timeline.capture(), ...{sessionSnapshot:{...b.session.getOfflineQueueSession()}} }),/Session changed/);
  await b.install(user(B),`token-${B}`);await o.flush();assert.equal(a.auth.user.id,B);
 });
 

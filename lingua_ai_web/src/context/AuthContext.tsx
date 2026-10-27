@@ -1,3 +1,4 @@
+import { dataTimeline } from '../utils/dataTimeline';
 import apiClient from '../api/apiClient';
 import React, { createContext, useContext, useState, useEffect, useLayoutEffect, useRef } from 'react';
 import type { User } from '../types/auth';
@@ -34,6 +35,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const initialize = async () => {
       await initializeStoredSession();
       if (cancelled) return;
+      if (navigator.onLine !== false) await dataTimeline.ensureDiscovered();
       const current = readStoredSession();
       setRecord(current);
       if (current.token) {
@@ -70,10 +72,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     let user = localGuestUser;
     let token: string | null = null;
     try {
-      const response = await apiClient.post('/auth/guest');
+      await dataTimeline.ensureDiscovered();
+      const operation = dataTimeline.capture();
+      const response = await apiClient.post('/auth/guest', undefined, operation);
       const data = response.data;
       if (!isBackendGuestUser(data.user) || typeof data.access_token !== 'string' || !data.access_token.trim()) throw new Error('Invalid guest session');
       user = data.user; token = data.access_token;
+      dataTimeline.confirmRead(`guest_${user.id}`, '/users/me');
     } catch { /* Tokenless local guest when backend guest creation is unavailable. */ }
     if (!lifecycle.current.mounted || attempt !== lifecycle.current.attempt || !isSessionCurrent(session)) return;
     await replaceStoredSession(user, token, coordinationAvailable() ? session.revision : undefined);

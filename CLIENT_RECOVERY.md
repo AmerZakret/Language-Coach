@@ -97,3 +97,52 @@ Server rollback consistency remains governed by the coordinated recovery runbook
 Owner journals and native durable slots are client STATE, never release artifacts.
 Preserve them across updates/rollback and retain their original IDs/protocols. See
 [Release packaging](RELEASE_PACKAGING.md) for artifact/config/state separation.
+
+
+## Phase 10C web timeline provenance and restore review
+
+Every new server-bound web operation captures a confirmed dataTimelineId before
+queue/intent persistence or dispatch. The operation keeps that identity forever.
+Offline creation is allowed with a previously confirmed cached timeline; a browser
+that has never confirmed one blocks new replayable work. Reconnect discovers the
+server timeline under coordination before considering drains. IDs are public
+preconditions, never credentials or proof of ownership.
+
+Old no-timeline records are LEGACY_UNVERIFIED (derived classification). They keep
+their owner, operation ID, payload, protocol and evidence indefinitely. Neither
+first confirmation nor retry code assigns the current timeline to them. Corrupt
+stores stay intact and block dispatch. Migration does not evict unresolved work.
+
+After A becomes B, A work remains saved and paused, including AI send and the
+particularly destructive ai-clear. An old clear cannot execute in B or be relabelled.
+Review the saved payload and current history/feed, then discard a selected old local
+record only through explicit confirmation. Discard issues no server request. Any
+fresh B clear needs the existing explicit clear confirmation and a new operation ID.
+The same fresh-action rule applies to sends, Community edits/deletes/reactions,
+flashcard actions, and progress (whose epoch is independent of timeline).
+
+409 SERVER_TIMELINE_CHANGED pauses for reconciliation and rediscovery; 428
+SERVER_TIMELINE_REQUIRED is a provenance problem, never latest-timeline autofill.
+426 retains update-required handling; 503 BACKEND_NOT_READY pauses for maintenance
+with bounded retry. Authentication/owner rules remain separate.
+
+| Read state | Classification | Restore handling |
+|---|---|---|
+| Progress snapshots and acknowledged epoch | TIMELINE_SCOPED | Tagged envelope; reject unknown/A in B, refetch epoch and progress. |
+| Flashcard all/due snapshots | TIMELINE_SCOPED | Tagged envelope, owner keys retained, authoritative B cards/history. |
+| Community personalized feed | TIMELINE_SCOPED | Schema 3 includes owner/query/timeline; reject A and untagged caches. |
+| AI history/results | TIMELINE_SCOPED | Memory only; remount/refetch and reject late A responses. Intents survive separately. |
+| Cached user profile | TIMELINE_SCOPED | Auth record retains identity/token; profileDataTimelineId tags new profiles. Refresh /users/me before restoring dependent views. |
+| Downloaded lesson catalog and progress-derived UI | TIMELINE_SCOPED | Discard catalog snapshots and derived views; refresh. |
+| Bundled immutable fallback lesson/reference data, theme, sound, interface preferences | TIMELINE_NEUTRAL | Retain. |
+| Tokenless local guest work | LOCAL_ONLY | Retain local durable progress/cards, never adopt into server queues. |
+
+Global timeline advertisements never transfer owner journals or clear auth. A
+waiting drain rereads advertisement and server state after its Web Lock. Request
+contexts include a memory revision so A responses, including A-to-B-to-A races,
+cannot populate a newer view/cache or resolve a newer intent. Same-timeline
+rediscovery is idempotent and keeps caches and operation IDs.
+
+Web is timeline aware; Flutter remains v1 until 10D. ALLOW_LEGACY remains
+transitional. External restore isolation remains mandatory; 10E performs the full
+restore drill. This work does not authorize production traffic or store release.

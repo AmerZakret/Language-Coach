@@ -1,3 +1,4 @@
+import { TimelineBoundary } from './components/TimelineBoundary';
 import { ClientRecoveryNotice } from './components/ClientRecoveryNotice';
 import { ReleaseCompatibilityNotice } from './components/ReleaseCompatibilityNotice';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
@@ -57,6 +58,7 @@ export default function App() {
     <NetworkProvider>
       <ReleaseCompatibilityNotice />
       <AuthProvider>
+        <TimelineBoundary>
         <ClientRecoveryNotice />
         <SyncProvider>
           <SoundProvider>
@@ -73,6 +75,7 @@ export default function App() {
             </TargetLanguageProvider>
           </SoundProvider>
         </SyncProvider>
+        </TimelineBoundary>
       </AuthProvider>
     </NetworkProvider>
   );

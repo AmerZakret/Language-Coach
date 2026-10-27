@@ -1,3 +1,4 @@
+import { dataTimeline, TimelineRecoveryRequired } from '../utils/dataTimeline';
 import { getSessionRequestConfig, isSessionCurrent } from '../utils/queueSession';
 import { communityCreatePayload, durableMutation, recoverBeforeRead } from './intentRecovery';
 import { mutationRequest, newMutationId } from './mutationRequest';
@@ -33,7 +34,9 @@ export const getCommunityPosts = async (params: {
   language?: string;
 }): Promise<GetCommunityPostsResponse> => {
   const session = getSessionRequestConfig().sessionSnapshot;
+  const timeline = dataTimeline.context();
   await recoverBeforeRead('community');
+  if (!dataTimeline.isContext(timeline)) throw new TimelineRecoveryRequired();
   if (!isSessionCurrent(session)) throw new Error('Community session changed');
   const response = await apiClient.get<GetCommunityPostsResponse>('/community/posts', {
     ...{ sessionSnapshot: session },
@@ -44,11 +47,12 @@ export const getCommunityPosts = async (params: {
 
 export const createCommunityPost = async (formData: FormData, operationId?: string): Promise<CommunityPost> => {
   const session = getSessionRequestConfig().sessionSnapshot;
+  const timeline = dataTimeline.capture();
   const language = formData.get('learningLanguage');
   if (language != null) formData.set('learningLanguage', targetLanguageCode(language));
   const payload = await communityCreatePayload(formData);
   if (!isSessionCurrent(session)) throw new Error('Mutation session changed');
-  return displayPost(await durableMutation<CommunityPost>('community-create', String(payload.learningLanguage), payload, operationId));
+  return displayPost(await durableMutation<CommunityPost>('community-create', String(payload.learningLanguage), payload, operationId, timeline));
 };
 
 export const updateCommunityPost = async (id: string, formData: FormData, operationId = newMutationId()): Promise<CommunityPost> => {

@@ -1,3 +1,4 @@
+import { dataTimeline } from '../utils/dataTimeline';
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import type { ProgressState } from '../types/progress';
 import { DEFAULT_PROGRESS } from '../types/progress';
@@ -41,7 +42,7 @@ export const ProgressProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const currentDisplay = useCallback(() => {
     const base = loadProgress(userKey, targetLanguage);
-    const actions = getProgressQueueActions().filter(a => a.ownerNamespace === userKey);
+    const actions = getProgressQueueActions().filter(a => a.ownerNamespace === userKey && dataTimeline.provenance(a) === 'CURRENT');
     const epoch = getOwnerProgressEpoch(userKey);
     return overlayPendingProgress(base, actions.filter(a => a.type === 'complete-lesson'
       && a.payload._lessonLanguageBound === true

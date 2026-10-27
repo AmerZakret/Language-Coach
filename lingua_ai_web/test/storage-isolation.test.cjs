@@ -36,6 +36,8 @@ function storageFixture() {
   };
   return { localStorage, ...loadModule('utils/progressStorage.ts', {
     '../types/progress': { DEFAULT_PROGRESS },
+    './dataTimeline': require('./helpers/timelineFixture.cjs').isolatedTimeline,
+    './timelineCache': (() => { const m = { exports: {} }; const source = readFileSync(join(__dirname, '../src/utils/timelineCache.ts'), 'utf8'); vm.runInNewContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, { module: m, exports: m.exports, localStorage, require: () => require('./helpers/timelineFixture.cjs').isolatedTimeline }); return m.exports; })(),
     './targetLanguage': loadModule('utils/targetLanguage.ts'),
   }, { localStorage }) };
 }

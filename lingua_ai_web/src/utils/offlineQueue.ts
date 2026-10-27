@@ -1,3 +1,5 @@
+import { readTimelineCache } from './timelineCache';
+import { dataTimeline, isDataTimelineId, TimelineRecoveryRequired } from './dataTimeline';
 import { CLIENT_PROTOCOL_REVISION } from './clientProtocol';
 import { releaseCompatibility } from './releaseCompatibility';
 import { targetLanguageCode, tryTargetLanguageCode } from './targetLanguage';
@@ -15,19 +17,21 @@ import { isSessionCurrent } from './queueSession';
 import { serializeFlashcardMutation } from './flashcardMutation';
 
 export interface OfflineAction extends RetryState {
+  readonly dataTimelineId?: string;
   readonly clientProtocolRevision?: number;
   readonly id: string;
   readonly type: 'reset-progress' | 'complete-lesson' | 'create-flashcard' | 'update-flashcard' | 'delete-flashcard' | 'review-flashcard';
   readonly ownerNamespace: string;
   readonly payload: any;
   readonly createdAt: string;
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 1 | 2;
 }
 interface QueueState {
-  schemaVersion: 2;
+  schemaVersion: 3;
   ownerNamespace: string;
   actions: OfflineAction[];
   tempIds: Record<string, string>;
+  tempIdTimelines?: Record<string, string>;
   // Dispatched creates stay dependency-backed after restart/ambiguous failure;
   // only creates never dispatched may be edited in place or cancelled.
   startedCreates: string[];
@@ -84,21 +88,25 @@ function quarantineLegacyQueue(): void {
 
 function readState(owner: string): QueueState {
   const raw = localStorage.getItem(ownerStorageKey(owner));
-  if (!raw) return { schemaVersion: 2, ownerNamespace: owner, actions: [], tempIds: {}, startedCreates: [] };
+  if (!raw) return { schemaVersion: 3, ownerNamespace: owner, actions: [], tempIds: {}, startedCreates: [] };
   const parsed = JSON.parse(raw);
   // Phase 4A actions migrate without changing IDs, owners, payloads, or order.
   const state: QueueState = Array.isArray(parsed)
-    ? { schemaVersion: 2, ownerNamespace: owner, actions: parsed, tempIds: {}, startedCreates: [] } : parsed;
-  if (!state || state.schemaVersion !== 2 || state.ownerNamespace !== owner
+    ? { schemaVersion: 3, ownerNamespace: owner, actions: parsed, tempIds: {}, startedCreates: [] } : parsed;
+  if (!state || ![2, 3].includes(state.schemaVersion) || state.ownerNamespace !== owner
     || !state.tempIds || typeof state.tempIds !== 'object' || Array.isArray(state.tempIds)
     || Object.values(state.tempIds).some(id => typeof id !== 'string' || !id || id.startsWith('local_'))
+    || (state.tempIdTimelines !== undefined && (!state.tempIdTimelines || typeof state.tempIdTimelines !== 'object' || Object.values(state.tempIdTimelines).some(id => !isDataTimelineId(id))))
     || !Array.isArray(state.startedCreates) || state.startedCreates.some(id => typeof id !== 'string')
     || !Array.isArray(state.actions) || state.actions.some(action => !action
-      || action.schemaVersion !== 1 || typeof action.ownerNamespace !== 'string' || !action.ownerNamespace
+      || ![1, 2].includes(action.schemaVersion)
+      || (action.dataTimelineId !== undefined && !isDataTimelineId(action.dataTimelineId))
+      || (action.schemaVersion === 2 && !isDataTimelineId(action.dataTimelineId)) || typeof action.ownerNamespace !== 'string' || !action.ownerNamespace
       || (action.clientProtocolRevision !== undefined && (!Number.isInteger(action.clientProtocolRevision) || action.clientProtocolRevision < 0 || action.clientProtocolRevision > 999999))
       || typeof action.createdAt !== 'string' || !Number.isFinite(Date.parse(action.createdAt)))) throw new Error('Offline queue has no supported ownership schema');
+  state.schemaVersion = 3;
   state.failedActions ??= [];
-  if (!Array.isArray(state.failedActions) || state.failedActions.some(a => a.ownerNamespace !== owner)) throw new Error('Failed queue owner mismatch');
+  if (!Array.isArray(state.failedActions) || state.failedActions.some(a => a.ownerNamespace !== owner || (a.dataTimelineId !== undefined && !isDataTimelineId(a.dataTimelineId)))) throw new Error('Failed queue owner mismatch');
   return state;
 }
 
@@ -111,11 +119,11 @@ function writeState(state: QueueState): void {
 }
 const dependent = (type: string) => ['update-flashcard', 'delete-flashcard', 'review-flashcard'].includes(type);
 const cardId = (payload: any): string | undefined => payload.cardId ?? payload.id;
-function resolvePayload(state: QueueState, type: string, payload: any): any {
+function resolvePayload(state: QueueState, type: string, payload: OfflineAction['payload'], timeline?: string): OfflineAction['payload'] {
   const value = { ...payload };
   const id = cardId(value);
   const mapped = id && Object.hasOwn(state.tempIds, id) ? state.tempIds[id] : undefined;
-  if (dependent(type) && mapped) {
+  if (dependent(type) && mapped && timeline !== undefined && state.tempIdTimelines?.[id!] === timeline) {
     if ('cardId' in value) value.cardId = mapped;
     if ('id' in value) value.id = mapped;
   }
@@ -130,11 +138,11 @@ export async function preparePendingProgress(owner: string, legacyOwner?: string
     if (legacyOwner) for (const language of ['English', 'German', 'Spanish', 'French', 'Arabic']) loadProgress(owner, language, legacyOwner);
     let changed = false;
     state.actions = state.actions.map(action => {
-      if (action.ownerNamespace !== owner || action.type !== 'complete-lesson' || action.payload._lessonLanguageBound === true) return action;
+      if (dataTimeline.provenance(action) !== 'CURRENT' || action.ownerNamespace !== owner || action.type !== 'complete-lesson' || action.payload._lessonLanguageBound === true) return action;
       const matches: { language: TargetLanguage; reward?: number }[] = [];
       for (const language of ['English', 'German', 'Spanish', 'French', 'Arabic'] as TargetLanguage[]) {
         let catalog: any[] = [];
-        try { catalog = JSON.parse(localStorage.getItem(`linguaai_lessons_${language}`) || '[]'); } catch { /* Unusable catalog stays untouched. */ }
+        try { catalog = JSON.parse(readTimelineCache(`linguaai_lessons_${language}`) || '[]'); } catch { /* Unusable catalog stays untouched. */ }
         const lesson = Array.isArray(catalog) ? catalog.find(row => row && row.id === action.payload.lessonId &&
           (row.targetLanguage === undefined || tryTargetLanguageCode(row.targetLanguage) === targetLanguageCode(language))) : undefined;
         if (lesson || loadProgress(owner, language).completedLessonIds.includes(action.payload.lessonId)) {
@@ -157,7 +165,7 @@ export const getProgressQueueRevision = (owner: string): string => readState(own
 export const saveServerProgress = async (owner: string, language: TargetLanguage, revision: string, progress: ProgressState): Promise<boolean> => {
   const session = getOfflineQueueSession();
   return mutateOwner(owner, session, () => {
-    if (getProgressQueueRevision(owner) !== revision) return false;
+    if (progress.dataTimelineId !== dataTimeline.snapshot().lastConfirmed || dataTimeline.snapshot().status !== 'CURRENT' || getProgressQueueRevision(owner) !== revision) return false;
     const valid = parseProgress(progress);
     if (!valid || !acknowledgeProgressEpoch(owner, valid.progressEpoch)) return false;
     saveProgress(owner, language, valid); return true;
@@ -168,7 +176,7 @@ export const getProgressQueueActions = (): OfflineAction[] => getOfflineQueue();
 export function epochForNewProgress(owner: string, forReset = false): number {
   const state = readState(owner);
   const epoch = getOwnerProgressEpoch(owner);
-  if (!forReset && state.actions.some(a => a.type === 'reset-progress'))
+  if (!forReset && state.actions.some(a => a.type === 'reset-progress' && dataTimeline.provenance(a) === 'CURRENT'))
     throw new Error('Wait for progress reset acknowledgement before submitting new progress');
   if (epoch === undefined) throw new Error('Connect to acknowledge server progress before submitting progress');
   return epoch;
@@ -184,11 +192,12 @@ export async function reconcileFailedReset(actionId: string): Promise<boolean> {
   const action = state.failedActions?.find(a => a.id === actionId);
   if (!action || action.ownerNamespace !== session.ownerNamespace || action.type !== 'reset-progress'
     || !validProgressEpoch(action.payload.expectedEpoch) || action.payload.expectedEpoch >= Number.MAX_SAFE_INTEGER) return false;
+  dataTimeline.assertDispatch(action);
   const identity = JSON.stringify(action);
   try {
     const result = (await withReplayTimeout(signal => apiClient.get(
       `/progress/${session.userId}/reset-receipts/${encodeURIComponent(action.id)}`,
-      { params: { expectedEpoch: action.payload.expectedEpoch }, offlineQueueSession: session, signal, timeout: REPLAY_TIMEOUT_MS } as AxiosRequestConfig))).data;
+      { dataTimelineId: action.dataTimelineId, params: { expectedEpoch: action.payload.expectedEpoch }, offlineQueueSession: session, signal, timeout: REPLAY_TIMEOUT_MS } as AxiosRequestConfig))).data;
     if (!isOfflineQueueSessionActive(session) || result?.userId !== session.userId || result?.operationId !== action.id
       || result?.expectedEpoch !== action.payload.expectedEpoch || result?.progressEpoch !== action.payload.expectedEpoch + 1) return false;
     return await mutateOwner(session.ownerNamespace, session, latest => {
@@ -213,27 +222,30 @@ export const isPendingBackendCard = (id: string, owner: string): boolean => {
 export const pushToOfflineQueue = async (type: OfflineAction['type'], payload: any, ownerNamespace: string, newProgress = false): Promise<void> => {
   releaseCompatibility.assertMutationAllowed();
   const session = getOfflineQueueSession();
+  const operation = dataTimeline.capture();
   // Preserve intent before waiting: never relabel an old completion to a newer epoch.
   const intent = JSON.parse(JSON.stringify(payload));
   await mutateOwner(ownerNamespace, session, state => {
+    dataTimeline.capture();
+    if (dataTimeline.provenance(operation) !== 'CURRENT') throw new TimelineRecoveryRequired();
     payload = intent;
     if (newProgress && (getOwnerProgressEpoch(ownerNamespace) !== (type === 'reset-progress' ? payload.expectedEpoch : payload.progressEpoch)
-      || (type === 'complete-lesson' && state.actions.some(a => a.type === 'reset-progress')))) throw new Error('Progress changed while waiting; refresh before submitting');
+      || (type === 'complete-lesson' && state.actions.some(a => a.type === 'reset-progress' && dataTimeline.provenance(a) === 'CURRENT')))) throw new Error('Progress changed while waiting; refresh before submitting');
     if (type === 'reset-progress') {
-      state.actions = state.actions.filter(a => a.type !== 'complete-lesson' && a.type !== 'reset-progress');
+      state.actions = state.actions.filter(a => a.dataTimelineId !== operation.dataTimelineId || (a.type !== 'complete-lesson' && a.type !== 'reset-progress'));
       // A durable reset barrier is visible before the cache is cleared. An old
       // in-flight completion is cancelled locally; the barrier runs after HTTP.
     }
     const id = cardId(payload);
-    if (type === 'delete-flashcard' && state.failedActions?.some(a => a.type === 'create-flashcard' && a.payload.tempId === id)) {
-      state.failedActions = state.failedActions.filter(a => !(a.type === 'create-flashcard' && a.payload.tempId === id) && !(dependent(a.type) && cardId(a.payload) === id));
-      state.actions = state.actions.filter(a => !(dependent(a.type) && cardId(a.payload) === id));
+    if (type === 'delete-flashcard' && state.failedActions?.some(a => a.dataTimelineId === operation.dataTimelineId && a.type === 'create-flashcard' && a.payload.tempId === id)) {
+      state.failedActions = state.failedActions.filter(a => a.dataTimelineId !== operation.dataTimelineId || (!(a.type === 'create-flashcard' && a.payload.tempId === id) && !(dependent(a.type) && cardId(a.payload) === id)));
+      state.actions = state.actions.filter(a => a.dataTimelineId !== operation.dataTimelineId || !(dependent(a.type) && cardId(a.payload) === id));
       writeState(state); return;
     }
-    const create = id && state.actions.find(a => a.type === 'create-flashcard' && a.payload.tempId === id);
+    const create = id && state.actions.find(a => a.dataTimelineId === operation.dataTimelineId && a.type === 'create-flashcard' && a.payload.tempId === id);
     if (dependent(type) && create && !state.startedCreates.includes(create.id)) {
       if (type === 'delete-flashcard') {
-        state.actions = state.actions.filter(a => a.id !== create.id && !(dependent(a.type) && cardId(a.payload) === id));
+        state.actions = state.actions.filter(a => a.dataTimelineId !== operation.dataTimelineId || (a.id !== create.id && !(dependent(a.type) && cardId(a.payload) === id)));
         writeState(state); return;
       }
       if (type === 'update-flashcard') {
@@ -241,17 +253,17 @@ export const pushToOfflineQueue = async (type: OfflineAction['type'], payload: a
         // applying the latest fields and replacing those edits with one create.
         const fields: Record<string, unknown> = {};
         for (const action of state.actions) {
-          if (action.type === 'update-flashcard' && cardId(action.payload) === id) Object.assign(fields, action.payload);
+          if (action.dataTimelineId === operation.dataTimelineId && action.type === 'update-flashcard' && cardId(action.payload) === id) Object.assign(fields, action.payload);
         }
         Object.assign(fields, payload);
         delete fields.cardId; delete fields.id; delete fields.tempId; delete fields.userId;
-        state.actions = state.actions.filter(a => !(a.type === 'update-flashcard' && cardId(a.payload) === id))
+        state.actions = state.actions.filter(a => a.dataTimelineId !== operation.dataTimelineId || !(a.type === 'update-flashcard' && cardId(a.payload) === id))
           .map(a => a.id === create.id ? { ...a, payload: { ...a.payload, ...fields } } : a);
         writeState(state); return;
       }
     }
-    state.actions.push({ clientProtocolRevision: CLIENT_PROTOCOL_REVISION, id: `action_${Date.now()}_${Math.random().toString(36).slice(2)}`, type,
-      ownerNamespace, payload: resolvePayload(state, type, payload), createdAt: new Date().toISOString(), schemaVersion: 1 });
+    state.actions.push({ ...operation, clientProtocolRevision: CLIENT_PROTOCOL_REVISION, id: `action_${Date.now()}_${Math.random().toString(36).slice(2)}`, type,
+      ownerNamespace, payload: resolvePayload(state, type, payload, operation.dataTimelineId), createdAt: new Date().toISOString(), schemaVersion: 2 });
     if (type === 'complete-lesson' || type === 'reset-progress') state.progressRevision = state.actions.at(-1)!.id;
     writeState(state);
   });
@@ -283,19 +295,23 @@ export const processOfflineQueue = async (userId: string, waitForActive = false)
   try {
     return await navigator.locks.request(ownerLockName(owner, 'drain'), { mode: 'exclusive', ifAvailable: !waitForActive }, async lock => {
       if (!lock || !isOfflineQueueSessionActive(session)) return false;
+      await dataTimeline.refresh();
+      try { dataTimeline.assertDispatch({ dataTimelineId: dataTimeline.snapshot().lastConfirmed }); } catch { return false; }
       const initial = await mutateOwner(owner, session, state => state.actions.some(a => a.ownerNamespace !== owner) ? null : state.actions);
       if (!initial) return false;
       // New appends remain for the next drain; acknowledgements use the latest
       // stored state, never replace it with this starting snapshot.
       for (const scheduled of initial) {
+        if (dataTimeline.provenance(scheduled) !== 'CURRENT' || scheduled.clientProtocolRevision !== CLIENT_PROTOCOL_REVISION || ['timeline', 'provenance'].includes(scheduled.lastErrorCategory || '')) { hadFailure = true; continue; }
         if (!isOfflineQueueSessionActive(session)) return false;
         const action = await mutateOwner(owner, session, state => {
           const stored = state.actions.find(a => a.id === scheduled.id);
           if (!stored) return null;
+          dataTimeline.assertDispatch(stored);
           if (stored.ownerNamespace !== owner) throw new Error('Queue owner mismatch');
           if (stored.nextAttemptAt && Date.parse(stored.nextAttemptAt) > Date.now()) return undefined;
           const action = { ...stored, attemptCount: (stored.attemptCount || 0) + 1,
-            lastAttemptAt: new Date().toISOString(), payload: resolvePayload(state, stored.type, stored.payload) };
+            lastAttemptAt: new Date().toISOString(), payload: resolvePayload(state, stored.type, stored.payload, stored.dataTimelineId) };
           // Preserve the wire shape of previously dispatched legacy updates.
           if (action.type === 'update-flashcard' && !stored.attemptCount) {
             action.payload = { ...action.payload, _mutationContract: 2 };
@@ -310,7 +326,8 @@ export const processOfflineQueue = async (userId: string, waitForActive = false)
         });
         if (action === null) continue;
         if (!action || !isOfflineQueueSessionActive(session)) return false;
-        const config: AxiosRequestConfig & { offlineQueueSession: QueueSession; clientProtocolRevision: number | null } = {
+        const config: AxiosRequestConfig & { offlineQueueSession: QueueSession; clientProtocolRevision: number | null; dataTimelineId?: string } = {
+          dataTimelineId: action.dataTimelineId,
           clientProtocolRevision: action.clientProtocolRevision ?? null,
           offlineQueueSession: session,
           timeout: REPLAY_TIMEOUT_MS,
@@ -360,6 +377,14 @@ export const processOfflineQueue = async (userId: string, waitForActive = false)
         } catch (error) {
           if (!isOfflineQueueSessionActive(session)) return false;
           const failure = classifySyncFailure(error);
+          if (['timeline', 'provenance'].includes(failure.category)) {
+            await mutateOwner(owner, session, latest => {
+              latest.actions = latest.actions.map(current => current.id === action.id ? { ...current,
+                lastErrorCategory: failure.category, lastErrorCode: failure.code, lastErrorStatus: failure.status } : current);
+              writeState(latest);
+            });
+            return false;
+          }
           if (failure.category === 'compatibility') { releaseCompatibility.reject(); return false; }
           const retained = await mutateOwner(owner, session, latest => {
             const current = latest.actions.find(a => a.id === action.id);
@@ -385,7 +410,9 @@ export const processOfflineQueue = async (userId: string, waitForActive = false)
           continue; // Unrelated later work can proceed after durable quarantine.
         }
         if (!isOfflineQueueSessionActive(session)) return false;
+        dataTimeline.assertDispatch(action);
         await mutateOwner(owner, session, latest => {
+          dataTimeline.assertDispatch(action);
           if (latest.actions.some(a => a.id === action.id) && action.type === 'complete-lesson') {
             acknowledgeCompletion(owner, action.payload, completion);
             latest.progressRevision = `ack_${action.id}`;
@@ -395,9 +422,13 @@ export const processOfflineQueue = async (userId: string, waitForActive = false)
             if (action.payload.legacyOwnerNamespace) resetOwnerProgress(action.payload.legacyOwnerNamespace);
             latest.progressRevision = `ack_${action.id}`;
           }
-          if (action.type === 'create-flashcard' && action.payload.tempId) latest.tempIds[action.payload.tempId] = serverId!;
+          if (action.type === 'create-flashcard' && action.payload.tempId) {
+            latest.tempIds[action.payload.tempId] = serverId!;
+            latest.tempIdTimelines ??= {};
+            latest.tempIdTimelines[action.payload.tempId] = action.dataTimelineId!;
+          }
           latest.actions = latest.actions.filter(a => a.id !== action.id)
-            .map(a => ({ ...a, payload: resolvePayload(latest, a.type, a.payload) }));
+            .map(a => ({ ...a, payload: resolvePayload(latest, a.type, a.payload, a.dataTimelineId) }));
           latest.startedCreates = latest.startedCreates.filter(id => id !== action.id);
           // Mapping, dependent rewrites, and acknowledgement commit in one write.
           writeState(latest);
@@ -410,3 +441,15 @@ export const processOfflineQueue = async (userId: string, waitForActive = false)
     throw error;
   } finally { drainingOwners.delete(owner); drainWaiters.delete(owner); release(); }
 };
+
+// Selected evidence only; callers obtain explicit user confirmation in the recovery notice.
+export async function discardOfflineAction(id: string): Promise<void> {
+  const session = getOfflineQueueSession();
+  await mutateOwner(session.ownerNamespace, session, state => {
+    const selected = [...state.actions, ...(state.failedActions || [])].find(action => action.id === id);
+    if (!selected || (dataTimeline.provenance(selected) === 'CURRENT' && !['timeline', 'provenance'].includes(selected.lastErrorCategory || ''))) throw new TimelineRecoveryRequired();
+    state.actions = state.actions.filter(action => action.id !== id);
+    state.failedActions = state.failedActions?.filter(action => action.id !== id);
+    writeState(state);
+  });
+}

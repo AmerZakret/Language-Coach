@@ -97,7 +97,7 @@ test('9E actual Vite configuration disables maps and derives safe release metada
   let emitted;
   config.plugins.find(plugin => plugin.name === 'release-artifact-metadata').generateBundle.call({ emitFile: value => { emitted = JSON.parse(value.source); } });
   assert.equal(emitted.appVersion, require('../lingua_ai_web/package.json').version);
-  assert.equal(emitted.buildId, 'ci-artifact'); assert.equal(emitted.protocolRevision, 1);
+  assert.equal(emitted.buildId, 'ci-artifact'); assert.equal(emitted.protocolRevision, 2);
   assert.deepEqual(Object.keys(emitted).sort(), ['apiEndpoint', 'appVersion', 'artifactType', 'buildId', 'component', 'protocolRevision']);
 });
 test('9E assembly is explicit, refuses overwrite, and pronunciation package derivation leaves source unchanged', () => {

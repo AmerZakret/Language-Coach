@@ -8,7 +8,7 @@ const deferred = () => { let resolve, reject; const promise = new Promise((a,b) 
 const A='507f1f77bcf86cd799439011', B='507f1f77bcf86cd799439012';
 const user = (id=A, guest=false) => ({id,name:id,email:guest ? `${id}@guest.lingua.local` : `${id}@example.com`,isGuest:guest,targetLanguage:'en'});
 const ownerKey = owner => `linguaai_offline_queue_${encodeURIComponent(owner)}`;
-function origin() {
+function origin(options = {}) {
   const values=new Map(), tabs=[], held=new Map(), waiting=new Map(), writes=[];
   function next(name) {
     if(held.has(name)) return;
@@ -67,7 +67,7 @@ function origin() {
       let pending=Promise.resolve({...config,method,url,data,headers:{...config.headers}});
       if(tab.beforeDispatch) pending=pending.then(async req=>{await tab.beforeDispatch();return req;});
       for(const interceptor of requestInterceptors)pending=pending.then(interceptor);
-      pending=pending.then(req=>{alive();tab.requests.push(req);return Promise.resolve(tab.dispatch(req)).catch(error=>{error.config??=req;throw error;});});
+      pending=pending.then(req=>{alive();tab.requests.push(req);return Promise.resolve(tab.dispatch(req)).then(response=>({...response,config:req})).catch(error=>{error.config??=req;throw error;});});
       for(const {success,failure} of responseInterceptors)pending=pending.then(success,failure);
       return pending;
     }
@@ -81,7 +81,7 @@ function origin() {
       const code=readFileSync(full,'utf8').replaceAll('import.meta.env.VITE_API_URL','undefined');
       const compiled=ts.transpileModule(code,{fileName:full,compilerOptions:{module:ts.ModuleKind.CommonJS,jsx:ts.JsxEmit.React,esModuleInterop:true,target:ts.ScriptTarget.ES2022}}).outputText;
       vm.runInNewContext(compiled,{module,exports:module.exports,crypto:require('node:crypto').webcrypto,FormData,Blob,TextEncoder,btoa,atob,localStorage:tab.localStorage,navigator:tab.navigator,window:tab.window,
-        AbortController,Date:class extends Date { static now() { return shared.now ?? Date.now(); } },console:{error(){},log(){}},fetch:()=>tab.fetchGuest(),
+        AbortController,Date:class extends Date { static now() { return shared.now ?? Date.now(); } },console:{error(){},log(){}},fetch:(url,config)=>String(url).endsWith('/compatibility') ? tab.fetchCompatibility(url,config) : tab.fetchGuest(),
         setTimeout:(fn,ms)=>{const timer=setTimeout(()=>{tab.timers.delete(timer);if(!tab.closed)fn();},ms);tab.timers.add(timer);return timer;},
         clearTimeout:timer=>{clearTimeout(timer);tab.timers.delete(timer);},
         require:path=>{
@@ -95,6 +95,9 @@ function origin() {
     };
     tab.fetchMe=async()=>{throw new Error('Offline profile');};tab.fetchGuest=async()=>{throw new Error('Offline guest');};
     tab.authStorage=tab.load('utils/authSessionStorage.ts');tab.session=tab.load('utils/queueSession.ts');
+    tab.fetchCompatibility = async () => ({ok:true,json:async()=>require('./timelineFixture.cjs').metadata});
+    tab.timeline = tab.load('utils/dataTimeline.ts').dataTimeline;
+    if(options.confirmed !== false) tab.timeline.confirm(require('./timelineFixture.cjs').metadata);
     tab.queue=tab.load('utils/offlineQueue.ts');tab.client=tab.load('api/apiClient.ts').default;
     tab.render=(commit=true)=>{alive();cursor=0;tab.dirty=false;const tree=tab.load('context/AuthContext.tsx').AuthProvider({children:'old-session draft'});if(!commit){layouts.splice(0);return;}tab.tree=tree;tab.auth=tab.tree.props.value;for(const layout of layouts.splice(0))layout();for(const effect of effects.splice(0))effect();return tab.auth;};
     tab.mount=async()=>{tab.render();await shared.flush();};

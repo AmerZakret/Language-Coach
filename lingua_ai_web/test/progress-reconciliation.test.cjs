@@ -22,6 +22,7 @@ function harness() {
       module: ts.ModuleKind.CommonJS, esModuleInterop: true,
     } }).outputText, { module, exports: module.exports, localStorage, console,
       require: name => {
+        if (name.endsWith('/dataTimeline')) return require('./helpers/timelineFixture.cjs').isolatedTimeline;
         if (name.endsWith('/apiClient')) return { __esModule: true, default: { get: (...args) => h.get(...args) } };
         if (name.endsWith('/queueSession')) return { getSessionRequestConfig: () => ({ sessionSnapshot: { userId: A } }) };
         return load(resolve(dirname(file), name) + '.ts');

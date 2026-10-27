@@ -1,3 +1,4 @@
+import { dataTimeline, isDataTimelineId, TimelineRecoveryRequired } from './dataTimeline';
 import { withBrowserLock, withOwnerStorage, ownerLockName } from './browserCoordination';
 import { getSessionRequestConfig, isOfflineQueueSessionActive, isSessionCurrent } from './queueSession';
 import type { QueueSession } from './queueSession';
@@ -7,7 +8,8 @@ import { classifySyncFailure, retryDelay } from './syncRetryPolicy';
 
 export type IntentKind = 'community-create' | 'ai-send' | 'ai-clear';
 export interface OnlineIntent {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
+  readonly dataTimelineId?: string;
   id: string;
   ownerNamespace: string;
   protocol: number;
@@ -20,7 +22,7 @@ export interface OnlineIntent {
   category?: string;
   result?: unknown;
 }
-interface Journal { schemaVersion: 1; ownerNamespace: string; intents: OnlineIntent[] }
+interface Journal { schemaVersion: 2; ownerNamespace: string; intents: OnlineIntent[] }
 export const INTENT_CAPACITY = 8;
 export const INTENT_BYTE_LIMIT = 8 * 1024 * 1024;
 export class IntentRecoveryRequired extends Error {
@@ -59,7 +61,8 @@ function assertSession(session: QueueSession): void {
 }
 function validate(intent: OnlineIntent, owner: string): boolean {
   const payload = intent?.payload;
-  if (!intent || intent.schemaVersion !== 1 || intent.ownerNamespace !== owner
+  if (!intent || ![1, 2].includes(intent.schemaVersion) || (intent.dataTimelineId !== undefined && !isDataTimelineId(intent.dataTimelineId))
+    || (intent.schemaVersion === 2 && !isDataTimelineId(intent.dataTimelineId)) || intent.ownerNamespace !== owner
     || !/^[A-Za-z0-9._:-]{1,128}$/.test(intent.id) || !Number.isInteger(intent.protocol)
     || intent.protocol < 0 || intent.protocol > 999999 || !['en', 'de', 'es', 'fr', 'ar'].includes(intent.language)
     || !['pending', 'acknowledged', 'failed'].includes(intent.state) || !Number.isInteger(intent.attempts)
@@ -81,13 +84,14 @@ function validate(intent: OnlineIntent, owner: string): boolean {
 }
 function read(owner: string): Journal {
   const raw = localStorage.getItem(key(owner));
-  if (raw === null) return { schemaVersion: 1, ownerNamespace: owner, intents: [] };
+  if (raw === null) return { schemaVersion: 2, ownerNamespace: owner, intents: [] };
   try {
     if (new TextEncoder().encode(raw).length > INTENT_BYTE_LIMIT) throw new Error();
     const journal: Journal = JSON.parse(raw);
-    if (journal.schemaVersion !== 1 || journal.ownerNamespace !== owner || !Array.isArray(journal.intents)
+    if (![1, 2].includes(journal.schemaVersion) || journal.ownerNamespace !== owner || !Array.isArray(journal.intents)
       || journal.intents.length > INTENT_CAPACITY || journal.intents.some(intent => !validate(intent, owner))
       || new Set(journal.intents.map(intent => intent.id)).size !== journal.intents.length) throw new Error();
+    journal.schemaVersion = 2;
     return journal;
   } catch { throw new Error('Pending action storage needs recovery. Existing evidence is preserved; no request was sent.'); }
 }
@@ -101,23 +105,25 @@ export async function listOnlineIntents(): Promise<OnlineIntent[]> {
   const session = getSessionRequestConfig().sessionSnapshot;
   return withOwnerStorage(session.ownerNamespace, () => { assertSession(session); return read(session.ownerNamespace).intents; });
 }
-export async function prepareOnlineIntent(kind: IntentKind, language: string, payload: Record<string, unknown>, operationId?: string): Promise<OnlineIntent> {
+export async function prepareOnlineIntent(kind: IntentKind, language: string, payload: Record<string, unknown>, operationId?: string, timeline?: { readonly dataTimelineId: string }): Promise<OnlineIntent> {
   const session = getSessionRequestConfig().sessionSnapshot;
+  const operation = timeline ?? dataTimeline.capture();
   const frozen = JSON.parse(JSON.stringify(payload)) as Record<string, unknown>;
   releaseCompatibility.assertMutationAllowed();
   return withOwnerStorage(session.ownerNamespace, () => {
     assertSession(session);
     const journal = read(session.ownerNamespace);
-    const previous = journal.intents.find(intent => intent.kind === kind && intent.language === language);
+    if (dataTimeline.provenance(operation) !== 'CURRENT') throw new TimelineRecoveryRequired();
+    const previous = journal.intents.find(intent => intent.kind === kind && intent.language === language && intent.dataTimelineId === operation.dataTimelineId);
     // A different draft is never permission to abandon an ambiguous operation.
     if (previous) {
       if (JSON.stringify(previous.payload) !== JSON.stringify(frozen) || (operationId && operationId !== previous.id)) throw new IntentRecoveryRequired();
       return previous;
     }
-    if (kind.startsWith('ai-') && journal.intents.some(intent => intent.kind.startsWith('ai-') && intent.language === language)) throw new IntentRecoveryRequired();
+    if (kind.startsWith('ai-') && journal.intents.some(intent => intent.kind.startsWith('ai-') && intent.language === language && intent.dataTimelineId === operation.dataTimelineId)) throw new IntentRecoveryRequired();
     if (operationId && journal.intents.some(intent => intent.id === operationId)) throw new IntentRecoveryRequired();
     if (journal.intents.length >= INTENT_CAPACITY) throw new IntentRecoveryRequired();
-    const intent: OnlineIntent = { schemaVersion: 1, id: operationId ?? crypto.randomUUID(), ownerNamespace: session.ownerNamespace,
+    const intent: OnlineIntent = { schemaVersion: 2, ...operation, id: operationId ?? crypto.randomUUID(), ownerNamespace: session.ownerNamespace,
       protocol: CLIENT_PROTOCOL_REVISION, kind, language, payload: frozen, state: 'pending', attempts: 0, nextAttemptAt: 0 };
     if (!validate(intent, session.ownerNamespace)) throw new Error('This action cannot be saved safely. No request was sent.');
     journal.intents.push(intent);
@@ -134,15 +140,22 @@ export async function runOnlineIntent<T>(id: string, dispatch: (intent: OnlineIn
   // after another tab has acknowledged and removed the operation.
   return withBrowserLock(ownerLockName(owner, 'drain'), async () => {
     assertSession(session);
+    await dataTimeline.refresh();
     let intent = await withOwnerStorage(owner, () => read(owner).intents.find(item => item.id === id));
-    if (!intent || intent.state === 'failed' || intent.nextAttemptAt > Date.now()) throw new IntentRecoveryRequired();
+    if (!intent || ['timeline', 'provenance'].includes(intent.category || '') || intent.state === 'failed' || intent.nextAttemptAt > Date.now()) throw new IntentRecoveryRequired();
+    if (intent.protocol !== CLIENT_PROTOCOL_REVISION) throw new TimelineRecoveryRequired();
+    dataTimeline.assertDispatch(intent);
     releaseCompatibility.assertMutationAllowed();
-    const change = async (work: (current: OnlineIntent) => void) => withOwnerStorage(owner, () => {
+    const change = async (work: (current: OnlineIntent) => void, authoritative = false) => withOwnerStorage(owner, () => {
       assertSession(session);
       const journal = read(owner);
       const current = journal.intents.find(item => item.id === id);
       if (!current) throw new IntentRecoveryRequired();
-      work(current); write(journal); intent = current;
+      if (authoritative) dataTimeline.assertDispatch(current);
+      const provenance = current.dataTimelineId;
+      work(current);
+      if (current.dataTimelineId !== provenance) throw new TimelineRecoveryRequired();
+      write(journal); intent = current;
     });
     let result: T;
     if (intent.state === 'acknowledged') result = intent.result as T;
@@ -151,8 +164,9 @@ export async function runOnlineIntent<T>(id: string, dispatch: (intent: OnlineIn
       try {
         result = await dispatch(intent, session);
         assertSession(session);
+        dataTimeline.assertDispatch(intent);
         // Retain both identity and result if application acknowledgement fails.
-        await change(current => { current.state = 'acknowledged'; current.result = result; });
+        await change(current => { current.state = 'acknowledged'; current.result = result; }, true);
       } catch (error) {
         if (isSessionCurrent(session)) {
           const failure = classifySyncFailure(error);
@@ -168,15 +182,31 @@ export async function runOnlineIntent<T>(id: string, dispatch: (intent: OnlineIn
       }
     }
     assertSession(session);
+    dataTimeline.assertDispatch(intent);
     await accept(result, intent);
     await withOwnerStorage(owner, () => {
       assertSession(session);
       const journal = read(owner);
+      const acknowledged = journal.intents.find(item => item.id === id);
+      if (!acknowledged) throw new IntentRecoveryRequired();
+      dataTimeline.assertDispatch(acknowledged);
       journal.intents = journal.intents.filter(item => item.id !== id || item.state !== 'acknowledged');
       write(journal);
     });
     console.debug?.('client_intent_reconciled');
     for (const listener of acceptedListeners.get(owner) ?? []) listener();
     return result;
+  });
+}
+
+export async function discardOnlineIntent(id: string): Promise<void> {
+  const session = getSessionRequestConfig().sessionSnapshot;
+  await withOwnerStorage(session.ownerNamespace, () => {
+    assertSession(session);
+    const journal = read(session.ownerNamespace);
+    const selected = journal.intents.find(intent => intent.id === id);
+    if (!selected || (dataTimeline.provenance(selected) === 'CURRENT' && !['timeline', 'provenance'].includes(selected.category || ''))) throw new IntentRecoveryRequired();
+    journal.intents = journal.intents.filter(intent => intent.id !== id);
+    write(journal);
   });
 }

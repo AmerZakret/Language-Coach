@@ -18,6 +18,7 @@ function harness() {
       compilerOptions: { module: ts.ModuleKind.CommonJS, esModuleInterop: true },
     }).outputText, { module, exports: module.exports, crypto: require('node:crypto').webcrypto, FormData, Blob,
       require: name => {
+        if (name.endsWith('/dataTimeline')) return require('./helpers/timelineFixture.cjs').isolatedTimeline;
         if (name.endsWith('/onlineIntents')) return {};
         if (name.endsWith('/intentRecovery')) return require('./helpers/isolatedIntentBoundary.cjs').isolatedIntentBoundary(client);
         if (name.endsWith('/apiClient')) return { __esModule: true, default: client };

@@ -280,3 +280,26 @@ and clientsTimelineAware=false for this stage. Only client tests recognize that
 staging state; client runtime/queue/cache behavior is unchanged. Four/six concurrent
 transactions exercise real shared-record contention and bounded retries, not load
 characterization. No production Mongo/provider/network action is part of testing.
+
+
+## Phase 10C web timeline checks
+
+Run web npm test (including test/timeline.test.cjs) and an explicit production build
+with VITE_API_URL=https://api.example.invalid. Run node scripts/quality-check.cjs
+for the backend build/unit/e2e, web build/lint/artifacts, Flutter test/analyze,
+pronunciation tests and safe synthetic validate:prod/preflight gates. No production
+connection or provider call is involved.
+
+Timeline tests execute the real discovery/state/HTTP/queue/intent boundaries with
+isolated browser contexts, shared storage and Web Locks. They cover canonical and
+missing/malformed discovery, cached offline creation, unknown offline rejection,
+first-confirmation legacy preservation, stored protocol-2 headers, A-to-B progress
+same-epoch/reset and flashcard replay blocking, Community/AI intent retention,
+AI clear local discard and new B identity, stale responses, cache rejection,
+cross-tab advertisement and lock rereads, and 409/428/426/503/401 classification.
+The mutation inventory compares public durable routes to central behavior. Existing
+Phase 7/9 durability suites run with explicitly confirmed synthetic timeline fixtures;
+legacy migration and unknown discovery tests never receive that fixture shortcut.
+
+Release checks assert server/web protocol 2, Flutter protocol 1 and staged
+enforcement. They do not assert full production restore safety before 10D/10E.

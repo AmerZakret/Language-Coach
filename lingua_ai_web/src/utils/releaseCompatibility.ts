@@ -1,3 +1,4 @@
+import { dataTimeline } from './dataTimeline';
 import { CLIENT_PROTOCOL_REVISION, WEB_BUILD_ID } from './clientProtocol';
 interface CompatibilityMetadata {
   currentProtocolRevision: number;
@@ -76,8 +77,7 @@ export class ReleaseCompatibility {
       const timeout = setTimeout(() => controller.abort(), 5000);
       try {
         await Promise.allSettled([
-          fetch(`${this.base}/compatibility`, { cache: 'no-store', credentials: 'omit', signal: controller.signal })
-            .then(async response => { if (response.ok) this.observeMetadata(await response.json()); }),
+          dataTimeline.refresh().then(metadata => this.observeMetadata(metadata)),
           fetch('/release.json', { cache: 'no-store', credentials: 'omit', signal: controller.signal })
             .then(async response => { if (response.ok) this.observeRelease(await response.json()); }),
         ]);
@@ -89,7 +89,7 @@ export class ReleaseCompatibility {
     if (this.started) return;
     this.started = true; this.readAdvertisement();
     window.addEventListener('storage', this.storage); window.addEventListener('focus', this.refresh);
-    void this.refresh(); this.timer = setInterval(() => { void this.refresh(); }, 30000);
+    void this.refresh(); this.timer = setInterval(() => { void this.refresh(); }, 300000);
   }
   stop() {
     if (!this.started) return;

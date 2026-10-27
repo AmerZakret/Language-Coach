@@ -110,7 +110,7 @@ test('9C real React: new release/update-required notice renders without clearing
   try {
     await act(async () => root.render(React.createElement(module.exports.ReleaseCompatibilityNotice)));
     assert.equal(container.textContent, ''); assert.equal(starts, 1);
-    await act(async () => store.observeRelease({ protocolRevision: 1, buildId: 'ci-new' }));
+    await act(async () => store.observeRelease({ protocolRevision: 2, buildId: 'ci-new' }));
     assert.match(container.textContent, /different deployed build/);
     assert.equal(container.querySelector('button').textContent, 'Reload application');
     await act(async () => store.reject());

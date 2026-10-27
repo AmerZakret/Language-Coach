@@ -58,7 +58,7 @@ function repository(root = ROOT) {
       && read('lingua_ai/lib/services/online_intent_service.dart').includes(`'${kind}'`), 'Durable intent type drift.');
   }
   return { toolchains: tools, flutter: { ...ids, version: pub.match(/^version:\s*(.+)$/m)?.[1],
-    classification: policy.flutter.identityClassification, storeReleaseReady: !placeholder }, protocolRevision: protocol, currentClientProtocolRevision: 1, clientsTimelineAware: false };
+    classification: policy.flutter.identityClassification, storeReleaseReady: !placeholder }, protocolRevision: protocol, webProtocolRevision: 2, flutterProtocolRevision: 1, clientsTimelineAware: false };
 }
 function main(args = process.argv.slice(2)) {
   const [component = 'all', directory] = args;

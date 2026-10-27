@@ -1,3 +1,4 @@
+import { dataTimeline } from './dataTimeline';
 import type { User } from '../types/auth';
 import { coordinationAvailable, withBrowserLock } from './browserCoordination';
 
@@ -10,6 +11,7 @@ export interface StoredSession {
   token: string | null;
   isGuest: boolean;
   pendingVerification?: boolean;
+  profileDataTimelineId?: string;
 }
 export const localGuestUser: User = { id: 'guest', name: 'Guest User', email: 'guest@lingua.ai', isGuest: true };
 const newRevision = () => `${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -63,7 +65,9 @@ function write(value: StoredSession) {
 // Explicit user login/logout is still an atomic replacement without Web Locks.
 // Conditional asynchronous writes require Web Locks; there is no unsafe CAS fallback.
 export async function replaceStoredSession(user: User | null, token: string | null, expectedRevision?: string, forceRevision = false): Promise<boolean> {
+  const timeline = dataTimeline.context();
   const work = () => {
+    if (user && token && !dataTimeline.isContext(timeline)) return false;
     const current = readStoredSession();
     if (expectedRevision !== undefined && current.revision !== expectedRevision) return false;
     const isGuest = user?.isGuest === true;
@@ -71,7 +75,7 @@ export async function replaceStoredSession(user: User | null, token: string | nu
     if (token && (!user || !/^[a-f\d]{24}$/i.test(user.id) || (isGuest && !isBackendGuestUser(user)))) throw new Error('Invalid session identity');
     const sameIdentity = !current.pendingVerification && current.user?.id === user?.id
       && current.token === (token || null) && current.isGuest === isGuest;
-    write({ schemaVersion: 1, revision: sameIdentity && !forceRevision ? current.revision : newRevision(), user, token: token?.trim() ? token : null, isGuest });
+    write({ profileDataTimelineId: timeline.dataTimelineId, schemaVersion: 1, revision: sameIdentity && !forceRevision ? current.revision : newRevision(), user, token: token?.trim() ? token : null, isGuest });
     return true;
   };
   if (coordinationAvailable()) return withBrowserLock('linguaai:auth:session', work);
