@@ -17,7 +17,7 @@ void main() {
   final auth = AuthService();
   late SharedPreferences prefs;
   Future<void> login(String id) async {
-    auth.setBackendSession(
+    await auth.setBackendSession(
         id: id, name: id, email: '$id@example.test', token: 'token-$id');
     for (var i = 0; i < 20; i++) {
       await Future<void>.value();

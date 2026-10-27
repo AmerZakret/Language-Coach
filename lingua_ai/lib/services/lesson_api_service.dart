@@ -1,3 +1,4 @@
+import 'data_timeline.dart';
 import '../core/localization/target_language.dart';
 import 'dart:convert';
 import 'backend_http.dart' as http;
@@ -18,6 +19,8 @@ class LessonNotFoundException implements Exception {
 class LessonApiService {
   Future<List<Lesson>> fetchLessons(String targetLanguage) async {
     final code = TargetLanguage.code(targetLanguage);
+    final revision = DataTimeline().revision;
+    final cacheKey = DataTimeline().cacheKey('lessons_cache_$targetLanguage');
     try {
       if (ConnectivityService().isOffline) {
         throw Exception('Device is offline');
@@ -31,16 +34,20 @@ class LessonApiService {
         
         // Cache lessons in SharedPreferences
         final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('lessons_cache_$targetLanguage', response.body);
+        if (revision != DataTimeline().revision) throw const TimelineRecoveryRequired();
+        await prefs.setString(cacheKey, response.body);
+        if (revision != DataTimeline().revision) throw const TimelineRecoveryRequired();
 
         return data.map((json) => Lesson.fromJson(json)).toList();
       } else {
         throw Exception('Failed to load lessons from server');
       }
+    } on TimelineRecoveryRequired {
+      rethrow;
     } catch (e) {
       // Fallback to cached lessons
       final prefs = await SharedPreferences.getInstance();
-      final cachedJson = prefs.getString('lessons_cache_$targetLanguage');
+      final cachedJson = prefs.getString(cacheKey);
       if (cachedJson != null) {
         try {
           final List<dynamic> data = json.decode(cachedJson);
@@ -73,12 +80,14 @@ class LessonApiService {
       rethrow;
     } on FormatException {
       rethrow;
+    } on TimelineRecoveryRequired {
+      rethrow;
     } catch (e) {
       // Fallback: search in cached lessons first
       try {
         final prefs = await SharedPreferences.getInstance();
         for (final key in prefs.getKeys()) {
-          if (key.startsWith('lessons_cache_')) {
+          if (key.startsWith('lessons_cache_') && key.endsWith('_timeline_${DataTimeline().lastConfirmedDataTimelineId}')) {
             final cachedJson = prefs.getString(key);
             if (cachedJson != null) {
               final List<dynamic> data = json.decode(cachedJson);

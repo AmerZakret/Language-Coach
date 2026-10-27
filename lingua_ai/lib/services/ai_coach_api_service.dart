@@ -37,7 +37,7 @@ class AiCoachApiService {
     final session = AuthService().captureSession();
     try { await recoverOnlineIntents('ai', language: TargetLanguage.code(targetLanguage)); }
     catch (_) { onRecoveryIssue?.call(); }
-    if (!session.isCurrent) throw StateError('Chat session changed');
+    if (!session.isDataCurrent) throw StateError('Chat session changed');
     try {
       final headers = <String, String>{
         'Content-Type': 'application/json',

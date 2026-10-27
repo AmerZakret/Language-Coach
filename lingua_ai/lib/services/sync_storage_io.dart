@@ -16,11 +16,20 @@ SyncStorageBackend createIntentStorage() => FileSyncStorage(() async {
           '${Platform.pathSeparator}online-intents');
     });
 
+SyncStorageBackend createDirectStorage() => FileSyncStorage(() async {
+      final support = await getApplicationSupportDirectory();
+      return Directory('${support.path}${Platform.pathSeparator}sync-v1'
+          '${Platform.pathSeparator}direct-evidence');
+    });
+
 class FileSyncStorage implements SyncStorageBackend {
   final Future<Directory> Function() directory;
   // Fault injection at the flushed-but-not-promoted boundary, used only by tests.
   final Future<void> Function()? beforePromote;
-  FileSyncStorage(this.directory, {this.beforePromote});
+  // Test injection uses the real file handle; normal writes never bypass flush.
+  final Future<void> Function(RandomAccessFile, List<int>)? writeBytes;
+  final Future<void> Function()? beforeRename;
+  FileSyncStorage(this.directory, {this.beforePromote, this.writeBytes, this.beforeRename});
   @override
   bool get durable => true;
   static final Map<String, Future<void>> _tails = {};
@@ -29,7 +38,7 @@ class FileSyncStorage implements SyncStorageBackend {
   Future<T> _serialized<T>(
       String owner, Future<T> Function(Directory) work) async {
     if (!RegExp(
-            r'^(registered_[a-f\d]{24}|guest_[a-f\d]{24}|local_guest|legacy_unowned)$',
+            r'^(registered_[a-f\d]{24}|guest_[a-f\d]{24}|local_guest|legacy_unowned|timeline_global)$',
             caseSensitive: false)
         .hasMatch(owner)) {
       throw StateError('Unsupported durable sync owner');
@@ -131,12 +140,36 @@ class FileSyncStorage implements SyncStorageBackend {
             '${root.path}${Platform.pathSeparator}$owner.${DateTime.now().microsecondsSinceEpoch}.${_sequence++}.pending');
         final handle = await pending.open(mode: FileMode.writeOnly);
         try {
-          await handle.writeFrom(bytes);
+          if (writeBytes == null) {
+            await handle.writeFrom(bytes);
+          } else {
+            await writeBytes!(handle, bytes);
+          }
           await handle.flush();
         } finally {
           await handle.close();
         }
         await beforePromote?.call();
+        // A successful flush is not a readback verification. Validate the exact
+        // expected body before replacing even the older slot. Failed pending
+        // files remain diagnostic evidence and are ignored by _records.
+        try {
+          final verified = jsonDecode(await pending.readAsString());
+          if (verified is! Map<String, dynamic>) { throw const FormatException('Invalid pending envelope'); }
+          final verifiedBody = verified['body'];
+          final expectedChecksum = sha256.convert(utf8.encode(jsonEncode(body))).toString();
+          if (verifiedBody is! Map<String, dynamic> ||
+              verifiedBody['schemaVersion'] != 1 ||
+              verifiedBody['ownerNamespace'] != owner ||
+              verifiedBody['generation'] != generation ||
+              verifiedBody['payload'] is! Map<String, dynamic> ||
+              verifiedBody['payload']['ownerNamespace'] != owner ||
+              verified['sha256'] != expectedChecksum ||
+              sha256.convert(utf8.encode(jsonEncode(verifiedBody))).toString() != expectedChecksum) {
+            throw const FormatException('Pending checkpoint verification failed');
+          }
+        } on FormatException { throw SyncStorageCorruption(); }
+        await beforeRename?.call();
         // Replace only the older slot. The newest known-good slot is untouched.
         // Flush covers file contents; portable Dart provides no directory fsync.
         await pending.rename(_slot(root, owner, generation % 2).path);

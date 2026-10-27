@@ -157,7 +157,7 @@ v2 conservatively refuses it. The server validates timeline before receipt repla
 epoch/revision checks, AI barrier/provider work, file allocation and domain effects.
 
 
-## Phase 10C: web v2, Flutter v1 (staged)
+## Phase 10C: web v2, Flutter v1 (historical staged checkpoint)
 
 Web reports protocol 2. Server supports 1/2; Flutter remains 1, with no Flutter
 runtime or durable-store migration in 10C. Release checks report web.timelineAware
@@ -186,3 +186,12 @@ re-entry is a fresh logical operation with a new ID and current epoch/revision.
 Flutter 10D and the full isolated restore drill in 10E remain outstanding. Hard
 external isolation, credential rotation/revocation and release authorization remain
 separate mandatory operator requirements.
+
+## Phase 10D: all clients at protocol 2, enforcement still staged
+
+Flutter now discovers server timeline authority and persists immutable timeline
+provenance in its existing checksummed two-slot storage. Backend, web and Flutter
+are revision 2. `ALLOW_LEGACY` and minimum mutation revision 1 remain unchanged;
+this does not globally enable `ENFORCE_MUTATIONS`. Prior phase sections above
+describe historical checkpoints. See [Flutter storage and writer/cache inventory](PHASE_10D_FLUTTER_TIMELINE_STORAGE.md)
+for migration, restore handling and the online-only evidence classification.

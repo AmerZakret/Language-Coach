@@ -303,3 +303,14 @@ legacy migration and unknown discovery tests never receive that fixture shortcut
 
 Release checks assert server/web protocol 2, Flutter protocol 1 and staged
 enforcement. They do not assert full production restore safety before 10D/10E.
+
+## Phase 10D Flutter timeline checks
+
+Run `node scripts/quality-check.cjs flutter` for locked dependency resolution, the
+complete Flutter suite and analysis. Native restore scenarios live in
+`lingua_ai/test/data_timeline_test.dart`; AI widget scenarios include timeline
+changes and stale clear confirmations. Release checks now assert backend, web
+and Flutter revision 2, with `ALLOW_LEGACY` minimum 1 and no global enforcement
+change. Earlier phase assertions describe historical checkpoints.
+
+See [the Flutter implementation inventory](PHASE_10D_FLUTTER_TIMELINE_STORAGE.md).

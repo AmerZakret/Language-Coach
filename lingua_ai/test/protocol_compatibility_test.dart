@@ -1,3 +1,4 @@
+import 'package:lingua_ai/services/data_timeline.dart';
 import 'package:flutter/material.dart';
 import 'package:lingua_ai/widgets/client_compatibility_boundary.dart';
 import 'dart:convert';
@@ -40,18 +41,18 @@ void main() {
     SyncStorage.backend = PreferencesSyncStorage();
   });
   test(
-      '10C server/web v2 and Flutter v1 are explicit; build identity is independent',
+      '10D server/web/Flutter v2 are explicit; build identity is independent',
       () async {
     final result = await Process.run(
         'node', ['../scripts/check-release-contract.cjs', '--json']);
     expect(result.exitCode, 0, reason: result.stderr.toString());
     final data = jsonDecode(result.stdout.toString()) as Map;
     expect(data['backend']['currentProtocolRevision'], 2);
-    expect(data['backend']['minimumMutationRevision'], ClientProtocol.revision);
-    expect(data['clientsTimelineAware'], false);
+    expect(data['backend']['minimumMutationRevision'], 1);
+    expect(data['clientsTimelineAware'], true);
     expect(ClientProtocol.header, data['backend']['protocolHeader']);
     expect(data['web']['protocolRevision'], 2);
-    expect(ClientProtocol.revision, 1);
+    expect(ClientProtocol.revision, 2);
     expect(data['web']['timelineAware'], true);
     expect(ClientProtocol.developmentBuildId, 'development');
     expect(ClientProtocol.validBuildId(ClientProtocol.buildId), true);
@@ -217,29 +218,15 @@ void main() {
       await directory.delete(recursive: true);
     }
   });
-  test(
-      '9C legacy/older queued protocol is never silently upgraded by new transport',
-      () async {
+  test('10D legacy protocol requests are blocked locally without upgrading', () async {
     await http.runWithClient(() async {
-      await ClientProtocol.withRecordedRevision(
-          null,
-          () => backend.put(
-              Uri.parse('${ApiConfig.baseUrl}/flashcards/card/review'),
-              headers: {'X-Idempotency-Key': 'legacy-review'}));
-      await ClientProtocol.withRecordedRevision(
-          0,
-          () => backend.put(
-              Uri.parse('${ApiConfig.baseUrl}/flashcards/card/review'),
-              headers: {'X-Idempotency-Key': 'old-review'}));
-    },
-        () => MockClient((request) async {
-              expect(
-                  request.headers[ClientProtocol.header],
-                  request.headers['X-Idempotency-Key'] == 'legacy-review'
-                      ? isNull
-                      : '0');
-              return http.Response('{}', 200);
-            }));
+      for (final revision in [null, 0, 1]) {
+        await expectLater(ClientProtocol.withRecordedRevision(revision,
+            () => backend.put(Uri.parse('${ApiConfig.baseUrl}/flashcards/card/review'),
+                headers: {'X-Idempotency-Key': 'legacy-review'})),
+            throwsA(isA<TimelineRecoveryRequired>()));
+      }
+    }, () => MockClient((_) async => throw StateError('No legacy dispatch')));
   });
   test(
       '9C multipart includes protocol/key; external selected media never receives backend metadata',

@@ -16,6 +16,9 @@ import 'connectivity_service.dart';
 import 'community_feed_cache.dart';
 
 class CommunityService {
+  CommunityService({Future<PreparedMultipartMutation> Function(http.MultipartRequest)? prepareUpload})
+      : _prepareUpload = prepareUpload ?? PreparedMultipartMutation.prepare;
+  final Future<PreparedMultipartMutation> Function(http.MultipartRequest) _prepareUpload;
   final _intents = MutationIntents();
   final _uploads = <String, Future<PreparedMultipartMutation>>{};
   final _uploadPayloads = <String, String>{};
@@ -30,7 +33,7 @@ class CommunityService {
 
   static final Map<String, int> _feedVersions = {};
   void _requireSession(SessionSnapshot session, [bool Function()? isCurrent]) {
-    if (!session.isCurrent || (isCurrent != null && !isCurrent())) {
+    if (!session.isDataCurrent || (isCurrent != null && !isCurrent())) {
       throw StateError('Community session or query changed');
     }
     if (session.ownerNamespace == 'local_guest' ||
@@ -45,11 +48,11 @@ class CommunityService {
     _feedVersions[session.ownerNamespace] =
         (_feedVersions[session.ownerNamespace] ?? 0) + 1;
     final prefs = await SharedPreferences.getInstance();
-    if (!session.isCurrent || isCurrent?.call() == false) return;
+    if (!session.isDataCurrent || isCurrent?.call() == false) return;
     await CommunityFeedCache.invalidate(prefs, session.ownerNamespace,
         postId: postId,
         language: language,
-        isCurrent: () => session.isCurrent && (isCurrent?.call() ?? true));
+        isCurrent: () => session.isDataCurrent && (isCurrent?.call() ?? true));
   }
 
   Future<List<CommunityPost>> fetchPosts(
@@ -121,23 +124,24 @@ class CommunityService {
     try {
       final session = expectedSession ?? AuthService().captureSession();
       _requireSession(session);
-      final saved = (await OnlineIntentService.list()).where((item) =>
-          item['kind'] == 'community-create' && item['language'] == TargetLanguage.code(learningLanguage));
-      _requireSession(session);
-      if (saved.isNotEmpty && imagePath != null && !kIsWeb && !await File(imagePath).exists()) {
-        final intent = saved.first;
-        final payload = Map<String, dynamic>.from(intent['payload']);
-        final fields = Map<String, String>.from(payload['fields']);
-        final files = payload['files'] as List;
-        if (fields['text'] != (text?.trim().isNotEmpty == true ? text!.trim() : null) ||
-            files.length != 1 || files.first['filename'] != imagePath.split(Platform.pathSeparator).last ||
-            (operationId != null && intent['id'] != operationId)) {
-          throw const IntentRecoveryRequired();
-        }
-        final result = await durableOnlineMutation('community-create', intent['language'], payload,
-            operationId: intent['id'], expectedSession: session);
+      final target = TargetLanguage.code(learningLanguage);
+      final fields = <String, String>{'learningLanguage': target,
+        if (text?.trim().isNotEmpty == true) 'text': text!.trim()};
+      final intent = await OnlineIntentService.beginCommunityCreate(target, fields,
+          operationId: operationId,
+          selectedFilename: imagePath == null ? null : kIsWeb
+              ? 'image.${_getFileExtension(imagePath)}'
+              : imagePath.split(Platform.pathSeparator).last,
+          expectedSession: session);
+      _requireSession(session, isCurrent);
+      if (intent['state'] != 'preparing' && imagePath != null && !kIsWeb) {
+        final exists = await File(imagePath).exists();
         _requireSession(session, isCurrent);
-        return CommunityPost.fromJson(result);
+        if (!exists) {
+          final result = await replayOnlineIntent(intent['id']);
+          _requireSession(session, isCurrent);
+          return CommunityPost.fromJson(result);
+        }
       }
       final token = AuthService().token;
       final uri = Uri.parse('${ApiConfig.baseUrl}${ApiConfig.communityPosts}');
@@ -157,7 +161,8 @@ class CommunityService {
       if (imagePath != null &&
           imagePath.isNotEmpty) {
         if (kIsWeb) {
-          final response = await http.get(Uri.parse(imagePath));
+          final response = await http.getMedia(Uri.parse(imagePath));
+          _requireSession(session, isCurrent);
           final multipartFile = http.MultipartFile.fromBytes(
             'image',
             response.bodyBytes,
@@ -167,8 +172,12 @@ class CommunityService {
           request.files.add(multipartFile);
         } else {
           final file = File(imagePath);
-          if (await file.exists()) {
-            if (await file.length() > 5 * 1024 * 1024) {
+          final exists = await file.exists();
+          _requireSession(session, isCurrent);
+          if (exists) {
+            final length = await file.length();
+            _requireSession(session, isCurrent);
+            if (length > 5 * 1024 * 1024) {
               throw StateError('Image exceeds the recovery storage limit. No post was sent.');
             }
             final multipartFile = await http.MultipartFile.fromPath(
@@ -176,6 +185,7 @@ class CommunityService {
               imagePath,
               contentType: MediaType('image', _getFileExtension(imagePath)),
             );
+            _requireSession(session, isCurrent);
             request.files.add(multipartFile);
           } else {
             throw StateError(
@@ -184,15 +194,17 @@ class CommunityService {
         }
       }
 
-      final prepared = await PreparedMultipartMutation.prepare(request);
-      final result = await durableOnlineMutation('community-create',
-          TargetLanguage.code(learningLanguage), {
+      final prepared = await _prepareUpload(request);
+      _requireSession(session, isCurrent);
+      await OnlineIntentService.finishCommunityPreparation(intent['id'], {
             'fields': Map<String, String>.from(prepared.request.fields),
             'files': prepared.files.map((file) => {
               'field': file.field, 'filename': file.filename,
               'contentType': file.contentType.toString(), 'bytes': base64Encode(file.bytes),
             }).toList(),
-          }, operationId: operationId, expectedSession: session);
+          }, expectedSession: session);
+      _requireSession(session, isCurrent);
+      final result = await replayOnlineIntent(intent['id']);
       _requireSession(session);
       final post = CommunityPost.fromJson(result);
       await _invalidate(session, postId: post.id, language: post.learningLanguage);
@@ -249,7 +261,7 @@ class CommunityService {
           newImagePath != null &&
           newImagePath.isNotEmpty) {
         if (kIsWeb) {
-          final response = await http.get(Uri.parse(newImagePath));
+          final response = await http.getMedia(Uri.parse(newImagePath));
           final multipartFile = http.MultipartFile.fromBytes(
             'image',
             response.bodyBytes,

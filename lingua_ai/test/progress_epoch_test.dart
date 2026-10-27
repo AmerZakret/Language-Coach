@@ -1,3 +1,4 @@
+import 'package:lingua_ai/services/data_timeline.dart';
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -175,6 +176,8 @@ void main() {
     state['actions'] = [
       {
         'id': 'reset-1',
+        'dataTimelineId': DataTimeline().lastConfirmedDataTimelineId,
+        'clientProtocolRevision': 2,
         'type': 'reset-progress',
         'ownerNamespace': owner,
         'payload': {'expectedEpoch': 0},

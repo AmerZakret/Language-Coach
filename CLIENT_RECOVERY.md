@@ -146,3 +146,18 @@ rediscovery is idempotent and keeps caches and operation IDs.
 Web is timeline aware; Flutter remains v1 until 10D. ALLOW_LEGACY remains
 transitional. External restore isolation remains mandatory; 10E performs the full
 restore drill. This work does not authorize production traffic or store release.
+
+## Phase 10D Flutter recovery
+
+Flutter now uses protocol 2 and discovers `/compatibility` before durable drains.
+Known-offline work retains its last confirmed timeline; unknown-offline work is
+blocked. Legacy records remain unverified, and A records remain A after restore
+to B. The recovery notice preserves pending evidence and authentication while
+current read state refreshes. An A AI clear cannot authorize a B deletion. Local
+discard of a selected stale online intent sends no HTTP and tombstones its ID;
+a fresh B clear needs a new explicit confirmation and operation ID.
+
+See [Flutter timeline storage](PHASE_10D_FLUTTER_TIMELINE_STORAGE.md) for the full
+mutation/cache inventory and isolation rules. Earlier phase sections are
+historical rollout checkpoints; all three runtimes now declare protocol 2.
+Global server enforcement remains staged.

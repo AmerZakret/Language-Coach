@@ -1,3 +1,4 @@
+import 'data_timeline.dart';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../core/localization/target_language.dart';
@@ -5,6 +6,7 @@ import '../core/localization/target_language.dart';
 class CommunityQuery {
   final String ownerNamespace;
   final String language;
+  final String? dataTimelineId = DataTimeline().lastConfirmedDataTimelineId;
   final int page;
   final int limit;
   CommunityQuery(this.ownerNamespace,
@@ -21,7 +23,7 @@ class CommunityQuery {
     }
   }
   String get key =>
-      'community_feed_v2_${Uri.encodeComponent(ownerNamespace)}_${language}_${page}_$limit';
+      'community_feed_v2_${Uri.encodeComponent(ownerNamespace)}_${language}_${page}_${limit}_timeline_${dataTimelineId ?? 'unverified'}';
 }
 
 class CommunityFeedCache {
@@ -55,6 +57,7 @@ class CommunityFeedCache {
   static Map<String, dynamic>? read(
       SharedPreferences prefs, CommunityQuery query) {
     try {
+      if (!DataTimeline().matchesCache(query.dataTimelineId)) return null;
       final raw = prefs.getString(query.key);
       if (raw == null) return null;
       final entry = jsonDecode(raw);
@@ -75,6 +78,7 @@ class CommunityFeedCache {
 
   static Future<void> write(SharedPreferences prefs, CommunityQuery query,
       Map<String, dynamic> payload) async {
+    if (!DataTimeline().matchesCache(query.dataTimelineId)) return;
     if (!validPayload(payload, query)) {
       throw const FormatException('Malformed Community feed');
     }

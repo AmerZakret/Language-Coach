@@ -44,7 +44,7 @@ class PronunciationService {
       // Attach recorded audio file
       http.MultipartFile file;
       if (kIsWeb) {
-        final response = await http.get(Uri.parse(audioPath));
+        final response = await http.getMedia(Uri.parse(audioPath));
         file = http.MultipartFile.fromBytes(
           'audio',
           response.bodyBytes,

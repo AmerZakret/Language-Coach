@@ -1,3 +1,6 @@
+import '../../core/localization/target_language_service.dart';
+import '../../services/data_timeline.dart';
+import '../../services/auth_service.dart';
 import 'package:flutter/material.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/routes/app_routes.dart';
@@ -16,6 +19,14 @@ class LessonScreen extends StatefulWidget {
 }
 
 class _LessonScreenState extends State<LessonScreen> {
+  final _session = AuthService().captureSession();
+  final _languageVersion = TargetLanguageService().languageVersion;
+  bool get _contextCurrent => _session.isDataCurrent &&
+      _languageVersion == TargetLanguageService().languageVersion;
+  void _onContextChanged() {
+    if (_contextCurrent || !mounted) return;
+    setState(() {});
+  }
   int currentQuestionIndex = 0;
   int score = 0;
   String? selectedAnswer;
@@ -27,8 +38,24 @@ class _LessonScreenState extends State<LessonScreen> {
   final SoundService _soundService = SoundService();
 
   @override
+  void initState() {
+    super.initState();
+    DataTimeline().addListener(_onContextChanged);
+    AuthService().addListener(_onContextChanged);
+    TargetLanguageService().addListener(_onContextChanged);
+  }
+  @override
+  void dispose() {
+    DataTimeline().removeListener(_onContextChanged);
+    AuthService().removeListener(_onContextChanged);
+    TargetLanguageService().removeListener(_onContextChanged);
+    super.dispose();
+  }
+
+  @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    if (!_contextCurrent) return;
     if (lesson == null) {
       final args = ModalRoute.of(context)?.settings.arguments;
       if (args is Lesson) {
@@ -45,14 +72,14 @@ class _LessonScreenState extends State<LessonScreen> {
     setState(() => _isLoading = true);
     try {
       final fullLesson = await _apiService.fetchLessonById(lesson!.id);
-      if (mounted) {
+      if (mounted && _contextCurrent) {
         setState(() {
           lesson = fullLesson;
           _isLoading = false;
         });
       }
     } catch (e) {
-      if (mounted) {
+      if (mounted && _contextCurrent) {
         setState(() {
           _isLoading = false;
           _loadFailed = true;
@@ -62,6 +89,7 @@ class _LessonScreenState extends State<LessonScreen> {
   }
 
   void _checkAnswer() {
+    if (!_contextCurrent) return;
     if (lesson == null || lesson!.questions.isEmpty || selectedAnswer == null) return;
 
     final currentQuestion = lesson!.questions[currentQuestionIndex];
@@ -80,6 +108,7 @@ class _LessonScreenState extends State<LessonScreen> {
   }
 
   void _nextQuestion() {
+    if (!_contextCurrent) return;
     if (lesson == null || lesson!.questions.isEmpty) return;
 
     setState(() {
@@ -106,6 +135,12 @@ class _LessonScreenState extends State<LessonScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (!_contextCurrent) {
+      return Scaffold(appBar: AppBar(title: const Text('Refresh required')),
+        body: const Center(child: Padding(padding: EdgeInsets.all(24), child: Text(
+          'The account, language or server history changed. Return and refresh before starting a new session.'))));
+    }
+
     return ListenableBuilder(
       listenable: Listenable.merge([LanguageService(), ThemeService()]),
       builder: (context, child) {

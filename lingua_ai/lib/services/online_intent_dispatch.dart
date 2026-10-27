@@ -1,3 +1,4 @@
+import 'data_timeline.dart';
 import 'dart:convert';
 import 'package:http_parser/http_parser.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -12,7 +13,7 @@ import 'online_intent_service.dart';
 
 Future<Map<String, dynamic>> _dispatch(
     Map<String, dynamic> intent, SessionSnapshot session) async {
-  if (!session.isCurrent) throw const IntentRecoveryRequired();
+  if (!session.isDataCurrent) throw const IntentRecoveryRequired();
   final headers = {
     'Authorization': 'Bearer ${AuthService().token}',
     'X-Idempotency-Key': intent['id'] as String
@@ -20,7 +21,7 @@ Future<Map<String, dynamic>> _dispatch(
   final payload = Map<String, dynamic>.from(intent['payload']);
   final kind = intent['kind'];
   final response = await mutationRequest(() {
-    if (!session.isCurrent) throw const IntentRecoveryRequired();
+    if (!session.isDataCurrent) throw const IntentRecoveryRequired();
     if (kind == 'community-create') {
       final request = http.MultipartRequest(
           'POST', Uri.parse('${ApiConfig.baseUrl}${ApiConfig.communityPosts}'))
@@ -76,11 +77,11 @@ Future<Map<String, dynamic>> replayOnlineIntent(String id) =>
 Future<Map<String, dynamic>> durableOnlineMutation(
     String kind, String language, Map<String, dynamic> payload,
     {String? operationId, SessionSnapshot? expectedSession}) async {
-  if (expectedSession != null && !expectedSession.isCurrent) {
+  if (expectedSession != null && !expectedSession.isDataCurrent) {
     throw const IntentRecoveryRequired();
   }
   final intent = await OnlineIntentService.prepare(kind, language, payload,
-      operationId: operationId);
+      operationId: operationId, expectedSession: expectedSession);
   return replayOnlineIntent(intent['id']);
 }
 
@@ -91,18 +92,26 @@ Future<void> recoverOnlineIntents(String kind, {String? language}) async {
       OnlineIntentService.isDispatching(session.ownerNamespace)) {
     return;
   }
+  await DataTimeline().ensureFresh();
   final intents = await OnlineIntentService.list();
+  var reconciliation = false;
   for (final intent in intents) {
-    if (!session.isCurrent) return;
+    if (!session.isDataCurrent) return;
     if (!(intent['kind'] as String)
             .startsWith(kind == 'ai' ? 'ai-' : 'community-') ||
         (language != null && intent['language'] != language)) {
       continue;
     }
-    if (intent['state'] == 'failed' ||
+    if (!DataTimeline().canDispatch(intent['dataTimelineId']) || intent['protocol'] != 2) {
+      DataTimeline().noteEvidence();
+      reconciliation = true;
+      continue;
+    }
+    if (['timeline', 'provenance'].contains(intent['category']) || intent['state'] == 'preparing' || intent['state'] == 'failed' ||
         intent['nextAttemptAt'] > OnlineIntentService.clock()) {
       throw const IntentRecoveryRequired();
     }
     await replayOnlineIntent(intent['id']);
   }
+  if (reconciliation) throw const TimelineRecoveryRequired();
 }

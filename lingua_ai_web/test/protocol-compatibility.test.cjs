@@ -104,7 +104,7 @@ test('9C a new compatible build prompts reload; an incompatible manifest stops w
 test('9C source-executed identities remain independent; synthetic build injection needs no file writes', () => {
   const development = releaseIdentity(), ci = releaseIdentity('ci-synthetic.12');
   assert.equal(development.web.buildId, 'development'); assert.equal(ci.web.buildId, 'ci-synthetic.12');
-  assert.equal(ci.backend.currentProtocolRevision, 2); assert.equal(ci.backend.minimumMutationRevision, 1); assert.equal(ci.clientsTimelineAware, false); assert.equal(ci.web.protocolRevision, 2);
+  assert.equal(ci.backend.currentProtocolRevision, 2); assert.equal(ci.backend.minimumMutationRevision, 1); assert.equal(ci.clientsTimelineAware, true); assert.equal(ci.web.protocolRevision, 2);
   assert.notEqual(ci.web.buildId, String(ci.web.protocolRevision));
 });
 test('9C actual Vite manifest plugin emits only bounded public artifact/protocol identity', () => {

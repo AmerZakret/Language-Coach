@@ -1,3 +1,4 @@
+import 'data_timeline.dart';
 import 'client_compatibility.dart';
 import 'dart:async';
 import 'api_response.dart';
@@ -24,6 +25,11 @@ class SyncFailure {
   final int? statusCode;
   const SyncFailure(this.category, this.terminal, [this.code, this.statusCode]);
   static SyncFailure classify(Object error) {
+    if (error is TimelineRecoveryRequired) {
+      return SyncFailure(error.kind == TimelineFailure.maintenance ? 'maintenance'
+          : error.kind == TimelineFailure.provenance ? 'provenance' : 'timeline',
+          false, error.code, error.statusCode);
+    }
     final status = error is SyncHttpException
         ? error.statusCode
         : error is ApiException

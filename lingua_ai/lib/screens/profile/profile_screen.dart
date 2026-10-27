@@ -53,12 +53,12 @@ class ProfileScreen extends StatelessWidget {
             ),
             TextButton(
               onPressed: () async {
-                if (!session.isCurrent || !context.mounted) return;
+                if (!session.isDataCurrent || !context.mounted) return;
                 final newName = controller.text.trim();
                 if (newName.isNotEmpty && newName != auth.currentUserName) {
                   try {
                     await UserApiService().updateProfile(name: newName);
-                    if (!session.isCurrent || !context.mounted) return;
+                    if (!session.isDataCurrent || !context.mounted) return;
                     auth.updateName(newName);
                   } catch (e) {
                     if (context.mounted && canHandleApiError(session, e)) {
@@ -67,7 +67,7 @@ class ProfileScreen extends StatelessWidget {
                     return;
                   }
                 }
-                if (context.mounted && session.isCurrent) {
+                if (context.mounted && session.isDataCurrent) {
                   Navigator.pop(context);
                 }
               },

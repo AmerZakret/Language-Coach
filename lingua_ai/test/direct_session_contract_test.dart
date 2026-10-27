@@ -1,3 +1,4 @@
+import 'package:lingua_ai/services/data_timeline.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -90,7 +91,7 @@ void main() {
             }
           ]
         }),
-        'flashcards_registered_${a}_en_list': '["cached card"]',
+        DataTimeline().cacheKey('flashcards_registered_${a}_en_list'): '["cached card"]',
         'progress_registered_${a}_en_totalXp': '120',
         'linguaai_offline_queue_registered_$b': 'other owner pending work',
         'community_posts_All': '{"items":[]}',

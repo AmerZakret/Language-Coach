@@ -1,3 +1,7 @@
+import 'dart:async';
+import 'dart:convert';
+import 'package:crypto/crypto.dart';
+import 'data_timeline.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../core/localization/target_language_service.dart';
@@ -5,6 +9,8 @@ import 'user_api_service.dart';
 
 /// Captured identity for asynchronous work; valid for local-only sessions too.
 class SessionSnapshot {
+  final int timelineRevision = DataTimeline().revision;
+  bool get isDataCurrent => isCurrent && timelineRevision == DataTimeline().revision;
   final int revision;
   final String ownerNamespace;
   final String userId;
@@ -32,12 +38,23 @@ class AuthService extends ChangeNotifier {
   String _currentUserEmail = '';
   String _currentUserId = '';
   String _token = '';
+  String? _profileDataTimelineId;
+  int _profileRevision = -1;
+  bool _timelineListening = false;
   int _sessionVersion = 0;
+  static Future<void>? _profileWriteTail;
+  static String profileProjectionKey(String owner) => 'profile_projection_v1_${Uri.encodeComponent(owner)}';
+  @visibleForTesting
+  Future<void> Function(Map<String, dynamic>)? beforeProfileProjectionWrite;
+  @visibleForTesting
+  Future<bool> Function(String, String)? writeProfileProjectionForTesting;
+
 
   bool get isLoggedIn => _isLoggedIn;
   bool get isGuest => _isGuest;
-  String get currentUserName => _currentUserName;
-  String get currentUserEmail => _currentUserEmail;
+  bool get hasCurrentProfile => _token.isEmpty || DataTimeline().matchesCache(_profileDataTimelineId);
+  String get currentUserName => hasCurrentProfile ? _currentUserName : (_isGuest ? 'Guest User' : 'User');
+  String get currentUserEmail => hasCurrentProfile ? _currentUserEmail : '';
   String get currentUserId => _currentUserId;
   String get token => _token;
   int get sessionVersion => _sessionVersion;
@@ -53,9 +70,7 @@ class AuthService extends ChangeNotifier {
     }
     if (_isLoggedIn) {
       if (_currentUserId.isNotEmpty) return 'registered_$_currentUserId';
-      if (_currentUserEmail.isNotEmpty) {
-        return 'registered_email_${Uri.encodeComponent(_currentUserEmail)}';
-      }
+
     }
     return 'local_guest';
   }
@@ -78,6 +93,15 @@ class AuthService extends ChangeNotifier {
     _currentUserEmail = _prefs.getString('currentUserEmail') ?? '';
     _currentUserId = _prefs.getString('currentUserId') ?? '';
     _token = _prefs.getString('token') ?? '';
+    // Legacy per-field profile/tag pairs are not coherent evidence. The single
+    // profile projection below is the only authoritative persisted read state.
+    _profileDataTimelineId = null;
+    _restoreProfileProjection();
+    if (!_timelineListening) {
+      _timelineListening = true;
+      DataTimeline().addListener(_onTimelineChanged);
+    }
+    _profileRevision = DataTimeline().revision;
 
     if (_isGuest && _token.isNotEmpty &&
         !_hasBackendGuestIdentity(_currentUserId, _currentUserEmail, _token)) {
@@ -87,10 +111,16 @@ class AuthService extends ChangeNotifier {
     }
     
     notifyListeners();
+    if (_token.isNotEmpty && DataTimeline().freshlyConfirmed) fetchLatestProfile();
+  }
 
-    if ((_isLoggedIn || _isGuest) && _token.isNotEmpty) {
-      fetchLatestProfile();
-    }
+  void _onTimelineChanged() {
+    if (_profileRevision == DataTimeline().revision) return;
+    _profileRevision = DataTimeline().revision;
+    // Identity/token remain authoritative. Displayed profile data is a read
+    // cache and becomes unavailable until a response from the new lineage.
+    notifyListeners();
+    if (_token.isNotEmpty && DataTimeline().freshlyConfirmed) fetchLatestProfile();
   }
 
   // Returns null if input is valid, or an error message if invalid
@@ -111,13 +141,13 @@ class AuthService extends ChangeNotifier {
     return null;
   }
 
-  void setBackendSession({
+  Future<void> setBackendSession({
     required String name,
     required String email,
     required String token,
     required String id,
     String? targetLanguage,
-  }) {
+  }) async {
     _sessionVersion++;
     _isLoggedIn = true;
     _isGuest = false;
@@ -125,8 +155,11 @@ class AuthService extends ChangeNotifier {
     _currentUserEmail = email;
     _currentUserId = id;
     _token = token;
+    _profileDataTimelineId = DataTimeline().lastConfirmedDataTimelineId;
     
-    _saveSession();
+    final session = captureSession();
+    await _saveSession();
+    if (!session.isDataCurrent) return;
 
     if (targetLanguage != null && targetLanguage.isNotEmpty) {
       final shortCode = TargetLanguageService.toShortCode(targetLanguage);
@@ -145,7 +178,8 @@ class AuthService extends ChangeNotifier {
     try {
       final data = await UserApiService().fetchMe();
       // A stale profile must not pair the previous owner's ID with a new token.
-      if (!session.isCurrent) return;
+      if (!session.isDataCurrent) return;
+      _profileDataTimelineId = DataTimeline().lastConfirmedDataTimelineId;
       _currentUserName = data['name'] as String;
       _currentUserEmail = data['email'] as String;
       _currentUserId = data['id'] as String;
@@ -153,7 +187,7 @@ class AuthService extends ChangeNotifier {
       _isLoggedIn = !_isGuest;
       
       await _saveSession();
-      if (session.isCurrent) notifyListeners();
+      if (session.isDataCurrent) notifyListeners();
     } catch (e) {
       debugPrint('Failed to fetch latest profile: $e');
     }
@@ -189,6 +223,7 @@ class AuthService extends ChangeNotifier {
     _currentUserEmail = email;
     _currentUserId = id;
     _token = token;
+    _profileDataTimelineId = DataTimeline().lastConfirmedDataTimelineId;
 
     await _saveSession();
   }
@@ -222,7 +257,7 @@ class AuthService extends ChangeNotifier {
   }
 
   bool invalidateSession(SessionSnapshot session) {
-    if (!session.isCurrent || session._token.isEmpty ||
+    if (!session.isDataCurrent || session._token.isEmpty ||
         session.ownerNamespace == 'local_guest') {
       return false;
     }
@@ -249,21 +284,68 @@ class AuthService extends ChangeNotifier {
     notifyListeners();
   }
 
+  void _restoreProfileProjection() {
+    try {
+      final raw = _prefs.getString(profileProjectionKey(localStorageNamespace));
+      if (raw == null) return;
+      final record = jsonDecode(raw);
+      final data = record['data'];
+      if (record['schemaVersion'] != 1 ||
+          record['ownerNamespace'] != localStorageNamespace ||
+          record['sessionIdentity'] != sha256.convert(utf8.encode(_token)).toString() ||
+          !DataTimeline.valid(record['dataTimelineId']) || data is! Map ||
+          data['id'] != _currentUserId || data['isGuest'] != _isGuest ||
+          data['name'] is! String || data['email'] is! String) { return; }
+      _currentUserName = data['name'];
+      _currentUserEmail = data['email'];
+      _profileDataTimelineId = record['dataTimelineId'];
+    } catch (_) { /* An invalid read projection never becomes server authority. */ }
+  }
+
   Future<void> _saveSession() async {
     final session = captureSession();
+    final profileTimeline = _profileDataTimelineId;
     final values = <String, Object>{
       'isLoggedIn': _isLoggedIn, 'isGuest': _isGuest,
       'currentUserName': _currentUserName, 'currentUserEmail': _currentUserEmail,
       'currentUserId': _currentUserId, 'token': _token,
     };
+    final projection = <String, dynamic>{
+      'schemaVersion': 1, 'ownerNamespace': session.ownerNamespace,
+      'sessionIdentity': sha256.convert(utf8.encode(values['token'] as String)).toString(),
+      'dataTimelineId': profileTimeline,
+      'data': {'id': values['currentUserId'], 'name': values['currentUserName'],
+        'email': values['currentUserEmail'], 'isGuest': values['isGuest']},
+    };
+    // These legacy keys restore authentication identity only. They cannot
+    // establish profile provenance; init reads it from the atomic JSON record.
     for (final entry in values.entries) {
-      if (!session.isCurrent) return;
+      if (!session.isDataCurrent) return;
       if (entry.value is bool) {
         await _prefs.setBool(entry.key, entry.value as bool);
       } else {
         await _prefs.setString(entry.key, entry.value as String);
       }
     }
-    if (session.isCurrent) notifyListeners();
+    if (!session.isDataCurrent) return;
+    if (session.ownerNamespace != 'local_guest' && DataTimeline.valid(profileTimeline)) {
+      await beforeProfileProjectionWrite?.call(projection);
+      final previous = _profileWriteTail;
+      final released = Completer<void>();
+      _profileWriteTail = released.future;
+      if (previous != null) await previous;
+      try {
+        if (!session.isDataCurrent) return;
+        // One serialized value carries data AND provenance. No per-key ordering
+        // or partially written timeline tag can authorize a mixed profile.
+        if (!await (writeProfileProjectionForTesting ?? _prefs.setString)(profileProjectionKey(session.ownerNamespace), jsonEncode(projection))) {
+          throw StateError('Could not persist coherent profile projection');
+        }
+      } finally {
+        released.complete();
+        if (identical(_profileWriteTail, released.future)) _profileWriteTail = null;
+      }
+    }
+    if (session.isDataCurrent) notifyListeners();
   }
 }

@@ -1,3 +1,4 @@
+import 'data_timeline.dart';
 import 'client_compatibility.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -46,6 +47,7 @@ Future<http.Response> apiRequest(
     throw const ApiException(
         ApiFailure.network, 'The request timed out. Please try again.');
   }
+  if (session.timelineRevision != DataTimeline().revision) throw const TimelineRecoveryRequired();
   if (response.statusCode >= 200 && response.statusCode < 300) return response;
   final status = response.statusCode;
   final kind = status == 401
@@ -120,9 +122,10 @@ Map<String, dynamic> parsePublicUser(dynamic value) {
 /// be shown after that invalidation, but never after a subsequent login/switch.
 bool canHandleApiError(SessionSnapshot session, Object error) {
   final auth = AuthService();
-  return session.isCurrent ||
+  return session.isDataCurrent ||
       error is ApiException &&
           error.sessionInvalidated &&
+          session.timelineRevision == DataTimeline().revision &&
           auth.sessionVersion == session.revision + 1 &&
           auth.token.isEmpty;
 }
