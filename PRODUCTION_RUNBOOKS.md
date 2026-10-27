@@ -697,6 +697,50 @@ known restored metadata in ALLOW_LEGACY; the write gate also refuses known resto
 metadata with a legacy-permitting policy. Never use old v1 clients for a post-restore
 canary. Missing provenance on older backups does not waive these operator rules.
 
+### Phase 10E disposable drill evidence and reopening decision
+
+[The disposable drill](PHASE_10E_RESTORE_DRILL.md) now exercises physical rollback
+of synthetic domain documents, receipts, AI barriers, control history and uploads
+on a real transaction-capable replica set. It is correctness evidence, not a
+backup implementation or a witnessed production restore. All first-party clients
+now declare protocol 2; the earlier rollout sections are historical checkpoints.
+
+Maintain this order for any separately authorized real restore:
+
+1. Record external RESTORING status and enforce the independent CLOSED latch,
+   ingress restrictions and write isolation.
+2. Stop or network/DB-isolate old applications, workers and stale deployments.
+3. Restore coordinated Mongo and shared upload state under continued isolation.
+4. Audit the restored source, indexes, receipts/barriers and upload references
+   against independently retained coordinated evidence. Missing receipts or
+   surviving receipts alone do not prove the corresponding domain effect.
+5. Record a fresh, never-issued B externally and install it CLOSED using the
+   actual restored source/control version. Retain issued-ID history outside Mongo.
+6. Start B-configured compatible instances with the independent latch CLOSED.
+7. Verify old A, unknown/missing provenance and stale instances cannot write;
+   audit B CLOSED again. No automatic repair or receipt reconstruction is allowed.
+8. Only with matching evidence, hard isolation and explicit operator authorization,
+   configure ENFORCE_MUTATIONS for the replacement cohort and open restricted B
+   for a controlled canary. A v1 success under ALLOW_LEGACY proves no intent origin.
+9. Admit the compatible cohort only after canary validation and pending client
+   reconciliation. A records and destructive clear evidence remain A.
+10. Reopen traffic only under a separate production authorization.
+
+Read-only restore consistency checks never perform the open step. Orphans,
+broken references, receipt/domain/barrier disagreement, missing manifest/index
+evidence or an incomplete audit require continued CLOSED isolation and review.
+Do not delete or regenerate evidence to make an audit pass. The fence cannot
+cancel a provider call already in flight; external hard isolation is mandatory.
+
+The shared control record serializes competing transactions. The disposable
+measurements show conflicts/retries and bounded 503 failures under larger bursts;
+they establish no production capacity SLA. Capacity must be validated for the
+deployment and canary load. Rate limits remain process-local: control instance
+count and use trusted ingress/global limiting or an independently reviewed shared
+limiter before horizontal scale. All instances need the same persistent upload
+tree; divergent local disks are not safe shared storage. No Redis/object-storage
+migration or production enforcement/default change is part of this phase.
+
 Inspect discovery without sending mutations: GET /compatibility is public/no-store
 and works while general readiness is CLOSED. Unknown/mismatched control yields
 no trusted public timeline. Verify exact server-v2/client-cohort capability and
