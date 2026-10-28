@@ -4,7 +4,9 @@ Run commands from the component directory, using its local dependencies. On
 Windows PowerShell, `npm.cmd` avoids the system's npm.ps1 execution-policy issue.
 Install Node dependencies with `npm ci`, Flutter dependencies with `flutter pub get`,
 and Python test dependencies in an isolated Python 3.12 virtual environment with
-`python -m pip install -r requirements-dev.txt`.
+`python -m pip install --require-hashes --only-binary=:all: --no-deps -r requirements-installer.txt`,
+then `python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt`.
+Use a fresh venv and its explicit interpreter; system/global pip is unchanged.
 
 | Component | Complete test command | Additional check |
 |---|---|---|
@@ -112,7 +114,10 @@ download its disposable server binary. No Whisper model is downloaded or loaded.
 `.github/workflows/quality.yml` runs five independent Ubuntu 24.04 jobs with Node
 22.14.0 with explicitly selected npm 10.9.0, Flutter 3.41.7 / Dart 3.11.5, and Python 3.12.4.
 Node installs use `npm ci`; Flutter enforces its lock; Python installs both pinned
-requirements files in a fresh venv. Web/Flutter contract tests also install
+requirements files in a fresh venv, bootstrapping the hash-pinned installer first.
+All remote Actions are pinned to reviewed commit SHAs with semantic-version
+comments; updates must verify the upstream release/tag commit, keep read-only
+permissions and pass workflow validation. Web/Flutter contract tests also install
 backend dev dependencies. Only npm/pip download caches keyed by manifests and
 selected toolchains are used; no env, uploads, audio, model or credential caches.
 
@@ -123,6 +128,23 @@ hostnames and disabled provider features; it makes no infrastructure connections
 Neither CI nor these commands prove rotation/revocation, live infrastructure,
 restore success, browser engine/device behavior or signing/release packaging.
 No production traffic is authorized by a green workflow.
+
+Python lock maintenance and platform limits are documented in the
+[pronunciation README](lingua_ai_pronunciation_service/README.md#dependency-integrity-and-security-11a-r2).
+Regenerate hashes with `python -B scripts/lock-python.py` after reviewing exact
+pins in `requirements.in`; the command does not upgrade packages. The Python
+quality gate validates the complete installed graph and rejects mutable action
+tags or write permissions. Model tests use the real wrapper/tokenizer with fake
+native weights and blocked sockets; production missing-tokenizer/cache cases
+must fail before fallback network access. No real Whisper weights are required.
+
+Npm lifecycle scripts remain enabled. The backend locked install hooks are bcrypt
+(`node-gyp-build`, runtime), mongodb-memory-server (disposable test-server binary,
+dev), unrs-resolver (`napi-postinstall`, Jest/dev), and optional Darwin fsevents
+(dev). Nest 11.2.6 core has no install hook; Nest CLI/testing are dev-only.
+The production-only backend installation includes bcrypt's expected native hook
+and excludes Mongo test-server/Jest/resolver/Nest development tooling. Review
+install-hook changes with lockfile changes; do not globally suppress scripts.
 
 Each component snapshots source/unignored files and the index before execution,
 then fails if checks mutate them or leave unignored artifacts. Existing local

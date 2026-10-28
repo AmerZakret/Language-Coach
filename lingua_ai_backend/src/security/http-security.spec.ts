@@ -19,7 +19,7 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative, isAbsolute } from 'node:path';
-import request from 'supertest';
+import request, { type Test as HttpTest } from 'supertest';
 import sharp from 'sharp';
 import { AuthController } from '../auth/auth.controller';
 import { AuthService } from '../auth/auth.service';
@@ -46,6 +46,7 @@ import {
 import { SecurityModule } from './security.module';
 import { HttpSecurity } from './http-security';
 import { ProviderBudget } from './provider-budget';
+import { multipartFieldFixtures } from '../../test/multipart-field-fixtures';
 
 const leak = `SENSITIVE_${randomUUID()}`;
 @Controller('fixture')
@@ -103,7 +104,8 @@ describe('8C real HTTP policy pipeline (signed JWTs, disposable files, no extern
     app
       .get(JwtService)
       .sign({ sub: owner, email: 'misleading@example.test', ...extra });
-  const auth = (r: any, owner = a) => r.auth(signed(owner), { type: 'bearer' });
+  const auth = (r: HttpTest, owner = a) =>
+    r.auth(signed(owner), { type: 'bearer' });
   const chat = (owner = a) =>
     auth(request(app.getHttpServer()).post('/ai-coach/chat'), owner).send({
       message: 'hi',
@@ -522,6 +524,10 @@ describe('8C real HTTP policy pipeline (signed JWTs, disposable files, no extern
       '::/0',
       'loopback',
       'arbitrary-secret',
+      '10.0.0.0/33',
+      '10.0.0.0/-1',
+      '10.0.0.0/8/1',
+      '10.0.0.0/8,',
     ]) {
       expect(() => trustedProxyPolicy(value)).toThrow('TRUST_PROXY');
       try {
@@ -557,6 +563,61 @@ describe('8C real HTTP policy pipeline (signed JWTs, disposable files, no extern
       .send({ email: 'fixture@example.test', password: 'valid' })
       .expect(201);
   });
+  test('IPv4 proxy CIDR trusts only intended hops, including mapped socket addresses', async () => {
+    const express = app.getHttpAdapter().getInstance();
+    expect(express.get('trust proxy')).toBe(false);
+    express.set('trust proxy', trustedProxyPolicy('10.0.0.0/8'));
+    const trust = express.get('trust proxy fn') as (ip: string) => boolean;
+    expect(trust('10.2.3.4')).toBe(true);
+    expect(trust('::ffff:10.2.3.4')).toBe(true);
+    expect(trust('198.51.100.1')).toBe(false);
+    expect(trust('::ffff:198.51.100.1')).toBe(false);
+    // The loopback peer is outside this ingress CIDR: spoofed forwarded IPs
+    // must still share one login rate-limit bucket.
+    for (let n = 0; n < 10; n++)
+      await request(app.getHttpServer())
+        .post('/auth/login')
+        .set('X-Forwarded-For', `198.51.100.${n + 1}`)
+        .send({ email: 'fixture@example.test', password: 'valid' })
+        .expect(201);
+    await request(app.getHttpServer())
+      .post('/auth/login')
+      .set('X-Forwarded-For', '203.0.113.1')
+      .send({ email: 'fixture@example.test', password: 'valid' })
+      .expect(429);
+    // Regression for the patched IPv4/IPv6 trust-subnet confusion.
+    express.set('trust proxy', trustedProxyPolicy('::ffff:10.0.0.0/8'));
+    const mappedTrust = express.get('trust proxy fn') as (
+      ip: string,
+    ) => boolean;
+    expect(mappedTrust('198.51.100.1')).toBe(false);
+  });
+  test.each(multipartFieldFixtures)(
+    'R1 pronunciation $name is rejected before provider work and releases permits',
+    async ({ fields }) => {
+      const assess = jest.spyOn(app.get(PronunciationService), 'assess');
+      const audio = () =>
+        auth(request(app.getHttpServer()).post('/pronunciation/assess'));
+      await request(app.getHttpServer())
+        .post('/pronunciation/assess')
+        .field(fields[0], 'fixture')
+        .expect(401);
+      const rejected = audio().attach(
+        'audio',
+        Buffer.from('fixture'),
+        'fixture.wav',
+      );
+      for (const field of fields) rejected.field(field, 'fixture');
+      await rejected.timeout({ response: 5000, deadline: 10000 }).expect(400);
+      expect(assess).not.toHaveBeenCalled();
+      await audio()
+        .field('targetText', 'hello')
+        .field('targetLanguage', 'en')
+        .attach('audio', Buffer.from('fixture'), 'fixture.wav')
+        .expect(201);
+      expect(assess).toHaveBeenCalledTimes(1);
+    },
+  );
   test('private APIs are no-store while validated static images retain normal image caching', async () => {
     const api = await auth(
       request(app.getHttpServer()).get('/fixture/private'),

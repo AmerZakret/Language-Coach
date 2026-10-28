@@ -30,7 +30,18 @@ import { COMMUNITY_IMAGE_LIMIT } from './community-image.storage';
 // image is created. Content validation and compensation belong to the service.
 export const communityMulterOptions = {
   storage: memoryStorage(),
-  limits: { fileSize: COMMUNITY_IMAGE_LIMIT, files: 1, fields: 10, fieldSize: 16 * 1024, parts: 11 },
+  // Both upload DTOs use flat fields. Opt into Multer's parser bounds before
+  // append-field can allocate nested objects or sparse arrays.
+  limits: {
+    fileSize: COMMUNITY_IMAGE_LIMIT,
+    files: 1,
+    fields: 10,
+    fieldSize: 16 * 1024,
+    parts: 11,
+    fieldNameSize: 100,
+    fieldNestingDepth: 0,
+    fieldArrayIndexLimit: 0,
+  },
 };
 
 @Controller('community/posts')

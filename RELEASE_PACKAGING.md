@@ -26,7 +26,7 @@ is **not** the deploy artifact. The narrow runtime package is assembled separate
 | Backend | `dist/src` JS in reviewed runtime directories/root modules; validated start/config launchers; runtime package/lock metadata; `release-manifest.json` | Specs/tests/fixtures, tooling/audit/repair CLI, lesson replacement/generation, declarations/maps/build info, `.env`, uploads, dependencies copied from a developer machine |
 | Web | Built `index.html`, hashed JS/CSS/static assets and source sounds, `release.json`, `release-manifest.json` | Source, tests, environment files, maps, private service/provider configuration |
 | Flutter | Operator-built signed AAB/APK/IPA after identity/config/signing review | Keystores, passwords, provisioning credentials, debug signing, local stores/audio/caches; no signed package is produced by repository quality CI |
-| Pronunciation | `main.py`, `config.py`, `audio.py`, `requirements.txt`, generated manifest | Tests/dev requirements/docs/env files, bytecode/venv, audio/temp files, models/cache/weights; provision dependencies/model outside this source artifact |
+| Pronunciation | `main.py`, `config.py`, `audio.py`, `requirements.txt`, `requirements-installer.txt`, generated manifest | Tests/dev requirements/lock inputs/docs/env files, bytecode/venv, audio/temp files, models/cache/weights; provision dependencies/model outside this source artifact |
 
 The assembler refuses an existing destination, validates before writing, and never
 starts services, installs dependencies, connects to DB/providers or deletes files.
@@ -118,7 +118,8 @@ Both Node components declare identical engines; no dependency versions were
 upgraded. Flutter's lock requires Dart >=3.11.0 and Flutter >=3.38.4; pubspec now
 declares those existing requirements. This does not certify every SDK allowed by
 the resolver constraints: use the selected release/test baseline. Python installs
-the pinned direct requirements; CTranslate2/PyAV/faster-whisper native compatibility
+the complete transitive pins and wheel hashes, using the pinned isolated installer;
+CTranslate2/PyAV/faster-whisper native compatibility
 must also be checked on the target CPU/GPU image. PyAV wheels carry FFmpeg libraries;
 source builds/CUDA require operator-provisioned native libraries. CI uses CPU/stub
 model tests and never downloads Whisper weights.
@@ -220,14 +221,19 @@ release/hygiene runs metadata/toolchain/docs/tool tests. No new costly test job.
 
 ### Pronunciation
 
-- [ ] Python 3.12.4 venv; `python -m pip install -r requirements.txt
-  -r requirements-dev.txt`; `python -B -m pip check`.
+- [ ] Fresh Python 3.12.4 venv; bootstrap
+  `python -m pip install --require-hashes --only-binary=:all: --no-deps -r requirements-installer.txt`,
+  then `python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt`
+  (production uses `requirements.txt`); `python -B -m pip check`.
 - [ ] `python -B -m unittest -v test_service`; `python -B ../scripts/check-python.py`.
   Tests stub Whisper; no model download/load is needed.
 - [ ] With externally injected production config, `python -B config.py --production`
   validates without inference/model load. Assemble/check source artifact.
 - [ ] Provision target-platform dependencies and immutable model/cache mount
-  separately. Operator starts `python -B main.py`: one worker, no reload, private
+  with nonempty `model.bin`, `config.json`, `tokenizer.json`; a missing tokenizer
+  or cache must fail readiness without fallback egress. Verify model digests;
+  the Python lock covers package wheels, not model weights.
+  Operator starts `python -B main.py`: one worker, no reload, private
   service token/network, 35-second default inference deadline and documented drain.
 
 ## Promotion, rollback and remaining operator requirements

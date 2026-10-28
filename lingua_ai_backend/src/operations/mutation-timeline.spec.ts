@@ -45,6 +45,7 @@ import { Progress } from '../progress/schemas/progress.schema';
 import { CommunityImageStorage } from '../community/community-image.storage';
 import { AiContextService } from '../flashcards/services/ai-context.service';
 import { telemetry } from './telemetry';
+import { multipartFieldFixtures } from '../../test/multipart-field-fixtures';
 
 const B = '22222222-2222-4222-8222-222222222222';
 describe('10B public mutation fencing on disposable replica set', () => {
@@ -565,6 +566,65 @@ describe('10B public mutation fencing on disposable replica set', () => {
     expect(await users.countDocuments()).toBe(count);
     expect((await users.findById(owner))?.name).toBe('changed');
   });
+  test.each(multipartFieldFixtures)(
+    'R1 $name rejects create/edit without receipt, file or timeline mutation',
+    async ({ fields }) => {
+      const image = await sharp({
+        create: { width: 2, height: 2, channels: 3, background: '#123456' },
+      })
+        .png()
+        .toBuffer();
+      const existing = await call('post', '/community/posts')
+        .send({ learningLanguage: 'en', text: 'preserve me' })
+        .expect(201);
+      const posts = db.db!.collection('communityposts');
+      const beforePosts = await posts.find().toArray();
+      const beforeReceipts = await receipts.find().lean();
+      const beforeFence = (await readTimelineControl(db, 2000)).fenceVersion;
+      const beforeFiles = await readdir(root, { recursive: true });
+      const store = jest.spyOn(app.get(CommunityImageStorage), 'store');
+      for (const method of ['post', 'put'] as const) {
+        const path =
+          method === 'post'
+            ? '/community/posts'
+            : `/community/posts/${(existing.body as { _id: string })._id}`;
+        const rejected = call(method, path)
+          .attach('image', image, 'fixture.png')
+          .field('learningLanguage', 'en');
+        for (const field of fields) rejected.field(field, 'fixture');
+        await rejected.timeout({ response: 5000, deadline: 10000 }).expect(400);
+      }
+      expect(store).not.toHaveBeenCalled();
+      expect(await posts.find().toArray()).toEqual(beforePosts);
+      expect(await receipts.find().lean()).toEqual(beforeReceipts);
+      expect(await readdir(root, { recursive: true })).toEqual(beforeFiles);
+      expect((await readTimelineControl(db, 2000)).fenceVersion).toBe(
+        beforeFence,
+      );
+      // A valid request still commits once after parser rejection.
+      await call('post', '/community/posts')
+        .send({ learningLanguage: 'en', text: 'still healthy' })
+        .expect(201);
+      expect((await readTimelineControl(db, 2000)).fenceVersion).toBe(
+        beforeFence + 1,
+      );
+      await switchToB();
+      const stale = call('post', '/community/posts').attach(
+        'image',
+        image,
+        'fixture.png',
+      );
+      for (const field of fields) stale.field(field, 'fixture');
+      const response = await stale.expect(409);
+      expect((response.body as { code: string }).code).toBe(
+        'SERVER_TIMELINE_CHANGED',
+      );
+      expect(await posts.countDocuments()).toBe(2);
+      expect(await receipts.countDocuments()).toBe(beforeReceipts.length + 1);
+      expect(await readdir(root, { recursive: true })).toEqual(beforeFiles);
+      expect(store).not.toHaveBeenCalled();
+    },
+  );
   test('upload mismatched timeline is rejected before persistent allocation', async () => {
     const store = jest.spyOn(
       app.get<CommunityImageStorage>(CommunityImageStorage),

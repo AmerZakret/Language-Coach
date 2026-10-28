@@ -6,8 +6,23 @@ this service's own environment; do not inherit backend browser CORS configuratio
 
 ## Production
 
-Python 3.12.4 (the tested 3.12 baseline) and the direct dependencies in `requirements.txt` are the tested
-baseline. Install in an isolated virtual environment. PyAV wheels include FFmpeg
+Python 3.12.4 and the complete hashed dependency closure in `requirements.txt` are the tested
+baseline. Install in a fresh isolated virtual environment, from this directory:
+
+```sh
+python -m venv .venv
+# Activate .venv, or use its explicit Python executable for both commands.
+python -m pip install --require-hashes --only-binary=:all: --no-deps -r requirements-installer.txt
+python -m pip install --require-hashes --only-binary=:all: -r requirements.txt
+python -B -m pip check
+```
+
+The first install bootstraps exact pip 26.2.2 with a repository-pinned wheel hash.
+Its vendored certifi and application certifi are both 2026.10.19. Pip is dependency
+installation/provisioning tooling, never imported by service requests; upgrading
+application certifi alone would not replace pip's private certificate bundle.
+Do not upgrade global/system pip. Recreate old project venvs using these commands.
+PyAV wheels include FFmpeg
 libraries; CTranslate2/faster-whisper require supported native CPU instructions.
 The default is CPU `base` / `int8`, two CPU threads, one model per process.
 CUDA is opt-in and requires separately provisioned compatible NVIDIA libraries.
@@ -51,7 +66,11 @@ logs mode; classified service events replace library exception/text dumps.
 
 Pre-provision the exact faster-whisper converted model during an explicit build/
 artifact preparation step, then mount it read-only with its cache. Loading uses
-`local_files_only=True`; restarting production never downloads a model. Prefer an
+`local_files_only=True`; production validates nonempty `model.bin`, `config.json`
+and `tokenizer.json` before native loading. A missing tokenizer must fail rather
+than trigger faster-whisper's separate remote tokenizer fallback. Alias lookup
+uses only the configured local Hub cache; a missing cache fails readiness with
+`model.unavailable`, without trying a download. Prefer an
 immutable local model directory plus an operator-recorded artifact digest. Named
 model aliases do not pin an upstream revision; artifact pinning remains a deployment
 responsibility. No extra warmup is performed: successful load gates readiness.
@@ -123,8 +142,44 @@ downloads require deliberate `WHISPER_ALLOW_DOWNLOAD=true` in development only.
 For iteration only: `uvicorn main:app --reload --host 127.0.0.1 --port 8001`.
 
 Install `requirements-dev.txt`, then run `python -B -m unittest -v test_service`.
+Bootstrap the same pinned installer first. HTTPX is already in the locked runtime
+Hub dependency graph; the development requirements add no unpinned dependencies.
 Tests use synthetic local audio, real PyAV decode and stub model loading/inference;
 no model is downloaded and no provider is called.
+
+## Dependency integrity and security (11A-R2)
+
+`requirements.in` lists the reviewed exact direct/transitive versions. To update,
+edit only intended pins, then run `python -B scripts/lock-python.py` from the
+repository root. The stdlib generator fetches published wheel SHA-256 hashes from
+PyPI without selecting newer package versions; review the diff and clean-install.
+`requirements.txt` enforces hashes and binary wheels. Hashes cover all published
+platform wheels, not only the generator host; the supported baseline is CPython
+3.12 on Windows/Linux x86_64. Windows-only colorama uses a marker. Linux wheel
+hashes and dependency metadata closure are checked separately from Windows tests;
+native CPU/GPU execution still requires deployment-platform validation. Other
+platforms/source builds need a separately reviewed lock, not disabled hash checks.
+
+`python -B ../scripts/check-python.py` checks every installed transitive version,
+dependency constraint, input/lock agreement, installer pin, workflow YAML, action
+SHA pins and read-only permissions. Run it after installation from this directory.
+Security updates require read-only advisory lookup, feature reachability review,
+clean installs and full tests; never accept resolver-driven major changes blindly.
+
+R2 patches certifi, AnyIO, fsspec, python-multipart and supported Starlette without
+changing FastAPI, HTTPX, faster-whisper or native inference packages. Remaining
+registry findings are conditional: filelock 3.29.0 (GHSA-v4x8-3wr5-3wq8,
+GHSA-9vhv-jxww-xfm5, GHSA-567q-5qvw-pf92) and setuptools 82.0.1
+(GHSA-h35f-9h28-mq5c, GHSA-xmj3-9gf7-h52w). SQLite ReadWriteLock is unused;
+Hub uses FileLock with a SoftFileLock fallback for unsupported filesystems.
+Production uses a provisioned, trusted, immutable model/cache mount, not concurrent
+downloads. The setuptools findings concern building/installing untrusted artifacts;
+this workflow permits only reviewed hashed wheels. Defer the filelock major update
+and setuptools work to R3; these are not demonstrated service request exposures.
+
+Python TLS/provisioning and reproducibility staging dependency holds are cleared
+by this declared set and offline artifact checks. This does not authorize staging
+traffic or certify a real deployment's model provenance, filesystem or credentials.
 
 ## Release packaging
 

@@ -15,13 +15,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22.14.0'
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.npm/_cacache
           key: ${{ runner.os }}-${{ runner.arch }}-node22.14.0-npm10.9.0-${{ hashFiles('lingua_ai_backend/package-lock.json') }}
@@ -34,14 +34,14 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22.14.0'
       # The real reset-route contract fixture uses Nest from backend dev deps.
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.npm/_cacache
           key: ${{ runner.os }}-${{ runner.arch }}-node22.14.0-npm10.9.0-${{ hashFiles('lingua_ai_backend/package-lock.json', 'lingua_ai_web/package-lock.json') }}
@@ -56,18 +56,18 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22.14.0'
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.npm/_cacache
           key: ${{ runner.os }}-${{ runner.arch }}-node22.14.0-npm10.9.0-${{ hashFiles('lingua_ai_backend/package-lock.json') }}
       - run: npm install --global npm@10.9.0
       - run: npm ci
         working-directory: lingua_ai_backend
-      - uses: subosito/flutter-action@v2
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
         with:
           flutter-version: '3.41.7'
           channel: stable
@@ -77,19 +77,23 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22.14.0'
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: '3.12.4'
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-${{ runner.arch }}-python3.12.4-${{ hashFiles('lingua_ai_pronunciation_service/requirements*.txt') }}
       - run: python -m venv .venv
-      - run: ../.venv/bin/python -m pip install -r requirements.txt -r requirements-dev.txt
+      - run: >-
+          ../.venv/bin/python -m pip install --require-hashes --only-binary=:all: --no-deps -r requirements-installer.txt
+        working-directory: lingua_ai_pronunciation_service
+      - run: >-
+          ../.venv/bin/python -m pip install --require-hashes --only-binary=:all: -r requirements-dev.txt
         working-directory: lingua_ai_pronunciation_service
         # Use the root venv, not a developer service environment.
       - run: node scripts/quality-check.cjs pronunciation
@@ -100,13 +104,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: '22.14.0'
-      - uses: actions/cache@v4
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.npm/_cacache
           key: ${{ runner.os }}-${{ runner.arch }}-node22.14.0-npm10.9.0-${{ hashFiles('lingua_ai_backend/package-lock.json') }}

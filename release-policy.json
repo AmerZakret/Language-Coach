@@ -84,7 +84,8 @@
       "main.py",
       "config.py",
       "audio.py",
-      "requirements.txt"
+      "requirements.txt",
+      "requirements-installer.txt"
     ]
   },
   "flutter": {
