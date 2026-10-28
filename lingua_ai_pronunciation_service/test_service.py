@@ -5,6 +5,7 @@ from dataclasses import replace
 import io
 import json
 import logging
+import importlib.util
 import os
 from pathlib import Path
 import secrets
@@ -125,7 +126,7 @@ class ConfigTests(unittest.TestCase):
         source = Path("main.py").read_text()
         self.assertIn("workers=1", source)
         self.assertIn("access_log=False", source)
-        requirements = Path("requirements.txt").read_text().splitlines()
+        requirements = Path("requirements.in").read_text().splitlines()
         self.assertTrue(all("==" in line for line in requirements if line and not line.startswith("#")))
         production_docs = Path("README.md").read_text().split("## Development")[0]
         self.assertNotIn("--reload", production_docs)
@@ -136,12 +137,106 @@ class ConfigTests(unittest.TestCase):
             logging.getLogger('faster_whisper').warning('sensitive-model-path')
             calls.append((args, kwargs))
             return Model()
-        with patch.dict(sys.modules, {'faster_whisper': SimpleNamespace(WhisperModel=whisper)}), \
+        with tempfile.TemporaryDirectory() as directory, \
+                patch.dict(sys.modules, {'faster_whisper': SimpleNamespace(WhisperModel=whisper)}), \
                 self.assertNoLogs('faster_whisper', level='WARNING'):
-            main.load_model(Settings.from_env(self.production()))
+            for name in ('model.bin', 'config.json', 'tokenizer.json'):
+                (Path(directory) / name).write_text('fixture')
+            main.load_model(Settings.from_env(self.production(WHISPER_MODEL=directory)))
         self.assertTrue(calls[0][1]['local_files_only'])
         self.assertEqual(calls[0][1]['num_workers'], 1)
         self.assertEqual(calls[0][1]['device'], 'cpu')
+
+
+class DependencyIntegrityTests(unittest.TestCase):
+    def checker(self):
+        spec = importlib.util.spec_from_file_location('check_python', Path(__file__).resolve().parent.parent / 'scripts/check-python.py')
+        checker = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(checker)
+        return checker
+
+    def test_lock_rejects_missing_hashes_and_floating_versions(self):
+        checker = self.checker()
+        with tempfile.TemporaryDirectory() as directory:
+            lock = Path(directory) / 'requirements.txt'
+            for pin in ('certifi==2026.10.19', 'certifi>=2026.10.19 --hash=sha256:' + 'a' * 64):
+                lock.write_text('--require-hashes\n--only-binary=:all:\n' + pin)
+                with self.subTest(pin=pin), self.assertRaises(AssertionError):
+                    checker.read_lock(lock)
+
+    def test_workflow_rejects_mutable_action_and_write_permissions(self):
+        checker = self.checker()
+        workflow = (Path(__file__).resolve().parent.parent / '.github/workflows/quality.yml').read_text()
+        self.assertEqual(checker.validate_workflow(workflow), 5)
+        for invalid in (workflow.replace('contents: read', 'contents: write'),
+                        workflow.replace('actions/checkout@11d5960a326750d5838078e36cf38b85af677262', 'actions/checkout@v4')):
+            with self.assertRaises(AssertionError):
+                checker.validate_workflow(invalid)
+
+
+class ModelArtifactTests(unittest.IsolatedAsyncioTestCase):
+    async def test_production_local_and_cached_model_start_without_egress(self):
+        # Real faster-whisper constructor and tokenizer parser; only native
+        # weight loading is replaced. No model download or inference.
+        from tokenizers import Tokenizer, models
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            (path / 'model.bin').write_bytes(b'fake-native-weights')
+            (path / 'config.json').write_text('{}')
+            Tokenizer(models.WordLevel({'[UNK]': 0}, unk_token='[UNK]')).save(str(path / 'tokenizer.json'))
+            for model in (directory, 'base'):
+                with self.subTest(model=model), \
+                        patch('socket.socket.connect', side_effect=AssertionError('Unexpected network')), \
+                        patch('ctranslate2.models.Whisper', return_value=SimpleNamespace(is_multilingual=True)) as native, \
+                        patch('tokenizers.Tokenizer.from_pretrained', side_effect=AssertionError('Unexpected tokenizer download')) as fallback, \
+                        patch('faster_whisper.utils.download_model', return_value=directory) as cache:
+                    state = main.Runtime(settings(environment='production', model=model, cache=directory), main.load_model)
+                    try:
+                        await state.start()
+                        self.assertTrue(state.ready)
+                        self.assertIsNotNone(state.model.hf_tokenizer)
+                        self.assertEqual(native.call_args.args[0], str(path.resolve()))
+                        fallback.assert_not_called()
+                        if model == 'base':
+                            cache.assert_called_once_with('base', cache_dir=directory, local_files_only=True)
+                        else:
+                            cache.assert_not_called()
+                    finally:
+                        await state.stop()
+
+    async def test_missing_or_empty_production_artifact_fails_before_native_or_network(self):
+        for missing in ('model.bin', 'config.json', 'tokenizer.json'):
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as directory:
+                for name in ('model.bin', 'config.json', 'tokenizer.json'):
+                    (Path(directory) / name).write_text('fixture' if name != missing else '')
+                with patch('socket.socket.connect', side_effect=AssertionError('Unexpected network')), \
+                        patch('ctranslate2.models.Whisper') as native:
+                    config = settings(environment='production', model=directory, cache=directory)
+                    with self.assertRaisesRegex(ConfigurationError, missing):
+                        main.load_model(config)
+                    native.assert_not_called()
+                    state = main.Runtime(config, main.load_model)
+                    try:
+                        await state.start()
+                        self.assertFalse(state.ready)
+                    finally:
+                        await state.stop()
+
+    async def test_development_download_opt_in_is_preserved(self):
+        with patch('faster_whisper.WhisperModel', return_value=Model()) as constructor:
+            main.load_model(settings(environment='development', allow_download=True))
+            self.assertFalse(constructor.call_args.kwargs['local_files_only'])
+
+    async def test_missing_production_cache_never_downloads(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                patch('socket.socket.connect', side_effect=AssertionError('Unexpected network')) as network, \
+                patch('ctranslate2.models.Whisper') as native, \
+                patch('tokenizers.Tokenizer.from_pretrained') as fallback:
+            with self.assertRaisesRegex(ConfigurationError, 'Required local model cache is unavailable'):
+                main.load_model(settings(environment='production', model='base', cache=directory))
+            network.assert_not_called()
+            native.assert_not_called()
+            fallback.assert_not_called()
 
 
 class AudioTests(unittest.TestCase):

@@ -1,2 +1,2 @@
 -r requirements.txt
-httpx==0.28.1
+# HTTPX test transport is already pinned and hashed in the runtime Hub graph.

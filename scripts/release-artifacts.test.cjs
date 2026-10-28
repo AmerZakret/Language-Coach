@@ -51,7 +51,7 @@ test('9E web artifact rejects maps, env/config secrets, unsafe application endpo
 test('9E pronunciation source artifact excludes caches, model weights, audio, tests, venv and environment files', () => {
   const fixture = files({ ...Object.fromEntries(policy.pronunciation.sourceFiles.map(name => [name, ''])),
     'release-manifest.json': metadata('pronunciation', null, 'development', null) });
-  assert.equal(validate('pronunciation', fixture).files, 5);
+  assert.equal(validate('pronunciation', fixture).files, 6);
   for (const name of ['test_service.py', 'requirements-dev.txt', '__pycache__/main.pyc', 'model-cache/weights.bin', 'audio.wav', '.env', 'venv/x.py']) {
     const bad = new Map(fixture); bad.set(name, Buffer.from('forbidden')); assert.throws(() => validate('pronunciation', bad));
   }
@@ -110,11 +110,11 @@ test('9E assembly is explicit, refuses overwrite, and pronunciation package deri
     const destination = path.join(temporary, 'pronunciation');
     const before = fs.readFileSync(path.join(ROOT, 'lingua_ai_pronunciation_service/main.py'));
     const result = assemble('pronunciation', destination, ROOT, 'ci-fixture');
-    assert.equal(result.files, 5); assert.equal(result.appVersion, null);
+    assert.equal(result.files, 6); assert.equal(result.appVersion, null);
     assert.throws(() => assemble('pronunciation', destination), /must not exist/);
     assert.deepEqual(fs.readFileSync(path.join(ROOT, 'lingua_ai_pronunciation_service/main.py')), before);
     assert.equal(allowed('backend', 'dist/src/auth/auth.controller.js', policy), true);
-    assert.equal(plan('pronunciation').size, 5);
+    assert.equal(plan('pronunciation').size, 6);
   } finally {
     cleanup();
   }

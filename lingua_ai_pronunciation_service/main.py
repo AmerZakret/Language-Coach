@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import hmac
 import json
 import logging
+from pathlib import Path
 import re
 import time
 import uuid
@@ -18,7 +19,7 @@ from starlette.formparsers import MultiPartException, MultiPartParser
 from python_multipart.exceptions import MultipartParseError
 
 from audio import ServiceError, decode_audio
-from config import Settings
+from config import ConfigurationError, Settings
 
 logger = logging.getLogger("pronunciation")
 
@@ -43,7 +44,25 @@ def load_model(settings):
     # events replace those diagnostics; never enable transcript logging by default.
     logging.getLogger("faster_whisper").disabled = True
     from faster_whisper import WhisperModel
-    return WhisperModel(settings.model, device=settings.device, compute_type=settings.compute_type,
+    model = settings.model
+    if settings.environment == 'production':
+        if settings.allow_download:
+            raise ConfigurationError('Production model downloads are forbidden')
+        path = Path(model)
+        if not path.is_dir():
+            from faster_whisper.utils import download_model
+            # Resolve aliases exclusively from the provisioned local Hub cache.
+            try:
+                path = Path(download_model(model, cache_dir=settings.cache, local_files_only=True))
+            except Exception:
+                raise ConfigurationError('Required local model cache is unavailable') from None
+        # local_files_only does not cover the library's tokenizer fallback.
+        # Require complete immutable artifacts before entering native loading.
+        for name in ('model.bin', 'config.json', 'tokenizer.json'):
+            if not (path / name).is_file() or (path / name).stat().st_size == 0:
+                raise ConfigurationError(f'Missing required local model artifact: {name}')
+        model = str(path.resolve())
+    return WhisperModel(model, device=settings.device, compute_type=settings.compute_type,
                         download_root=settings.cache, local_files_only=not settings.allow_download,
                         cpu_threads=2, num_workers=1)
 
