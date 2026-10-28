@@ -1,3 +1,4 @@
+import { TimelineRecoveryRequired } from './dataTimeline';
 import { ClientUpdateRequired, compatibilityCode } from './releaseCompatibility';
 export const REPLAY_TIMEOUT_MS = 45_000;
 export const RETRY_BASE_MS = 5_000;
@@ -23,6 +24,10 @@ export function classifySyncFailure(error: any): { category: string; terminal: b
     return { category: 'compatibility', terminal: false, status: 426 };
   const rawCode = error instanceof InvalidQueuedPayload ? error.code : error?.response?.data?.code;
   const code = typeof rawCode === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(rawCode) ? rawCode : undefined;
+  if (error instanceof TimelineRecoveryRequired || (status === 409 && ['SERVER_TIMELINE_CHANGED', 'RECEIPT_TIMELINE_UNVERIFIED'].includes(code || '')))
+    return { category: 'timeline', terminal: false, code, status };
+  if (status === 428 && code === 'SERVER_TIMELINE_REQUIRED') return { category: 'provenance', terminal: false, code, status };
+  if (status === 503 && code === 'BACKEND_NOT_READY') return { category: 'maintenance', terminal: false, code, status };
   const known: Record<string, string> = { STALE_PROGRESS_EPOCH: 'stale-epoch', FUTURE_PROGRESS_EPOCH: 'future-epoch',
     STALE_RESET_EPOCH: 'stale-reset-epoch', FUTURE_RESET_EPOCH: 'future-reset-epoch',
     RESET_IDEMPOTENCY_CONFLICT: 'reset-key-conflict', MISSING_PROGRESS_EPOCH: 'missing-epoch', INVALID_PROGRESS_EPOCH: 'invalid-epoch' };

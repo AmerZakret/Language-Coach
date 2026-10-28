@@ -1,3 +1,7 @@
+import { UnitTimelineModule } from '../../test/timeline-fixture';
+import { PUBLIC_WRITER_INVENTORY } from './protocol-contract';
+import { MutationTimeline } from '../operations/mutation-timeline';
+import { unitTimeline, TEST_TIMELINE } from '../../test/timeline-fixture';
 import { Body, Controller, Get, Post, RequestMethod } from '@nestjs/common';
 import type { Server } from 'node:http';
 import type { INestApplication } from '@nestjs/common';
@@ -83,9 +87,11 @@ describe('client protocol HTTP contract', () => {
           ],
         }),
         SecurityModule,
+        UnitTimelineModule,
       ],
       controllers: [ProgressProbe, AuthProbe, FlashcardsController],
       providers: [
+        { provide: MutationTimeline, useValue: unitTimeline },
         {
           provide: FlashcardsService,
           useValue: { getAllCards: () => [], getDueCards: () => [] },
@@ -137,6 +143,7 @@ describe('client protocol HTTP contract', () => {
     await request(app.getHttpServer())
       .post('/flashcards')
       .set('X-Client-Protocol', String(CURRENT_CLIENT_PROTOCOL))
+      .set('X-Data-Timeline', TEST_TIMELINE)
       .set('X-Idempotency-Key', 'stable-create')
       .send({
         targetWord: 'word',
@@ -149,7 +156,7 @@ describe('client protocol HTTP contract', () => {
   test.each([
     undefined,
     '0',
-    '2',
+    '1',
     '01',
     '-1',
     '1.0',
@@ -174,6 +181,7 @@ describe('client protocol HTTP contract', () => {
         updateRequired: true,
         currentProtocolRevision: CURRENT_CLIENT_PROTOCOL,
         minimumMutationRevision: CURRENT_CLIENT_PROTOCOL,
+        timelineAwareProtocolRevision: 2,
         policy: 'ENFORCE_MUTATIONS',
         buildId: 'ci-fixture.1',
       });
@@ -186,7 +194,7 @@ describe('client protocol HTTP contract', () => {
     config.set('CLIENT_PROTOCOL_POLICY', 'ALLOW_LEGACY');
     await request(app.getHttpServer())
       .post(`/progress/${owner}/complete-lesson`)
-      .set('X-Client-Protocol', '2')
+      .set('X-Client-Protocol', '3')
       .send({})
       .expect(426);
   });
@@ -203,8 +211,11 @@ describe('client protocol HTTP contract', () => {
     expect(response.body).toEqual({
       currentProtocolRevision: CURRENT_CLIENT_PROTOCOL,
       minimumMutationRevision: CURRENT_CLIENT_PROTOCOL,
+      timelineAwareProtocolRevision: 2,
       policy: 'ENFORCE_MUTATIONS',
       buildId: 'ci-fixture.1',
+      dataTimelineId: null,
+      timelineWriteState: 'UNAVAILABLE',
     });
   });
   test('CORS permits protocol alongside existing authorization and mutation headers', async () => {
@@ -237,6 +248,7 @@ describe('client protocol HTTP contract', () => {
         const response = await request(app.getHttpServer())
           [method](path)
           .set('X-Client-Protocol', String(CURRENT_CLIENT_PROTOCOL))
+          .set('X-Data-Timeline', TEST_TIMELINE)
           .send({})
           .expect(400);
         expect((response.body as Record<string, unknown>).code).toBe(
@@ -251,6 +263,7 @@ describe('client protocol HTTP contract', () => {
       await request(app.getHttpServer())
         .put('/flashcards/card/review')
         .set('X-Client-Protocol', String(CURRENT_CLIENT_PROTOCOL))
+        .set('X-Data-Timeline', TEST_TIMELINE)
         .set('X-Idempotency-Key', 'stable-review')
         .send({ score: 4 })
         .expect(200, { _id: 'keyed-result' });
@@ -316,6 +329,15 @@ test('every current controller route has an explicit protocol classification', (
   expect([...actual].sort()).toEqual(
     PROTOCOL_ROUTES.map((row) => `${row[0]} ${row[1]}`).sort(),
   );
+  expect(
+    [...actual].filter((route) => !/^(GET|HEAD|OPTIONS) /.test(route)).sort(),
+  ).toEqual(PUBLIC_WRITER_INVENTORY.map((row) => `${row[0]} ${row[1]}`).sort());
+  for (const [method, path, classification] of PUBLIC_WRITER_INVENTORY) {
+    if (classification === 'FENCED')
+      expect(protocolRoute(method, path)).toBe(
+        'PROTOCOL_REQUIRED_WHEN_ENFORCED',
+      );
+  }
   expect(protocolRoute('POST', '/new-unclassified-writer')).toBe(
     'PROTOCOL_REQUIRED_WHEN_ENFORCED',
   );

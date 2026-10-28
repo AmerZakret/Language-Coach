@@ -1,3 +1,4 @@
+import 'data_timeline.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'auth_service.dart';
@@ -42,7 +43,7 @@ class ProgressService extends ChangeNotifier {
     final version = TargetLanguageService().languageVersion;
     return () =>
         reset == _resetRevision &&
-        session.isCurrent &&
+        session.isDataCurrent &&
         TargetLanguageService().currentLanguage == language &&
         TargetLanguageService().languageVersion == version;
   }
@@ -69,12 +70,21 @@ class ProgressService extends ChangeNotifier {
     await reloadProgress();
     ConnectivityService().addListener(_onConnectivityChanged);
     AuthService().addListener(_onAuthChanged);
+    DataTimeline().addListener(_onTimelineChanged);
   }
 
   void _onConnectivityChanged() {
     if (ConnectivityService().isOnline) {
       syncWithBackend();
     }
+  }
+
+  int _timelineRevision = -1;
+  void _onTimelineChanged() {
+    if (_timelineRevision == DataTimeline().revision) return;
+    _timelineRevision = DataTimeline().revision;
+    ++_requestRevision;
+    reloadProgress();
   }
 
   void _onAuthChanged() {
@@ -85,6 +95,7 @@ class ProgressService extends ChangeNotifier {
   void dispose() {
     ConnectivityService().removeListener(_onConnectivityChanged);
     AuthService().removeListener(_onAuthChanged);
+    DataTimeline().removeListener(_onTimelineChanged);
     super.dispose();
   }
 
@@ -153,6 +164,7 @@ class ProgressService extends ChangeNotifier {
     final current = base.overlay(
         actions
             .where((a) =>
+                DataTimeline().matchesCache(a.dataTimelineId) &&
                 a.ownerNamespace == owner &&
                 a.type == 'complete-lesson' &&
                 a.payload['_lessonLanguageBound'] == true &&
@@ -162,6 +174,7 @@ class ProgressService extends ChangeNotifier {
                 a.payload['progressEpoch'] == epoch)
             .map((a) => a.payload),
         reset: actions.any((a) =>
+            DataTimeline().matchesCache(a.dataTimelineId) &&
             a.ownerNamespace == owner &&
             a.type == 'reset-progress' &&
             ProgressEpoch.valid(epoch) &&
@@ -210,7 +223,7 @@ class ProgressService extends ChangeNotifier {
     final auth = AuthService();
     final session = auth.captureSession();
     final reset = _resetRevision;
-    bool isCurrent() => session.isCurrent && reset == _resetRevision;
+    bool isCurrent() => session.isDataCurrent && reset == _resetRevision;
     final owner = auth.localStorageNamespace;
     final language = TargetLanguage.code(lessonLanguage);
     final queue = OfflineQueueService();

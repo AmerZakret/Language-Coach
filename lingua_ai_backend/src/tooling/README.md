@@ -85,3 +85,59 @@ Run this tool from the reviewed release checkout after `npm run build`; its
 compiled CLI is intentionally excluded from the minimal backend runtime artifact.
 It is never a startup hook. See [Release packaging](../../../RELEASE_PACKAGING.md)
 for the OPERATOR_TOOL classification and separate runtime allowlist.
+
+
+## Timeline control (Phase 10A)
+
+`timeline-control.ts` and `timeline-control-cli.ts` are OPERATOR_TOOL, excluded from
+the backend runtime artifact. They are never imported by Nest controllers, startup,
+readiness, deployment preflight or quality commands. Build the reviewed checkout,
+then run `node dist/src/tooling/timeline-control-cli.js --help`. Commands are
+inspect, initialize, close, install-timeline and open. All mutations require explicit
+target/event/operator/database confirmation; transitions require expected current
+timeline/state/controlVersion; production additionally requires maintenance and
+production confirmations. There is no repair action or implicit ID generation.
+
+Full instructions, external latch ordering, initialization, safe retry, hard restore
+isolation and audit limitations are in
+[the production runbook](../../../PRODUCTION_RUNBOOKS.md#phase-10a-timeline-control-procedure).
+Mongo audit rolls back with Mongo. Keep independent external audit and issued-ID
+history; this tool cannot guarantee external retention or discover unannounced
+restores. The fence API is a foundation for 10B, not current domain/client fencing.
+
+
+## Phase 10B operator domain-write boundary
+
+Progress audit --apply/rollback and catalog replacement/provisioning require hard
+maintenance isolation: ingress closed, application/background processes drained,
+matching expected timeline and both external and Mongo write controls CLOSED.
+Retain independent operator evidence and backup boundaries. These tools use
+separate operator authority, not public client headers, and must never be run
+against OPEN application traffic. Normal startup no longer seeds a lesson catalog.
+
+For restore reopening use ENFORCE_MUTATIONS with a proven v2-capable client cohort;
+ALLOW_LEGACY is not restore-safe. The timeline CLI additionally refuses to open
+known restored metadata while the production policy permits legacy clients.
+
+## Phase 10E read-only restore consistency evidence
+
+`restore-consistency.ts` is an OPERATOR_TOOL library exercised only with the
+disposable restore drill. It accepts an already selected connection and upload
+root; it has no URI/config loader, CLI, startup registration, repair or open action.
+`captureRestoreManifest` fingerprints the selected domain/receipt/barrier
+collections and upload bytes. Retain the trusted coordinated manifest outside
+the Mongo restore boundary. It contains digests, not profile/provider payloads.
+
+`auditRestoreConsistency` checks closed external/Mongo controls, matching expected
+timeline, unchanged control across inspection, manifest completeness, expected
+indexes, collection fingerprints, upload fingerprints, orphans and missing
+references. Any mismatch/incomplete check requires reconciliation; a matching
+snapshot is evidence only and never opens writes. Tests monitor actual Mongo
+commands to verify this audit emits no writes. Capture must be coordinated under
+hard isolation; this helper is not a transactional filesystem/DB backup system,
+an exhaustive semantic reconstruction tool, or a witnessed production restore.
+
+Run the focused disposable scenario with the existing test dependency cache:
+`node node_modules/jest/bin/jest.js --runInBand --runTestsByPath src/operations/restore-drill.spec.ts`
+from the backend directory. The root quality harness selects the cached Mongo
+binary automatically. See [the drill evidence](../../../PHASE_10E_RESTORE_DRILL.md).

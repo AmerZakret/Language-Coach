@@ -1,3 +1,4 @@
+import 'data_timeline.dart';
 import 'client_compatibility.dart';
 import 'dart:async';
 import 'package:flutter/foundation.dart';
@@ -63,8 +64,8 @@ class SyncCoordinator {
       return;
     }
     final session = AuthService().captureSession();
-    final actions = await _queue.getQueue();
-    if (ClientCompatibility().updateRequired || !_started || !session.isCurrent || actions.isEmpty) return;
+    final actions = (await _queue.getQueue()).where((a) => !a.reconciliationRequired && DataTimeline().canDispatch(a.dataTimelineId) && a.clientProtocolRevision == 2).toList();
+    if (ClientCompatibility().updateRequired || !_started || !session.isDataCurrent || actions.isEmpty) return;
     final due = actions.first.nextAttemptAt ?? _now();
     var delay = due.difference(_now());
     if (delay <= Duration.zero) delay = const Duration(milliseconds: 1);
@@ -85,18 +86,18 @@ class SyncCoordinator {
     var storageFailure = false;
     final session = auth.captureSession();
     try {
-      final actions = await _queue.getQueue();
+      final actions = (await _queue.getQueue()).where((a) => !a.reconciliationRequired && DataTimeline().canDispatch(a.dataTimelineId) && a.clientProtocolRevision == 2).toList();
       lastStorageError = null;
-      if (ClientCompatibility().updateRequired || !_started || !session.isCurrent || actions.isEmpty) return;
+      if (ClientCompatibility().updateRequired || !_started || !session.isDataCurrent || actions.isEmpty) return;
       if (actions.first.nextAttemptAt?.isAfter(_now()) == true) return;
       final failedCount = (await _queue.getFailedActions()).length;
-      if (!session.isCurrent) return;
+      if (!session.isDataCurrent) return;
       final success =
           await _queue.processQueue(session.userId, waitForActive: true);
-      if (ClientCompatibility().updateRequired || !_started || !session.isCurrent) return;
-      final remaining = await _queue.getQueue();
+      if (ClientCompatibility().updateRequired || !_started || !session.isDataCurrent) return;
+      final remaining = (await _queue.getQueue()).where((a) => !a.reconciliationRequired && DataTimeline().canDispatch(a.dataTimelineId) && a.clientProtocolRevision == 2).toList();
       final failures = await _queue.getFailedActions();
-      if (ClientCompatibility().updateRequired || !_started || !session.isCurrent) return;
+      if (ClientCompatibility().updateRequired || !_started || !session.isDataCurrent) return;
       if (remaining.length < actions.length || failures.length > failedCount) {
         onChanged?.call(success);
       }

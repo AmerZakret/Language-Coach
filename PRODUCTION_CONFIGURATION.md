@@ -21,6 +21,8 @@ same offline preflight; build success alone is not a readiness check.
 | Variable | Production contract |
 |---|---|
 | `NODE_ENV` | Explicitly `production`; only development/test/production accepted |
+| `DATA_TIMELINE_ID` | Required independent public timeline expectation; canonical lowercase UUID v4, exactly 36 characters; no generated/default/DB-derived value |
+| `DATA_WRITE_MODE` | Required operator/deployment latch: exactly `OPEN` or `CLOSED`; missing production value rejects startup |
 | `MONGODB_URI` | Required valid `mongodb://` or `mongodb+srv://` URI; never hardcoded/logged |
 | `JWT_SECRET` | Required cryptographically random secret, at least 32 characters and 12 distinct characters; defaults, placeholders, single-case/numeric-only and repeated values rejected |
 | `PORT` | Optional; integer 1–65535, default 3000; binds all interfaces behind controlled ingress |
@@ -592,3 +594,193 @@ compatible cohort, authorize a policy flip, or remediate historical credentials.
 See [Release packaging and checklist](RELEASE_PACKAGING.md) for artifact allowlists,
 source-map policy, validated toolchains, build/version metadata and operator-only
 identity/signing/configuration requirements.
+
+
+## Phase 10A timeline control and write readiness
+
+The original 10A control foundation is retained. Phase 10B extends it with the
+server mutation contract documented below. Browser and Flutter durable queues
+still lack timeline IDs until 10C/10D; production traffic remains unauthorized.
+
+`DATA_TIMELINE_ID` is a non-secret equality token issued deliberately by the
+operator as a fresh random UUID v4. It is independent of Mongo, timestamps, app
+versions, build IDs, protocol revisions and progressEpoch. It must be canonical
+lowercase, exactly 36 characters, with no whitespace. Supply it through external
+deployment configuration; keep it out of secret rotation semantics. No real ID is
+provided here. There is no startup random default and no fallback to a DB value.
+`DATA_WRITE_MODE` is the separate external write latch. Missing/invalid values for
+either setting fail production validation before any connection or Nest startup.
+
+The external control record must durably maintain the expected active timeline,
+maintenance/write latch, restore event/reference, and operator audit evidence.
+Provisioning and retention of that independent record remain operator work; no
+vendor is prescribed. Updating environment configuration is not a live fleet
+broadcast: replace/drain every process to apply it. Never rely on an old process
+noticing an external environment edit. Hard ingress/network isolation is required.
+
+Mongo `timelinecontrol` has exactly one document, `_id=global`, `singleton=global`,
+with dataTimelineId, OPEN/CLOSED writeState, controlVersion, fenceVersion,
+createdAt/updatedAt, lastEventId, and optional sourceTimelineId. The exact strict
+JSON schema in `operations/timeline-contract.ts` rejects other identities, fields,
+malformed IDs, states, dates and unsafe/non-integral revisions. The unique
+`singleton_1` index and built-in `_id` constraint protect the singleton. Production
+readiness verifies the validator (strict/error), inventory index, and at most two
+raw records; it never applies schema/index changes. No timeline metadata is
+created, replaced, repaired or opened by boot, deploy, restart, scaling or probes.
+
+An existing database requires explicit operator initialization before readiness
+can pass. Use the separate OPERATOR_TOOL from the reviewed build checkout, with
+transaction-capable Mongo, external latch CLOSED, an explicitly supplied timeline
+and event ID, and hard maintenance isolation. Initialization provisions an absent
+strict collection/index and inserts CLOSED metadata plus audit transactionally.
+Existing unvalidated collections require separately reviewed operator migration;
+initialization refuses to overwrite their schema. Opening is a separate command.
+See the [timeline operator procedure](PRODUCTION_RUNBOOKS.md#phase-10a-timeline-control-procedure).
+
+Effective write readiness requires a valid external expectation, matching valid
+Mongo singleton, both latches OPEN, healthy Mongo transaction/index/upload checks,
+and a process that is not draining. Missing, duplicate, malformed, mismatched,
+CLOSED or unavailable control fails closed without reconciliation. Startup with
+valid configuration but invalid Mongo control can serve cheap liveness while
+remaining unready; it never admits ordinary production traffic. Public readiness
+returns only `ok|failed|pending` checks, including `timeline`; diagnostic codes
+contain no DB errors, IDs, paths, secrets or stacks.
+
+Readiness retains the existing bounded refresh (`READINESS_RECHECK_MS` plus
+`READINESS_TIMEOUT_MS` maximum validity). Disconnect/shutdown invalidates it.
+Each ordinary production HTTP admission also performs a fresh primary control
+read, so a previously green readiness cache cannot authorize a newly arriving
+request after a committed close/mismatch. Ordinary authenticated reads are
+conservatively gated too. Only health/liveness bypass this admission gate.
+Phase 10B additionally exempts public compatibility discovery from ordinary
+production gating; it exposes only bounded public availability metadata. Local/test defaults are empty expectation
+and CLOSED latch; explicitly initialize disposable DBs and supply synthetic IDs
+for local readiness. NODE_ENV never silently initializes timeline metadata.
+
+`TimelineWriteGate.assertAndTouchWriteFence(session, expectedTimeline)` is the 10B
+foundation. It requires an active caller-owned Mongo transaction on this connection,
+checks the deployment expectation/latch, infrastructure readiness and drain state,
+reads current raw control, and conditionally increments fenceVersion on that same
+OPEN timeline/control version. It never substitutes a read-only assertion and never
+retries or commits. Failure aborts the transaction and throws only a safe typed
+category: TIMELINE_CONTROL_UNAVAILABLE, TIMELINE_MISMATCH, WRITES_CLOSED or
+FENCE_CONFLICT. Callers must bound their session/transaction (defaultTimeoutMS
+must be positive and no greater than READINESS_TIMEOUT_MS; the primitive rejects
+unbounded sessions),
+propagate failure, and retry the complete transaction only after fresh admission.
+A control update committed after a transaction snapshot conflicts with the fence
+write. A fence acquired first serializes a concurrent control update after that
+transaction, or makes the control operation fail and require an explicit safe retry.
+Shared-document contention/capacity analysis remains for 10E. Phase 10B domain writers now use this fence. Hard restore isolation and draining
+remain mandatory, including isolation from old/uncontrolled instances.
+
+Read-handler audit: users/me and JWT owner resolution read users; lesson queries
+read the catalog; progress GET reads inside a snapshot transaction; reset-receipt GET reads saved
+owner/receipt state without replaying the operation;
+flashcard due/all read cards; AI history reads messages; Community feed reads posts.
+These handlers contain no domain persistence writes. Authentication/abuse controls
+can update process-local accounting, and all ordinary requests remain gated rather
+than assuming GET implies absence of side effects. Startup lesson seeding remains
+disabled in production. No read handler can invoke operator transitions.
+
+Mongo audit events and timeline provenance can themselves roll back. They are
+useful local evidence, never the independent external audit source. If an operator
+restores data with unchanged external control and without hard write isolation,
+software cannot reliably detect that restore. An old process retaining access to
+an old/uncontrolled DB cannot be made safe by this foundation: ingress closure,
+process termination, endpoint isolation and credential/network restrictions remain
+mandatory operator responsibilities.
+
+
+## Phase 10B server mutation contract
+
+The server supports protocol revisions 1 and 2. Revision 1 retains its existing
+payload/queue contract. Revision 2 adds a required `X-Data-Timeline` precondition
+on durable mutations and reset-receipt recovery. The header is a public canonical
+lowercase UUID v4, exactly matching the control-plane identity; it is neither
+credentials nor authorization, owner identity, progressEpoch or app/build version.
+CORS allows it alongside existing authorization/protocol/idempotency headers.
+Current web and Flutter runtimes remain revision 1 until 10C/10D.
+
+Production must explicitly supply the existing CLIENT_PROTOCOL_POLICY:
+
+| Policy | Durable mutation behavior |
+|---|---|
+| ALLOW_LEGACY | Absent protocol header and declared v1 retain transitional behavior on a pre-restore dataset. Declared v2 requires a timeline. Any declared timeline must be canonical and match. All DB writes, including unkeyed legacy flashcards, use a real transaction fence. |
+| ENFORCE_MUTATIONS | Missing/unsupported protocol or declared v1 is rejected with 426. V2 requires a matching timeline. Future revisions above 2 are rejected. |
+
+ALLOW_LEGACY cannot establish the original timeline of an offline v1 intent.
+It is migration convenience, **not restore-safe**. After any real restore keep
+writes externally closed until a timeline-aware client cohort exists and
+ENFORCE_MUTATIONS is configured on every new instance. Do not open restored data
+for general v1 writes. Known restore provenance in control metadata also blocks
+write readiness while policy permits legacy clients. Opening restored control via
+the operator CLI requires ENFORCE_MUTATIONS. A pre-10A backup initialized afresh
+may lack restore provenance; the external procedure must still enforce this rule.
+No software can detect an unannounced restore with unchanged external control.
+
+| Status | Safe machine code |
+|---|---|
+| 400 | INVALID_DATA_TIMELINE for a malformed declared header |
+| 426 | CLIENT_PROTOCOL_REQUIRED / CLIENT_PROTOCOL_UNSUPPORTED |
+| 428 | SERVER_TIMELINE_REQUIRED for v2 without a timeline |
+| 409 | SERVER_TIMELINE_CHANGED for request/receipt provenance mismatch |
+| 409 | RECEIPT_TIMELINE_UNVERIFIED for an unscoped receipt requiring v2 provenance |
+| 503 | BACKEND_NOT_READY for CLOSED/unavailable control or exhausted fence retries |
+
+These are preconditions, never 401 authentication errors. Bodies contain fixed
+messages/codes only; no Mongo metadata, paths, operator events, source provenance
+or stacks are returned. Matching or forged current timelines confer no authority.
+Existing ownership checks and payload allowlists remain mandatory.
+
+The inner ordering is route authentication/authoritative owner, protocol and
+request timeline admission, DTO/file pipes, fenced transaction, receipt lookup,
+barrier/revision/epoch/domain checks, domain and receipt writes, final admission
+recheck and commit. Registration/guest creation have no existing identity to
+authenticate; their newly created identity is fenced before persistence. An outer
+production infrastructure/admission refusal can return 503 before authentication.
+No stale timeline request reaches receipt replay, AI barriers/provider calls,
+permanent file allocation or destructive work.
+
+MutationReceipts (Community/AI), FlashcardOperation and ProgressReset now have
+optional-for-legacy, immutable dataTimelineId fields. Every new receipt records
+the admitted timeline. Existing unique owner/type/operation keys are unchanged;
+timeline is **not** added to them. A surviving old receipt therefore prevents
+silent reuse of its operation ID on a later timeline. Never mass-relabel historical
+receipts: v2 refuses missing provenance, while v1 may replay an unscoped receipt
+only under pre-restore ALLOW_LEGACY. No TTL or production index repair is added.
+Progress completion uses its existing completion uniqueness/epoch rules rather
+than a new operation receipt; reset and recovery additionally check receipt scope.
+
+All authoritative replay decisions, including duplicate-key recovery, occur in
+freshly fenced transactions. AI barrier initialization/upsert and increment are
+inside the same transaction, after timeline and receipt checks. Committed replay
+bypasses provider invocation. Generated content is reused during callback retries;
+message pair, barrier and receipt remain atomic. Provider calls still have explicit
+deadlines; long-running provider work can contend on the shared control record.
+
+For images, a fenced receipt probe precedes preparation so a committed replay
+never allocates a file. Fresh admission precedes mkdir/allocation. Preparation
+occurs before the final fenced DB transaction, which repeats receipt/owner/revision
+checks. A close after staging blocks commit. Compensation is limited to files
+allocated by that storage instance and verified by contained path and file identity,
+after checking DB references. Referenced/uncertain files are preserved. Ordinary
+historical-image removal also needs fresh admission; there is no orphan sweep.
+Mongo cannot make filesystem effects transactional; hard restore isolation remains
+required around in-flight filesystem operations and other processes.
+
+Manual transaction handling avoids a driver withTransaction double-abort of the
+10A fence's already-aborted transaction. Each actual attempt touches the shared
+record once; bounded retries keep the original admitted timeline and abort all
+failed domain/receipt work. Unknown commit results retry commit on the same session,
+not the domain operation. Safe conflict/retry counters are emitted without payloads,
+prompts, tokens or file contents. Load/rate/latency characterization remains 10E.
+
+Read policy: liveness and no-store compatibility discovery remain reachable during
+CLOSED state. Compatibility reports server revision, staged minimum mutation
+revision, timeline-aware revision, current matching public timeline (or null),
+OPEN/CLOSED/UNAVAILABLE effective state and public build identity. It performs
+bounded primary reads and never provisions/repairs metadata. Ordinary production
+reads, login, uploads and stateless provider routes retain the conservative outer
+10A readiness gate while CLOSED. With healthy OPEN control, login and pure reads
+require no v2 timeline; reset-receipt recovery is intentionally timeline-sensitive.

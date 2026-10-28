@@ -1,4 +1,4 @@
-import 'api_response.dart';
+import 'data_timeline.dart';
 import 'client_compatibility.dart';
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -25,7 +25,7 @@ class FlashcardService extends ChangeNotifier {
     final session = AuthService().captureSession();
     final language = TargetLanguageService().currentLanguage;
     final version = TargetLanguageService().languageVersion;
-    return () => session.isCurrent &&
+    return () => session.isDataCurrent &&
         TargetLanguageService().currentLanguage == language &&
         TargetLanguageService().languageVersion == version;
   }
@@ -66,7 +66,8 @@ class FlashcardService extends ChangeNotifier {
     final userPart = auth.localStorageNamespace;
 
     String langPart = targetLang.currentLanguage;
-    return 'flashcards_${userPart}_${langPart}_$suffix';
+    final key = 'flashcards_${userPart}_${langPart}_$suffix';
+    return userPart == 'local_guest' ? key : DataTimeline().cacheKey(key);
   }
 
   Future<void> init() async {
@@ -75,8 +76,18 @@ class FlashcardService extends ChangeNotifier {
     
     // Set up listener to reload flashcards when authentication state or language changes
     AuthService().addListener(_onAuthChanged);
+    DataTimeline().addListener(_onTimelineChanged);
     TargetLanguageService().addListener(_onLanguageChanged);
     ConnectivityService().addListener(_onConnectivityChanged);
+  }
+
+  int _timelineRevision = -1;
+  void _onTimelineChanged() {
+    if (_timelineRevision == DataTimeline().revision) return;
+    _timelineRevision = DataTimeline().revision;
+    _cards = [];
+    notifyListeners();
+    reloadFlashcards();
   }
 
   void _onAuthChanged() {
@@ -96,6 +107,7 @@ class FlashcardService extends ChangeNotifier {
   @override
   void dispose() {
     AuthService().removeListener(_onAuthChanged);
+    DataTimeline().removeListener(_onTimelineChanged);
     TargetLanguageService().removeListener(_onLanguageChanged);
     ConnectivityService().removeListener(_onConnectivityChanged);
     super.dispose();
@@ -106,7 +118,7 @@ class FlashcardService extends ChangeNotifier {
     final key = _getScopedKey('list');
     _cards = [];
     final legacyUserPart = AuthService().legacyRegisteredStorageNamespace;
-    if (legacyUserPart != null) {
+    if (legacyUserPart != null && AuthService().localStorageNamespace == 'local_guest') {
       final lang = TargetLanguageService().currentLanguage;
       final legacyKey = 'flashcards_${legacyUserPart}_${lang}_list';
       if (!_prefs.containsKey(key)) {
@@ -128,7 +140,8 @@ class FlashcardService extends ChangeNotifier {
     }
 
     final auth = AuthService();
-    if (auth.isLoggedIn && !auth.isGuest) {
+    if (auth.localStorageNamespace != 'local_guest' && auth.token.isNotEmpty &&
+        ConnectivityService().isOnline) {
       syncWithBackend();
     } else {
       notifyListeners();
@@ -152,7 +165,12 @@ class FlashcardService extends ChangeNotifier {
     final userId = auth.currentUserId.isNotEmpty ? auth.currentUserId : auth.currentUserEmail;
 
     // 1. Drain the offline queue first
-    await OfflineQueueService().processQueue(userId);
+    final drained = await OfflineQueueService().processQueue(userId);
+    if (!isCurrent()) return;
+    if (!drained && (await OfflineQueueService().getQueue()).any((a) =>
+        DataTimeline().matchesCache(a.dataTimelineId))) {
+      return;
+    }
     if (!isCurrent()) return;
 
     if (ConnectivityService().isOffline) {
@@ -190,52 +208,18 @@ class FlashcardService extends ChangeNotifier {
     final localId = 'local_${DateTime.now().microsecondsSinceEpoch}';
 
     if (ownerNamespace != 'local_guest' && auth.token.isNotEmpty) {
-      if (ConnectivityService().isOffline) {
-        debugPrint('Device is offline. Queueing createFlashcard.');
-        await OfflineQueueService().pushAction('create-flashcard', {
-          'tempId': localId,
-          'userId': userId,
-          'targetWord': targetWord,
-          'turkishTranslation': turkishTranslation,
-          'targetLanguage': targetLang,
-          'exampleSentence': exampleSentence,
-          'note': note,
-        }, ownerNamespace: ownerNamespace, operationId: operationId);
-        if (!isCurrent()) return;
-        _createLocalCard(userId, targetWord, turkishTranslation, targetLang, exampleSentence, note, localId: localId);
-        return;
-      }
-
-      try {
-        final newCard = await _apiService.createFlashcard(
-          targetWord,
-          turkishTranslation,
-          targetLang,
-          exampleSentence: exampleSentence,
-          note: note,
-          operationId: operationId,
-        );
-        if (!isCurrent()) return;
-        if (newCard.card != null) _cards.add(newCard.card!);
-        await _saveLocal();
-      } catch (e) {
-        if (e is ClientCompatibilityException || e is ApiException && e.kind == ApiFailure.compatibility) rethrow;
-        if (!isCurrent()) return;
-        debugPrint('Failed to create flashcard on backend: $e. Queueing instead.');
-        await OfflineQueueService().pushAction('create-flashcard', {
-          'tempId': localId,
-          'userId': userId,
-          'targetWord': targetWord,
-          'turkishTranslation': turkishTranslation,
-          'targetLanguage': targetLang,
-          'exampleSentence': exampleSentence,
-          'note': note,
-        }, ownerNamespace: ownerNamespace, operationId: operationId, dispatched: true);
-        if (!isCurrent()) return;
-        _createLocalCard(userId, targetWord, turkishTranslation, targetLang, exampleSentence, note, localId: localId);
-      }
+      await OfflineQueueService().pushAction('create-flashcard', {
+        'tempId': localId, 'userId': userId, 'targetWord': targetWord,
+        'turkishTranslation': turkishTranslation, 'targetLanguage': targetLang,
+        'exampleSentence': exampleSentence, 'note': note,
+      }, ownerNamespace: ownerNamespace, operationId: operationId);
+      if (!isCurrent()) return;
+      _createLocalCard(userId, targetWord, turkishTranslation, targetLang,
+          exampleSentence, note, localId: localId);
+      if (ConnectivityService().isOnline) await syncWithBackend();
     } else {
-      _createLocalCard(userId, targetWord, turkishTranslation, targetLang, exampleSentence, note, localId: localId);
+      _createLocalCard(userId, targetWord, turkishTranslation, targetLang,
+          exampleSentence, note, localId: localId);
     }
   }
 
@@ -303,42 +287,12 @@ class FlashcardService extends ChangeNotifier {
     }
 
     if (!isLocal) {
-      if (ConnectivityService().isOffline) {
-        debugPrint('Device is offline. Queueing updateFlashcard.');
-        await OfflineQueueService().pushAction('update-flashcard', payload,
-            ownerNamespace: ownerNamespace, operationId: operationId);
-        if (!isCurrent()) return;
-        _updateLocalCard(cardId, targetWord, turkishTranslation, targetLang, exampleSentence, note);
-        return;
-      }
-
-      try {
-        final updatedCard = await _apiService.updateFlashcard(
-          cardId,
-          targetWord,
-          turkishTranslation,
-          targetLanguage: targetLang,
-          exampleSentence: exampleSentence,
-          note: note,
-          operationId: operationId,
-        );
-        if (!isCurrent()) return;
-        final index = _cards.indexWhere((c) => c.id == cardId);
-        if (updatedCard.card == null) {
-          _cards.removeWhere((c) => c.id == cardId);
-        } else if (index != -1) {
-          _cards[index] = updatedCard.card!;
-        }
-        await _saveLocal();
-        return;
-      } catch (e) {
-        if (e is ClientCompatibilityException || e is ApiException && e.kind == ApiFailure.compatibility) rethrow;
-        if (!isCurrent()) return;
-        debugPrint('Failed to update flashcard on backend: $e. Queueing update.');
-        await OfflineQueueService().pushAction('update-flashcard', payload,
-            ownerNamespace: ownerNamespace, operationId: operationId);
-        if (!isCurrent()) return;
-      }
+      await OfflineQueueService().pushAction('update-flashcard', payload,
+          ownerNamespace: ownerNamespace, operationId: operationId);
+      if (!isCurrent()) return;
+      _updateLocalCard(cardId, targetWord, turkishTranslation, targetLang, exampleSentence, note);
+      if (ConnectivityService().isOnline) await syncWithBackend();
+      return;
     }
 
     // Local update
@@ -383,30 +337,12 @@ class FlashcardService extends ChangeNotifier {
     }
 
     if (!isLocal) {
-      if (ConnectivityService().isOffline) {
-        debugPrint('Device is offline. Queueing deleteFlashcard.');
-        await OfflineQueueService().pushAction('delete-flashcard', {
-          'id': cardId,
-        }, ownerNamespace: ownerNamespace, operationId: operationId);
-        if (!isCurrent()) return;
-        _deleteLocalCard(cardId);
-        return;
-      }
-
-      try {
-        await _apiService.deleteFlashcard(cardId, operationId: operationId);
-        if (!isCurrent()) return;
-        _deleteLocalCard(cardId);
-        return;
-      } catch (e) {
-        if (e is ClientCompatibilityException || e is ApiException && e.kind == ApiFailure.compatibility) rethrow;
-        if (!isCurrent()) return;
-        debugPrint('Failed to delete flashcard on backend: $e. Queueing delete.');
-        await OfflineQueueService().pushAction('delete-flashcard', {
-          'id': cardId,
-        }, ownerNamespace: ownerNamespace, operationId: operationId);
-        if (!isCurrent()) return;
-      }
+      await OfflineQueueService().pushAction('delete-flashcard', {'id': cardId},
+          ownerNamespace: ownerNamespace, operationId: operationId);
+      if (!isCurrent()) return;
+      _deleteLocalCard(cardId);
+      if (ConnectivityService().isOnline) await syncWithBackend();
+      return;
     }
 
     // Local delete
@@ -434,40 +370,12 @@ class FlashcardService extends ChangeNotifier {
     }
 
     if (!isLocal) {
-      if (ConnectivityService().isOffline) {
-        debugPrint('Device is offline. Queueing reviewCard.');
-        await OfflineQueueService().pushAction('review-flashcard', {
-          'id': card.id,
-          'score': score,
-        }, ownerNamespace: ownerNamespace, operationId: operationId);
-        if (!isCurrent()) return;
-        _reviewLocalCard(card, score);
-        return;
-      }
-
-      try {
-        final updatedCard = await _apiService.reviewCard(card.id, score, operationId: operationId);
-        if (!isCurrent()) return;
-        final index = _cards.indexWhere((c) => c.id == card.id);
-        if (updatedCard.card == null) {
-          _cards.removeWhere((c) => c.id == card.id);
-        } else if (index != -1) {
-          _cards[index] = updatedCard.card!;
-        } else {
-          _cards.add(updatedCard.card!);
-        }
-        await _saveLocal();
-        return;
-      } catch (e) {
-        if (e is ClientCompatibilityException || e is ApiException && e.kind == ApiFailure.compatibility) rethrow;
-        if (!isCurrent()) return;
-        debugPrint('Failed to submit review to backend: $e. Queueing review.');
-        await OfflineQueueService().pushAction('review-flashcard', {
-          'id': card.id,
-          'score': score,
-        }, ownerNamespace: ownerNamespace, operationId: operationId);
-        if (!isCurrent()) return;
-      }
+      await OfflineQueueService().pushAction('review-flashcard', {'id': card.id, 'score': score, 'schedulingState': card.toJson()},
+          ownerNamespace: ownerNamespace, operationId: operationId);
+      if (!isCurrent()) return;
+      _reviewLocalCard(card, score);
+      if (ConnectivityService().isOnline) await syncWithBackend();
+      return;
     }
 
     // Local review calculation

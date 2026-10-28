@@ -24,6 +24,7 @@ function web() {
 test('9E backend runtime allowlist excludes tests, maps, declarations, tooling, destructive scripts and environment files', () => {
   assert.equal(validate('backend', backend()).files, 8);
   for (const name of ['dist/src/auth/auth.spec.js', 'dist/src/tooling/progress-audit-cli.js', 'dist/scripts/update-english-db.js',
+    'dist/src/tooling/timeline-control.js', 'dist/src/tooling/timeline-control-cli.js',
     'scripts/deployment-preflight.cjs', 'dist/src/main.js.map', 'dist/src/main.d.ts', '.env.production', 'test/fixture.js', 'node_modules/x.js']) {
     const fixture = backend(); fixture.set(name, Buffer.from('forbidden'));
     assert.throws(() => validate('backend', fixture), /Forbidden/, name);
@@ -96,7 +97,7 @@ test('9E actual Vite configuration disables maps and derives safe release metada
   let emitted;
   config.plugins.find(plugin => plugin.name === 'release-artifact-metadata').generateBundle.call({ emitFile: value => { emitted = JSON.parse(value.source); } });
   assert.equal(emitted.appVersion, require('../lingua_ai_web/package.json').version);
-  assert.equal(emitted.buildId, 'ci-artifact'); assert.equal(emitted.protocolRevision, 1);
+  assert.equal(emitted.buildId, 'ci-artifact'); assert.equal(emitted.protocolRevision, 2);
   assert.deepEqual(Object.keys(emitted).sort(), ['apiEndpoint', 'appVersion', 'artifactType', 'buildId', 'component', 'protocolRevision']);
 });
 test('9E assembly is explicit, refuses overwrite, and pronunciation package derivation leaves source unchanged', () => {

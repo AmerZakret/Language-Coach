@@ -32,6 +32,7 @@ export const CRITICAL_INDEXES = [
     id: 'userId_1_targetLanguage_1',
     key: { userId: 1, targetLanguage: 1 },
   },
+  { collection: 'timelinecontrol', id: 'singleton_1', key: { singleton: 1 } },
 ] as const;
 
 export const PERFORMANCE_INDEXES = [

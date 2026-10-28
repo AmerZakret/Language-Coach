@@ -136,6 +136,7 @@ names are allowed. Performance-only indexes in the same inventory are not gates.
 | progressresets | `userId, operationId` |
 | mutationreceipts | `userId, operationType, operationId` |
 | chatbarriers | `userId, targetLanguage` |
+| timelinecontrol | `singleton` |
 
 1. Isolate writes from every backend/legacy writer; take and restore-test a backup.
    Inventory collection options, existing indexes, shard keys, catalog and schema
@@ -211,7 +212,8 @@ Run periodic restore drills into isolated infrastructure and measure achieved RP
 Back up the **entire application database state together**, including users/guest
 identities, progressEpoch and progressWriteRevision, progresses/completion provenance
 and stored awards, flashcards/history, flashcardoperations, progressresets,
-communityposts, mutationreceipts, chatmessages, chatbarriers and audit evidence.
+communityposts, mutationreceipts, chatmessages, chatbarriers, timelinecontrol,
+timelinecontrolevents and audit evidence.
 Record collection/index options, app artifact/capability manifest and catalog version.
 Do not export just resources and omit receipts, or restore just a user's rows without
 their owner-scoped safety state.
@@ -567,3 +569,213 @@ orphan deletion, receipt archival, history rewrite or deployment is included in 
 See [Release packaging and checklist](RELEASE_PACKAGING.md) for artifact allowlists,
 source-map policy, validated toolchains, build/version metadata and operator-only
 identity/signing/configuration requirements.
+
+
+## Phase 10A timeline control procedure
+
+**10A foundation, extended by the 10B server procedure below.** Server protocol
+2 fencing now exists; client queue timelines still await 10C/10D. Existing offline restore/replay restrictions above continue to apply;
+OPEN readiness alone does not establish restore safety or authorize traffic.
+
+External prerequisites: retain an independent durable operator record containing
+expected active timeline, maintenance/write latch, restore event/reference and
+operator audit evidence. Keep that record outside the restored Mongo failure
+boundary. Protect issued-ID history there so IDs cannot be reused after local
+Mongo audit rollback. No vendor or retention guarantee is implemented here.
+
+1. Hard-close ingress and stop/disable all writes, including scheduled/admin jobs.
+   Drain/kill every old backend; isolate database endpoints and restrict old
+   credentials/network access as appropriate. An old process with network access
+   to an old/uncontrolled DB cannot be protected by this software. Updating a
+   deployment environment variable alone does not change existing processes.
+2. Record external maintenance/write latch CLOSED and intended timeline/event in
+   the independent record. Generate a fresh random UUID v4 deliberately using an
+   operator-controlled generator; never derive one from a counter/time/build or
+   ask startup, preflight, CI or readiness to generate/discover one. Retain the
+   public event/target/operator references and exact command request externally.
+3. From the reviewed release checkout run `npm run build`. Inject the full validated
+   production configuration without loading .env, including DATA_TIMELINE_ID and
+   DATA_WRITE_MODE. Use transaction-capable Mongo and an operator identity with
+   reviewed schema/index/write permissions. Runtime credentials should have no
+   collection-validator/index administration or validation-bypass authority.
+4. Inspect, then choose exactly one explicit action below. Replace angle-bracket
+   placeholders; no command is run automatically. All mutations require the exact
+   database name confirmation, explicit public event/target/operator references,
+   and production/maintenance confirmations. Never put secrets in arguments.
+
+```text
+node dist/src/tooling/timeline-control-cli.js inspect
+node dist/src/tooling/timeline-control-cli.js initialize --target <timeline-A> --event <init-event> --operator <ticket> --confirm-database <database> --confirm-production --maintenance-isolated
+node dist/src/tooling/timeline-control-cli.js close --target <timeline-A> --event <close-event> --operator <ticket> --expected-timeline <timeline-A> --expected-state OPEN --expected-version <inspected-version> --confirm-database <database> --confirm-production --maintenance-isolated
+node dist/src/tooling/timeline-control-cli.js install-timeline --target <fresh-timeline-B> --event <restore-event> --source <restored-source-timeline> --operator <ticket> --expected-timeline <current-Mongo-timeline> --expected-state CLOSED --expected-version <inspected-version> --confirm-database <database> --confirm-production --maintenance-isolated
+node dist/src/tooling/timeline-control-cli.js open --target <timeline-B> --event <open-event> --operator <ticket> --expected-timeline <timeline-B> --expected-state CLOSED --expected-version <inspected-version> --confirm-database <database> --confirm-production --maintenance-isolated
+```
+
+| Action | Required state and effect |
+|---|---|
+| inspect | Read-only raw control inspection; no provisioning or repair; safe failure on absent/malformed/duplicate control |
+| initialize | External latch CLOSED; expected external timeline equals supplied target; creates absent singleton CLOSED plus audit event in one transaction; strict schema and unique index explicitly provisioned; existing conflicting control refused |
+| close | External latch CLOSED and exact expected OPEN Mongo timeline/controlVersion; same timeline becomes CLOSED; accepts differing external expectation so a restored source can be closed safely under hard isolation |
+| install-timeline | External latch CLOSED, external expectation equals explicit fresh B; exact expected CLOSED Mongo timeline/version; requires explicit source provenance; B differs from current A and every locally known initialized/installed ID; remains CLOSED |
+| open | External latch OPEN and expectation equals Mongo target; exact expected CLOSED timeline/version; changes only writeState/controlVersion; hard external maintenance remains in place |
+
+First deployment: with external A/CLOSED and infrastructure isolated, initialize
+absent metadata CLOSED. Provision all other critical indexes and upload storage.
+Inspect and preserve evidence. Set operator configuration A/OPEN only for a
+separately authorized open action, while ingress and the deployed fleet remain
+isolated. Open Mongo A separately; start/reconfigure the intended fleet with
+A/OPEN and verify readiness before considering an independently authorized canary.
+No production traffic is authorized by this document or the 10A implementation.
+Normal restart, deploy, scaling and build/protocol changes must preserve A; never
+rerun initialize with a new ID. Probe/validation/preflight paths perform no control
+writes. Local/test initialization uses these same explicit primitives on disposable
+replica sets with synthetic IDs; there is no implicit NODE_ENV bootstrap.
+
+Restore A to B: complete hard isolation first, close the independent latch, and
+explicitly close Mongo before restore where possible. Follow the coordinated full
+DB/upload restore procedure above; a restored backup may contain an older OPEN
+control record and old event history. Keep ingress/process/DB isolation enforced
+throughout. Inspect the restored record and explicitly close its actual timeline
+with its actual CAS version; never temporarily route traffic to read it. Record
+fresh B and restore event externally with latch CLOSED, then install B while Mongo
+is CLOSED. Include the actual restored source ID, which may differ from the last
+active external timeline. Preserve timelinecontrol, its strict/error validator,
+unique singleton index and timelinecontrolevents in coordinated backups/inventory.
+An old backup without metadata needs the explicit first-deployment initialization
+path under isolation using a fresh externally recorded B, not automatic recovery.
+
+Only after a complete restore, verified provenance/index/storage/transaction
+checks, matching external and Mongo B, independent audit evidence and the existing
+offline replay restrictions are satisfied may a separately authorized operator
+prepare the open step. Keep hard isolation while changing the external operator
+configuration to B/OPEN and opening CLOSED B through CAS. Configure every new
+instance to B/OPEN; old A instances remain unready. Never reopen on mismatch,
+partial restore, missing evidence or an unresolved pre-10B replay safety gap.
+
+Each mutation records an event with public request, previous/target/source IDs,
+result state/version and timestamp atomically with control. Retry an uncertain
+outcome using the **same event and exact request**, after inspect. A matching
+last event/state/version returns the existing result without another transition;
+changed parameters, reused event, later transitions or stale CAS fail. Fence
+increments do not change the operator controlVersion. Concurrent operators cannot
+both commit the same expected transition. Known locally reused timeline IDs are
+rejected; external issued-ID history is authoritative across audit rollback.
+Do not substitute a new event/CAS blindly after a conflict or timeout.
+
+Mongo-local audit is useful but **NOT the independent external audit source**.
+Retain command output and operator evidence externally; repository code does not
+provide durable external retention. If data is restored without changing/closing
+independent external control and without hard write isolation, software cannot
+reliably know a restore happened. This architecture depends on an enforced restore
+procedure, restricted access and independently retained evidence.
+
+These files are classified OPERATOR_TOOL in RELEASE_PACKAGING.md and deliberately
+excluded from the runtime artifact allowlist. There is no HTTP controller, startup
+hook, preflight invocation or CI invocation against real infrastructure. Production
+readiness verifies schema/index/control only, never repairs them. Safe operational
+readiness diagnostics include TIMELINE_CONTROL_UNAVAILABLE, TIMELINE_MISMATCH and
+WRITES_CLOSED, logged on diagnostic transitions rather than every request. CLI
+success emits a public operator_timeline action with resulting control metadata;
+failures omit raw Mongo errors, paths, credentials and stack traces.
+
+
+## Phase 10B rollout and restore reopening
+
+Backend protocol 2 support does not migrate existing web/Flutter clients: both
+remain v1. ALLOW_LEGACY may be used only for pre-restore migration while control
+and deployment expectation match and writes are intentionally OPEN. All server
+transactions are fenced, but a legacy offline intent still has no origin proof.
+Public/store release and production traffic remain unauthorized.
+
+After a real restore: retain hard ingress/process/DB endpoint isolation and CLOSED
+external latch throughout full DB/upload reconciliation. Issue fresh B externally;
+close the actual restored Mongo control, install B CLOSED, and preserve independent
+audit/issued-ID evidence. A timeline-aware client cohort must exist before reopening.
+Set CLIENT_PROTOCOL_POLICY to ENFORCE_MUTATIONS on the operator environment and
+all replacement instances before the separate open step. The CLI refuses to open
+known restored metadata in ALLOW_LEGACY; the write gate also refuses known restored
+metadata with a legacy-permitting policy. Never use old v1 clients for a post-restore
+canary. Missing provenance on older backups does not waive these operator rules.
+
+### Phase 10E disposable drill evidence and reopening decision
+
+[The disposable drill](PHASE_10E_RESTORE_DRILL.md) now exercises physical rollback
+of synthetic domain documents, receipts, AI barriers, control history and uploads
+on a real transaction-capable replica set. It is correctness evidence, not a
+backup implementation or a witnessed production restore. All first-party clients
+now declare protocol 2; the earlier rollout sections are historical checkpoints.
+
+Maintain this order for any separately authorized real restore:
+
+1. Record external RESTORING status and enforce the independent CLOSED latch,
+   ingress restrictions and write isolation.
+2. Stop or network/DB-isolate old applications, workers and stale deployments.
+3. Restore coordinated Mongo and shared upload state under continued isolation.
+4. Audit the restored source, indexes, receipts/barriers and upload references
+   against independently retained coordinated evidence. Missing receipts or
+   surviving receipts alone do not prove the corresponding domain effect.
+5. Record a fresh, never-issued B externally and install it CLOSED using the
+   actual restored source/control version. Retain issued-ID history outside Mongo.
+6. Start B-configured compatible instances with the independent latch CLOSED.
+7. Verify old A, unknown/missing provenance and stale instances cannot write;
+   audit B CLOSED again. No automatic repair or receipt reconstruction is allowed.
+8. Only with matching evidence, hard isolation and explicit operator authorization,
+   configure ENFORCE_MUTATIONS for the replacement cohort and open restricted B
+   for a controlled canary. A v1 success under ALLOW_LEGACY proves no intent origin.
+9. Admit the compatible cohort only after canary validation and pending client
+   reconciliation. A records and destructive clear evidence remain A.
+10. Reopen traffic only under a separate production authorization.
+
+Read-only restore consistency checks never perform the open step. Orphans,
+broken references, receipt/domain/barrier disagreement, missing manifest/index
+evidence or an incomplete audit require continued CLOSED isolation and review.
+Do not delete or regenerate evidence to make an audit pass. The fence cannot
+cancel a provider call already in flight; external hard isolation is mandatory.
+
+The shared control record serializes competing transactions. The disposable
+measurements show conflicts/retries and bounded 503 failures under larger bursts;
+they establish no production capacity SLA. Capacity must be validated for the
+deployment and canary load. Rate limits remain process-local: control instance
+count and use trusted ingress/global limiting or an independently reviewed shared
+limiter before horizontal scale. All instances need the same persistent upload
+tree; divergent local disks are not safe shared storage. No Redis/object-storage
+migration or production enforcement/default change is part of this phase.
+
+Inspect discovery without sending mutations: GET /compatibility is public/no-store
+and works while general readiness is CLOSED. Unknown/mismatched control yields
+no trusted public timeline. Verify exact server-v2/client-cohort capability and
+both control latches; a revision/build label alone is insufficient. Readiness must
+pass on every replacement instance before independently authorized traffic.
+
+Inventory existing mutationreceipts, flashcardoperations and progressresets without
+bulk rewriting them. Their global operation identities and indefinite retention
+remain unchanged. New receipts carry immutable dataTimelineId. V2 replay of missing
+provenance requires reconciliation (409 RECEIPT_TIMELINE_UNVERIFIED); cross-timeline
+receipt reuse is rejected (409 SERVER_TIMELINE_CHANGED), even with a current header.
+Do not delete/relabel a receipt, replace its operation ID, or weaken its unique index
+to make a retry succeed. The reset recovery GET also checks timeline provenance.
+
+Every public durable writer is FENCED: progress completion/reset, all flashcard
+mutations, Community create/update/delete/reaction, AI send/clear, registration,
+guest identity creation and profile updates. Image allocation has fresh admission,
+owned-file compensation and a separate final DB fence. Login is NO_DURABLE_WRITE;
+writing feedback and pronunciation assessment are STATELESS (bounded ephemeral
+spools/provider effects only). Ordinary GET handlers have no incidental persistence
+writes. Runtime lesson bootstrapping has been removed; reviewed catalog provisioning
+is an explicit operator task, including in local/disposable setups.
+
+Progress audit --apply/rollback, local lesson replacement/generation and timeline
+control are OPERATOR_ONLY. Domain repair/replacement tools require hard maintenance,
+all public/background writers drained, and both external and Mongo write controls
+intentionally CLOSED, with matching expected timeline and retained operator evidence.
+Do not attach public client headers to these tools. Their separate operator authority
+is not permission to run them during OPEN application traffic. No operator tool is
+invoked by startup, readiness, preflight or CI against real infrastructure.
+
+Observe timeline_request_missing, timeline_request_mismatch, timeline_write_blocked,
+timeline_fence_conflict and receipt_timeline_conflict, plus transaction retry counters.
+Legacy admissions are counted without per-request log spam. Shared-document contention
+causes real bounded transaction retries; do not substitute read-only assertions or
+remove the fence. Tests exercise four/six concurrent operations, not a production
+throughput benchmark. Characterize transaction rate, retry/latency distribution and
+fleet capacity in 10E before any release decision.

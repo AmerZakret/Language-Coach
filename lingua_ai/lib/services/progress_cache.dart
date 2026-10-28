@@ -1,3 +1,4 @@
+import 'data_timeline.dart';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'progress_epoch.dart';
@@ -55,7 +56,8 @@ class ProgressSnapshot {
         lessonScores: scores);
   }
   static String key(String owner, String language) =>
-      'progress_${owner}_${language}_snapshot';
+      owner == 'local_guest' ? 'progress_${owner}_${language}_snapshot' :
+      DataTimeline().cacheKey('progress_${owner}_${language}_snapshot');
   static ProgressSnapshot read(
       SharedPreferences prefs, String owner, String language) {
     try {
@@ -106,6 +108,7 @@ class ProgressSnapshot {
               .map((n) => (n as num).toDouble())
               .toList());
     }
+    if (owner != 'local_guest') return ProgressSnapshot(available: false);
     // Preserve attributable legacy caches locally; never infer missing scores.
     if (!prefs.getKeys().any((key) => key.startsWith(prefix))) {
       return ProgressSnapshot(available: false);

@@ -1,3 +1,4 @@
+import 'package:lingua_ai/services/data_timeline.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
@@ -307,8 +308,9 @@ void main() {
       await progress.syncWithBackend();
       expect(progress.totalXp, 20);
       await cards.createFlashcard('new', 'translation');
-      expect(cards.allCards, hasLength(2));
-      expect(prefs.getString('flashcards_registered_${b}_en_list'),
+      expect(cards.allCards, hasLength(1));
+      expect(cards.allCards.single.id, 'shared-card');
+      expect(prefs.getString(DataTimeline().cacheKey('flashcards_registered_${b}_en_list')),
           contains('current-$b'));
     }, () => MockClient((request) async => normal(request)));
   });

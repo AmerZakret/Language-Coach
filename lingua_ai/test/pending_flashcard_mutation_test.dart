@@ -1,3 +1,4 @@
+import 'package:lingua_ai/services/data_timeline.dart';
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter/services.dart';
@@ -71,7 +72,7 @@ void main() {
     expect(action.payload['targetWord'], 'latest');
     expect(action.payload['turkishTranslation'], 'new translation');
     expect(action.payload['note'], 'new note');
-    final cacheKey = 'flashcards_${auth.localStorageNamespace}_en_list';
+    final cacheKey = DataTimeline().cacheKey('flashcards_${auth.localStorageNamespace}_en_list');
     expect(
         jsonDecode(prefs.getString(cacheKey)!).single['targetWord'], 'latest');
   });

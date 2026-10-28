@@ -151,7 +151,7 @@ class _WritingPracticeScreenState extends State<WritingPracticeScreen> {
         userText: text,
         targetLanguage: targetLanguage,
       );
-      if (mounted && session.isCurrent && targetLanguage == TargetLanguageService().currentLanguage) {
+      if (mounted && session.isDataCurrent && targetLanguage == TargetLanguageService().currentLanguage) {
         setState(() {
           _feedback = feedback;
           _isLoading = false;

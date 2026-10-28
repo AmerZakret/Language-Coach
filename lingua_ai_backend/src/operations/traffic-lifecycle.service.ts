@@ -52,9 +52,12 @@ export class TrafficLifecycle implements NestInterceptor, OnModuleDestroy {
       }));
   }
   readonly middleware = (req: Request, res: Response, next: NextFunction) => {
-    const health = ['/health', '/health/live', '/health/ready'].includes(
-      req.path.replace(/\/+$/, ''),
-    );
+    const health = [
+      '/health',
+      '/health/live',
+      '/health/ready',
+      '/compatibility',
+    ].includes(req.path.replace(/\/+$/, ''));
     if (
       !health &&
       (this.stopping ||
@@ -84,7 +87,34 @@ export class TrafficLifecycle implements NestInterceptor, OnModuleDestroy {
         this.release(record);
       });
     }
-    next();
+    const admit = () => {
+      if (res.destroyed || res.writableEnded) return;
+      // A control query may finish after shutdown started.
+      if (!health && this.stopping) {
+        res.status(503).json({
+          code: 'SHUTTING_DOWN',
+          message: 'Backend is temporarily unavailable.',
+        });
+        return;
+      }
+      next();
+    };
+    if (!health && this.config.get('NODE_ENV') === 'production') {
+      // Fresh primary check on every production admission, including GETs with
+      // hidden side effects. This is not the domain transaction fence (10B).
+      void this.readiness.timelineGate
+        .assertWritesPermitted()
+        .then(admit)
+        .catch(() => {
+          if (res.destroyed || res.writableEnded) return;
+          res.status(503).json({
+            code: 'BACKEND_NOT_READY',
+            message: 'Backend is temporarily unavailable.',
+          });
+        });
+      return;
+    }
+    admit();
   };
   intercept(context: ExecutionContext, next: CallHandler) {
     const record = context.switchToHttp().getRequest()[activeRequest] as
@@ -118,11 +148,18 @@ export class TrafficLifecycle implements NestInterceptor, OnModuleDestroy {
     telemetry.emit('shutdown.requested');
     this.stopping = true;
     this.readiness.stop();
-    telemetry.emit('shutdown.drain_started', { activeRequests: this.active.size });
+    telemetry.emit('shutdown.drain_started', {
+      activeRequests: this.active.size,
+    });
     // Keep health visible while rejecting new work, then let Nest close HTTP.
     this.server?.closeIdleConnections();
     if (this.hardExit) {
-      this.hardDeadline = setTimeout(() => { telemetry.error('shutdown.watchdog', { activeRequests: this.active.size }); this.hardExit?.(); }, this.grace);
+      this.hardDeadline = setTimeout(() => {
+        telemetry.error('shutdown.watchdog', {
+          activeRequests: this.active.size,
+        });
+        this.hardExit?.();
+      }, this.grace);
       this.hardDeadline.unref();
     }
     this.drain = new Promise<void>((resolve) => {
@@ -131,13 +168,19 @@ export class TrafficLifecycle implements NestInterceptor, OnModuleDestroy {
         if (finished) return;
         finished = true;
         clearTimeout(deadline);
-        telemetry.emit('shutdown.drain_completed', { activeRequests: this.active.size });
+        telemetry.emit('shutdown.drain_completed', {
+          activeRequests: this.active.size,
+        });
         resolve();
       };
       // Reserve part of the total window for Nest HTTP/Mongoose disposal.
       const deadline = setTimeout(
         () => {
-          telemetry.emit('shutdown.drain_timeout', { activeRequests: this.active.size }, 'warn');
+          telemetry.emit(
+            'shutdown.drain_timeout',
+            { activeRequests: this.active.size },
+            'warn',
+          );
           this.server?.closeAllConnections();
           done();
         },

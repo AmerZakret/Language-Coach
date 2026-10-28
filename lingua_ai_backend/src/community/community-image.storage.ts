@@ -1,4 +1,11 @@
-import { BadRequestException, Injectable, PayloadTooLargeException, ServiceUnavailableException } from '@nestjs/common';
+import { MutationTimeline } from '../operations/mutation-timeline';
+import {
+  BadRequestException,
+  Injectable,
+  Optional,
+  PayloadTooLargeException,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { open, mkdir, realpath, lstat, unlink, readFile } from 'node:fs/promises';
 import { extname, join, resolve, relative, isAbsolute, dirname, basename, sep } from 'node:path';
@@ -19,17 +26,50 @@ export function resolveUploadRoot(): string {
 }
 function contains(root: string, candidate: string): boolean {
   const path = relative(root, candidate);
-  return path !== '' && path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path);
+  return (
+    path !== '' &&
+    path !== '..' &&
+    !path.startsWith(`..${sep}`) &&
+    !isAbsolute(path)
+  );
 }
 function detectedFormat(buffer: Buffer): RasterFormat | undefined {
-  if (buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) return 'png';
-  if (buffer.length >= 3 && buffer[0] === 255 && buffer[1] === 216 && buffer[2] === 255) return 'jpeg';
-  if (buffer.length >= 12 && buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP'
-    && buffer.readUInt32LE(4) === buffer.length - 8) return 'webp';
+  if (
+    buffer.length >= 8 &&
+    buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))
+  )
+    return 'png';
+  if (
+    buffer.length >= 3 &&
+    buffer[0] === 255 &&
+    buffer[1] === 216 &&
+    buffer[2] === 255
+  )
+    return 'jpeg';
+  if (
+    buffer.length >= 12 &&
+    buffer.toString('ascii', 0, 4) === 'RIFF' &&
+    buffer.toString('ascii', 8, 12) === 'WEBP' &&
+    buffer.readUInt32LE(4) === buffer.length - 8
+  )
+    return 'webp';
 }
 
 @Injectable()
 export class CommunityImageStorage {
+  constructor(@Optional() private readonly timeline?: MutationTimeline) {}
+  private readonly staged = new Map<string, string>();
+  retain(imageUrl: string) {
+    this.staged.delete(imageUrl);
+  }
+  private async admitFileWrite() {
+    if (!this.timeline)
+      throw new ServiceUnavailableException({
+        code: 'BACKEND_NOT_READY',
+        message: 'Backend is temporarily unavailable.',
+      });
+    await this.timeline.fresh();
+  }
   readonly root = resolveUploadRoot();
   private readonly verified = new Map<string, string>();
 
@@ -75,20 +115,30 @@ export class CommunityImageStorage {
 
   async store(file: Express.Multer.File): Promise<string> {
     const image = await this.normalize(file);
+    await this.admitFileWrite();
     await mkdir(join(this.root, 'community'), { recursive: true });
     for (let attempt = 0; attempt < 3; attempt++) {
       const url = `${COMMUNITY_IMAGE_PREFIX}${randomUUID()}.${image.extension}`;
       const candidate = this.candidate(url);
       await this.checkDirectory(candidate);
+      await this.admitFileWrite();
       let handle;
-      try { handle = await open(candidate, 'wx', 0o600); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code === 'EEXIST') continue; throw error; }
+      try {
+        handle = await open(candidate, 'wx', 0o600);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EEXIST') continue;
+        throw error;
+      }
       try {
         await handle.writeFile(image.buffer);
         await handle.close();
+        const stat = await lstat(candidate);
+        this.staged.set(url, `${stat.dev}:${stat.ino}`);
         return url;
       } catch (error) {
         await handle.close().catch(() => {});
+        const stat = await lstat(candidate).catch(() => undefined);
+        if (stat) this.staged.set(url, `${stat.dev}:${stat.ino}`);
         await this.cleanup(url, 'failed file write');
         throw error;
       }
@@ -101,10 +151,21 @@ export class CommunityImageStorage {
     try {
       await this.checkDirectory(candidate);
       const stat = await lstat(candidate);
-      if (stat.isSymbolicLink() || !stat.isFile()) throw new Error('Unsafe image file');
+      if (stat.isSymbolicLink() || !stat.isFile())
+        throw new Error('Unsafe image file');
+      const owned = this.staged.get(imageUrl);
+      if (owned !== undefined) {
+        if (owned !== `${stat.dev}:${stat.ino}`)
+          throw new Error('Staged image identity changed');
+      } else {
+        await this.admitFileWrite();
+      }
       await unlink(candidate);
+      this.staged.delete(imageUrl);
       this.verified.delete(candidate);
-    } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
   }
 
   // Also protect historical uploads, rather than assuming the old MIME-only
@@ -132,6 +193,8 @@ export class CommunityImageStorage {
       const code = (error as NodeJS.ErrnoException).code;
       telemetry.emit('upload.cleanup_failed', { domain: operation, failureCategory: 'filesystem_or_containment',
         code: code && ['EACCES', 'EPERM', 'ENOSPC', 'EROFS', 'ENOENT', 'EIO', 'EXDEV'].includes(code) ? code : 'UNCLASSIFIED' }, 'warn');
+    } finally {
+      this.staged.delete(imageUrl);
     }
   }
 }

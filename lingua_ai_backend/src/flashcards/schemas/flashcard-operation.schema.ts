@@ -1,3 +1,4 @@
+import { TIMELINE_ID_PATTERN } from '../../operations/timeline-contract';
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Schema as MongooseSchema } from 'mongoose';
 
@@ -5,6 +6,13 @@ import { Document, Schema as MongooseSchema } from 'mongoose';
 // queue can retry an old operation at any time.
 @Schema({ timestamps: true })
 export class FlashcardOperation extends Document {
+  @Prop({
+    type: String,
+    immutable: true,
+    match: new RegExp(TIMELINE_ID_PATTERN),
+  })
+  dataTimelineId?: string;
+
   @Prop({ type: MongooseSchema.Types.ObjectId, required: true })
   userId: string;
 

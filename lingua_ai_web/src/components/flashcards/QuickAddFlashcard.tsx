@@ -1,3 +1,4 @@
+import { dataTimeline } from '../../utils/dataTimeline';
 import { targetLanguageCode } from '../../utils/targetLanguage';
 import React, { useRef, useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
@@ -12,19 +13,20 @@ import './QuickAddFlashcard.css';
 
 export const QuickAddFlashcard: React.FC = () => {
   const { user } = useAuth();
+  const timeline = dataTimeline.context();
   const { t } = useLanguage();
   const { targetLanguage } = useTargetLanguage();
   const [word, setWord] = useState('');
   const [translation, setTranslation] = useState('');
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
-  const pending = useRef<{ key: string; id: string } | null>(null);
+  const pending = useRef<{ key: string; id: string; dataTimelineId: string } | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!word || !translation || !user) return;
+    if (!word || !translation || !user || !dataTimeline.isContext(timeline)) return;
     const key = JSON.stringify([user.id, targetLanguage, word, translation]);
-    if (pending.current?.key !== key) pending.current = { key, id: createFlashcardOperationId() };
+    if (pending.current?.key !== key) pending.current = { key, id: createFlashcardOperationId(), ...dataTimeline.capture() };
 
     setLoading(true);
     try {
@@ -32,7 +34,7 @@ export const QuickAddFlashcard: React.FC = () => {
         targetWord: word,
         turkishTranslation: translation,
         targetLanguage: targetLanguageCode(targetLanguage)
-      }, { ...getSessionRequestConfig(), headers: { 'X-Idempotency-Key': pending.current.id } });
+      }, { ...getSessionRequestConfig(), dataTimelineId: pending.current.dataTimelineId, headers: { 'X-Idempotency-Key': pending.current.id } });
       pending.current = null;
       setSuccess(true);
       setWord('');

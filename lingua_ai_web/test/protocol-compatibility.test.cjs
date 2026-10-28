@@ -7,16 +7,28 @@ const ts = require('typescript');
 const { origin, A, B, user, ownerKey } = require('./helpers/browserContexts.cjs');
 const { releaseIdentity } = require('../../scripts/check-release-contract.cjs');
 const owner = `registered_${A}`;
-const metadata = overrides => ({ currentProtocolRevision: 1, minimumMutationRevision: 1, policy: 'ENFORCE_MUTATIONS', buildId: 'backend-build', ...overrides });
+const metadata = overrides => ({ currentProtocolRevision: 2, minimumMutationRevision: 1, policy: 'ENFORCE_MUTATIONS', buildId: 'backend-build', ...overrides });
 const body = () => ({ response: { status: 426, data: { code: 'CLIENT_PROTOCOL_UNSUPPORTED' } } });
+
+test('10B server-v2 legacy discovery keeps the v2 web request carries its captured timeline during legacy rollout', async () => {
+  const o = origin(), tab = o.tab(); await tab.install();
+  tab.load('utils/releaseCompatibility.ts').releaseCompatibility.observeMetadata(metadata({
+    currentProtocolRevision: 2, minimumMutationRevision: 1, policy: 'ALLOW_LEGACY',
+    timelineAwareProtocolRevision: 2, dataTimelineId: '11111111-1111-4111-8111-111111111111', timelineWriteState: 'OPEN',
+  }));
+  await tab.client.post('/ai-coach/chat', { message: 'fixture' }, tab.timeline.capture());
+  assert.equal(tab.requests[0].headers['X-Client-Protocol'], '2');
+  assert.equal(tab.requests[0].headers['X-Data-Timeline'], require('./helpers/timelineFixture.cjs').id);
+  tab.close();
+});
 
 test('9C central transport declares protocol for auth, guest, reads and keyed writes without losing headers', async () => {
   const o = origin(), tab = o.tab(); await tab.install();
   tab.fetchGuest = async () => ({ ok: true, json: async () => ({ user: user(), access_token: 'fixture' }) });
-  await tab.client.post('/auth/login', {}, { headers: { 'X-Extra': 'preserved' } });
-  await tab.client.post('/auth/guest'); await tab.client.get('/flashcards/all');
-  await tab.client.put('/flashcards/card/review', { score: 4 }, { headers: { 'X-Idempotency-Key': 'stable-review' } });
-  assert.ok(tab.requests.every(request => request.headers['X-Client-Protocol'] === '1'));
+  await tab.client.post('/auth/login', {}, { ...tab.timeline.capture(), ...{ headers: { 'X-Extra': 'preserved' } } });
+  await tab.client.post('/auth/guest', undefined, tab.timeline.capture()); await tab.client.get('/flashcards/all');
+  await tab.client.put('/flashcards/card/review', { score: 4 }, { ...tab.timeline.capture(), ...{ headers: { 'X-Idempotency-Key': 'stable-review' } } });
+  assert.ok(tab.requests.every(request => request.headers['X-Client-Protocol'] === '2'));
   assert.equal(tab.requests[0].headers['X-Extra'], 'preserved');
   assert.equal(tab.requests[3].headers['X-Idempotency-Key'], 'stable-review');
   assert.equal(tab.requests[3].headers.Authorization, `Bearer token-${A}`);
@@ -26,12 +38,12 @@ test('9C unsupported metadata blocks writes while read/auth and all owner state 
   const o = origin(), tab = o.tab(); await tab.install();
   await tab.queue.pushToOfflineQueue('review-flashcard', { cardId: 'card', score: 4 }, owner);
   const queue = o.values.get(ownerKey(owner)), auth = o.values.get('linguaai_session_v1');
-  tab.load('utils/releaseCompatibility.ts').releaseCompatibility.observeMetadata(metadata({ minimumMutationRevision: 2, currentProtocolRevision: 2 }));
-  await assert.rejects(tab.client.put('/flashcards/card/review', { score: 4 }), /Update or reconcile/);
+  tab.load('utils/releaseCompatibility.ts').releaseCompatibility.observeMetadata(metadata({ minimumMutationRevision: 3, currentProtocolRevision: 3 }));
+  await assert.rejects(tab.client.put('/flashcards/card/review', { score: 4 }, tab.timeline.capture()), /Update or reconcile/);
   await assert.rejects(tab.queue.pushToOfflineQueue('review-flashcard', { cardId: 'card', score: 4 }, owner), /Update or reconcile/);
   assert.equal(await tab.queue.processOfflineQueue(A), false);
   assert.equal(tab.requests.length, 0);
-  await tab.client.get('/flashcards/all'); await tab.client.post('/auth/login', {});
+  await tab.client.get('/flashcards/all'); await tab.client.post('/auth/login', {}, tab.timeline.capture());
   assert.equal(o.values.get(ownerKey(owner)), queue); assert.equal(o.values.get('linguaai_session_v1'), auth);
   tab.close();
 });
@@ -57,9 +69,9 @@ test('9C cross-tab advertisements are checked before dispatch and never clear an
   await old.queue.pushToOfflineQueue('review-flashcard', { cardId: 'card', score: 3 }, owner);
   o.values.set(ownerKey(`registered_${B}`), JSON.stringify({ retained: 'other owner' }));
   const auth = o.values.get('linguaai_session_v1'), queue = o.values.get(ownerKey(owner)), other = o.values.get(ownerKey(`registered_${B}`));
-  newer.load('utils/releaseCompatibility.ts').releaseCompatibility.observeMetadata(metadata({ minimumMutationRevision: 2, currentProtocolRevision: 2 }));
+  newer.load('utils/releaseCompatibility.ts').releaseCompatibility.observeMetadata(metadata({ minimumMutationRevision: 3, currentProtocolRevision: 3 }));
   // No flush/storage-event wait: the dispatch boundary rereads compatibility.
-  await assert.rejects(old.client.post('/community/posts', {}), /Update or reconcile/);
+  await assert.rejects(old.client.post('/community/posts', {}, old.timeline.capture()), /Update or reconcile/);
   assert.equal(await old.queue.processOfflineQueue(A), false);
   assert.equal(old.requests.length, 0);
   assert.equal(o.values.get(ownerKey(owner)), queue); assert.equal(o.values.get(ownerKey(`registered_${B}`)), other);
@@ -82,17 +94,17 @@ for (const recorded of [undefined, 0]) test(`9C replay does not upgrade stored p
 test('9C a new compatible build prompts reload; an incompatible manifest stops writes without deleting anything', async () => {
   const o = origin(), tab = o.tab(); await tab.install();
   const release = tab.load('utils/releaseCompatibility.ts').releaseCompatibility;
-  release.observeRelease({ buildId: 'ci-new-bundle', protocolRevision: 1 });
+  release.observeRelease({ buildId: 'ci-new-bundle', protocolRevision: 2 });
   assert.equal(release.snapshot().newBuildAvailable, true); assert.equal(release.snapshot().updateRequired, false);
-  await tab.client.post('/ai-coach/chat', { message: 'fixture' });
-  release.observeRelease({ buildId: 'ci-incompatible', protocolRevision: 2 });
-  await assert.rejects(tab.client.delete('/ai-coach/clear'), /Update or reconcile/);
+  await tab.client.post('/ai-coach/chat', { message: 'fixture' }, tab.timeline.capture());
+  release.observeRelease({ buildId: 'ci-incompatible', protocolRevision: 3 });
+  await assert.rejects(tab.client.delete('/ai-coach/clear', tab.timeline.capture()), /Update or reconcile/);
   assert.ok(o.values.get('linguaai_session_v1')); assert.equal(tab.requests.length, 1); tab.close();
 });
 test('9C source-executed identities remain independent; synthetic build injection needs no file writes', () => {
   const development = releaseIdentity(), ci = releaseIdentity('ci-synthetic.12');
   assert.equal(development.web.buildId, 'development'); assert.equal(ci.web.buildId, 'ci-synthetic.12');
-  assert.equal(ci.backend.currentProtocolRevision, ci.web.protocolRevision); assert.equal(ci.web.protocolRevision, 1);
+  assert.equal(ci.backend.currentProtocolRevision, 2); assert.equal(ci.backend.minimumMutationRevision, 1); assert.equal(ci.clientsTimelineAware, true); assert.equal(ci.web.protocolRevision, 2);
   assert.notEqual(ci.web.buildId, String(ci.web.protocolRevision));
 });
 test('9C actual Vite manifest plugin emits only bounded public artifact/protocol identity', () => {
@@ -114,7 +126,7 @@ test('9C actual Vite manifest plugin emits only bounded public artifact/protocol
   const config = configuration({ command: 'build', mode: 'production' });
   let emitted; config.plugins.find(plugin => plugin.name === 'public-release-identity').generateBundle.call({ emitFile: value => { emitted = value; } });
   assert.equal(emitted.fileName, 'release.json');
-  assert.deepEqual(JSON.parse(emitted.source), { buildId: 'ci-build.99', protocolRevision: 1 });
+  assert.deepEqual(JSON.parse(emitted.source), { buildId: 'ci-build.99', protocolRevision: 2 });
   env = { ...env, VITE_BUILD_ID: '../private' }; assert.throws(() => configuration({ command: 'build', mode: 'production' }), /VITE_BUILD_ID/);
   env = { VITE_API_URL: 'https://api.example.invalid' };
   assert.equal(configuration({ command: 'build', mode: 'production' }).define.__WEB_BUILD_ID__, '"development"');

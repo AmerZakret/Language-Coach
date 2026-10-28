@@ -1,3 +1,5 @@
+import { CLIENT_PROTOCOL_REVISION } from './clientProtocol';
+import { dataTimeline } from './dataTimeline';
 import { releaseCompatibility } from './releaseCompatibility';
 import { coordinationAvailable } from './browserCoordination';
 import { backendReachability } from './backendReachability';
@@ -13,6 +15,7 @@ export class SyncCoordinator {
   private timer?: ReturnType<typeof setTimeout>;
   private unsubscribeQueue?: () => void;
   private unsubscribeHealth?: () => void;
+  private unsubscribeTimeline?: () => void;
   private readonly health: BackendReachability;
   private readonly onChanged: (success: boolean) => void;
   constructor(health: BackendReachability = backendReachability,
@@ -22,11 +25,12 @@ export class SyncCoordinator {
     this.started = true;
     this.unsubscribeQueue = subscribeOfflineQueue(this.wake);
     this.unsubscribeHealth = this.health.subscribe(this.wake);
+    this.unsubscribeTimeline = dataTimeline.subscribe(this.wake);
     this.wake();
   }
   stop() {
     this.started = false;
-    clearTimeout(this.timer); this.unsubscribeQueue?.(); this.unsubscribeHealth?.();
+    clearTimeout(this.timer); this.unsubscribeQueue?.(); this.unsubscribeHealth?.(); this.unsubscribeTimeline?.();
   }
   wake = () => {
     if (!this.started || this.running) return;
@@ -37,9 +41,10 @@ export class SyncCoordinator {
     if (releaseCompatibility.snapshot().updateRequired || !coordinationAvailable() || !this.started || !this.health.snapshot().backendReachable) return;
     const session = getOfflineQueueSession();
     if (!isOfflineQueueSessionActive(session)) return;
-    const first = getOfflineQueue()[0];
-    if (!first) return;
-    const delay = Math.max(1, first.nextAttemptAt ? Date.parse(first.nextAttemptAt) - Date.now() : 1);
+    const first = getOfflineQueue().find(action => dataTimeline.provenance(action) === 'CURRENT' && action.clientProtocolRevision === CLIENT_PROTOCOL_REVISION && !['timeline', 'provenance'].includes(action.lastErrorCategory || ''));
+    if (!first || dataTimeline.snapshot().status === 'CHANGED') return;
+    const pause = dataTimeline.snapshot().writeState !== 'OPEN' ? 30000 : 1;
+    const delay = Math.max(pause, first.nextAttemptAt ? Date.parse(first.nextAttemptAt) - Date.now() : 1);
     this.timer = setTimeout(() => { void this.drain(); }, delay);
   }
   private async drain() {
@@ -51,7 +56,9 @@ export class SyncCoordinator {
     try {
       const actions = getOfflineQueue();
       if (!actions.length) return;
-      if (actions[0].nextAttemptAt && Date.parse(actions[0].nextAttemptAt) > Date.now()) return;
+      const first = actions.find(action => dataTimeline.provenance(action) === 'CURRENT' && action.clientProtocolRevision === CLIENT_PROTOCOL_REVISION && !['timeline', 'provenance'].includes(action.lastErrorCategory || ''));
+      if (!first) return;
+      if (first?.nextAttemptAt && Date.parse(first.nextAttemptAt) > Date.now()) return;
       const beforeFailures = getFailedOfflineActions().length;
       const success = await processOfflineQueue(session.userId, true);
       if (!this.started || !isOfflineQueueSessionActive(session)) return;

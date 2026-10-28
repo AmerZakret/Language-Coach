@@ -1,3 +1,4 @@
+import 'data_timeline.dart';
 import 'dart:async';
 import 'dart:math';
 import 'backend_http.dart' as http;
@@ -16,6 +17,7 @@ class MutationIntents {
   final Map<String, ({String payload, String id})> _pending = {};
   String operation(String slot, String payload, {String? operationId}) {
     if (operationId != null) return operationId;
+    slot = '${DataTimeline().lastConfirmedDataTimelineId}:$slot';
     final previous = _pending[slot];
     if (previous?.payload == payload) return previous!.id;
     final id = newMutationId();
@@ -23,8 +25,9 @@ class MutationIntents {
     return id;
   }
 
-  String? pendingId(String slot) => _pending[slot]?.id;
+  String? pendingId(String slot) => _pending['${DataTimeline().lastConfirmedDataTimelineId}:$slot']?.id;
   void complete(String slot, String id) {
+    slot = '${DataTimeline().lastConfirmedDataTimelineId}:$slot';
     if (_pending[slot]?.id == id) _pending.remove(slot);
   }
 }
@@ -34,7 +37,7 @@ Future<http.Response> mutationRequest(
     Future<http.Response> Function() send, SessionSnapshot session,
     {String? serialKey}) async {
   Future<http.Response> dispatch() {
-    if (!session.isCurrent) throw StateError('Mutation session changed');
+    if (!session.isDataCurrent) throw StateError('Mutation session changed');
     return apiRequest(() => send().timeout(replayTimeout), session);
   }
 
@@ -42,7 +45,7 @@ Future<http.Response> mutationRequest(
     try {
       return await dispatch();
     } on ApiException catch (error) {
-      if (!session.isCurrent || (error.retryAfterMs ?? 0) > 0 ||
+      if (!session.isDataCurrent || (error.retryAfterMs ?? 0) > 0 ||
           (error.kind != ApiFailure.network &&
               error.kind != ApiFailure.server)) {
         rethrow;

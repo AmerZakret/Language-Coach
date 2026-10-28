@@ -112,7 +112,7 @@ function harness(saved = storage(), fakeTimers = false) {
           data: { ...reply.data?.data, progressEpoch: reply.data?.data?.progressEpoch ?? prepared.data.progressEpoch } } };
         if (prepared.url.includes('/progress/') && method === 'delete') return { ...reply, data: { ...reply.data,
           progressEpoch: reply.data?.progressEpoch ?? prepared.data.expectedEpoch + 1 } };
-        return reply;
+        return { ...reply, config: prepared };
       })
         .catch(error => { error.config ??= prepared; throw error; });
       for (const interceptor of responseInterceptors) result = result.then(interceptor.success, interceptor.failure);
@@ -126,7 +126,7 @@ function harness(saved = storage(), fakeTimers = false) {
   transport.delete = (url, config) => request('delete', url, config?.data, config);
 
   const sources = {
-    protocol: 'utils/clientProtocol.ts', compatibility: 'utils/releaseCompatibility.ts',
+    timeline: 'utils/dataTimeline.ts', timelineCache: 'utils/timelineCache.ts', mutationRequest: 'api/mutationRequest.ts', protocol: 'utils/clientProtocol.ts', compatibility: 'utils/releaseCompatibility.ts',
     reachability: 'utils/backendReachability.ts', coordinator: 'utils/syncCoordinator.ts',
     policy: 'utils/syncRetryPolicy.ts', storage: 'utils/progressStorage.ts', types: 'types/progress.ts',
     userKey: 'utils/userKey.ts', queueSession: 'utils/queueSession.ts', authStorage: 'utils/authSessionStorage.ts', coordination: 'utils/browserCoordination.ts',
@@ -145,12 +145,15 @@ function harness(saved = storage(), fakeTimers = false) {
       esModuleInterop: true, target: ts.ScriptTarget.ES2020,
     } }).outputText;
     vm.runInNewContext(compiled, {
-      module, exports: module.exports, localStorage: saved, Date: ClockDate, AbortController,
+      module, exports: module.exports, crypto: require('node:crypto').webcrypto, localStorage: saved, Date: ClockDate, AbortController,
       setTimeout: timeout, clearTimeout: cancel, setInterval: interval, clearInterval: cancelInterval,
       navigator: { onLine: true, locks: lockManager }, window: { addEventListener() {}, removeEventListener() {} },
       console: { log() {}, error() {} },
-      fetch: (...args) => control.fetchGuest(...args),
+      fetch: (...args) => String(args[0]).endsWith('/compatibility') ? Promise.resolve({ok:true,json:async()=>require('./helpers/timelineFixture.cjs').metadata}) : control.fetchGuest(...args),
       require: name => {
+        if (name.endsWith('/dataTimeline')) return load('timeline');
+        if (name.endsWith('/timelineCache')) return load('timelineCache');
+        if (name.endsWith('/mutationRequest')) return load('mutationRequest');
         if (name.endsWith('/clientProtocol')) return load('protocol');
         if (name.endsWith('/releaseCompatibility')) return load('compatibility');
         if (name === 'react') return react;
@@ -173,6 +176,7 @@ function harness(saved = storage(), fakeTimers = false) {
     });
     return module.exports;
   }
+  load('timeline').dataTimeline.confirm(require('./helpers/timelineFixture.cjs').metadata);
   const queue = load('offlineQueue');
   const session = load('queueSession');
   const provider = load('auth');
@@ -315,10 +319,10 @@ test('new action has precisely the versioned ownership envelope without credenti
   await h.auth().login(user(A), `test-${A}`);
   await h.enqueue();
   const action = h.queue.getOfflineQueue()[0];
-  assert.deepEqual(Object.keys(action).sort(), ['clientProtocolRevision', 'createdAt', 'id', 'ownerNamespace', 'payload', 'schemaVersion', 'type']);
+  assert.deepEqual(Object.keys(action).sort(), ['clientProtocolRevision', 'createdAt', 'dataTimelineId', 'id', 'ownerNamespace', 'payload', 'schemaVersion', 'type']);
   assert.equal(action.ownerNamespace, `registered_${A}`);
-  assert.equal(action.schemaVersion, 1);
-  assert.equal(action.clientProtocolRevision, 1);
+  assert.equal(action.schemaVersion, 2);
+  assert.equal(action.clientProtocolRevision, 2);
   assert.ok(Number.isFinite(Date.parse(action.createdAt)));
   assert.ok(action.id);
   assert.ok(!h.saved.getItem(key(`registered_${A}`)).includes(`test-${A}`));
@@ -462,7 +466,7 @@ test('Phase 4A actions migrate; failed dependent retries real ID after page rest
   };
   assert.equal(await h.queue.processOfflineQueue(A), false);
   const persisted = JSON.parse(h.saved.getItem(key(`registered_${A}`)));
-  assert.equal(persisted.schemaVersion, 2); assert.equal(persisted.tempIds.local_123, 'mongo-real');
+  assert.equal(persisted.schemaVersion, 3); assert.equal(persisted.tempIds.local_123, 'mongo-real');
   assert.equal(persisted.actions[0].id, 'legacy-update'); assert.equal(persisted.actions[0].payload.id, 'mongo-real');
   const restarted = await durableHarness(h.saved);
   restarted.advance(300_001);

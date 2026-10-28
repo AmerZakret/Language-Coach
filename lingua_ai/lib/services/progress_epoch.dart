@@ -1,9 +1,10 @@
+import 'data_timeline.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ProgressEpoch {
   static bool valid(dynamic value) =>
       value is int && value >= 0 && value <= 9007199254740991;
-  static String key(String owner) => 'progress_epoch_$owner';
+  static String key(String owner) => DataTimeline().cacheKey('progress_epoch_$owner');
   static int? read(SharedPreferences prefs, String owner) {
     if (owner == 'local_guest') return null;
     final value = prefs.get(key(owner));

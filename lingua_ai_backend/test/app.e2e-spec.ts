@@ -10,6 +10,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve, sep } from 'node:path';
 import request from 'supertest';
+import { applyControlRequest } from '../src/tooling/timeline-control';
 
 describe('application e2e (disposable infrastructure only)', () => {
   jest.setTimeout(120000);
@@ -39,6 +40,8 @@ describe('application e2e (disposable infrastructure only)', () => {
       if (process.env[name]) environment[name] = process.env[name];
     Object.assign(environment, {
       NODE_ENV: 'test',
+      DATA_TIMELINE_ID: '11111111-1111-4111-8111-111111111111',
+      DATA_WRITE_MODE: 'OPEN',
       MONGODB_URI: uri,
       JWT_SECRET: randomBytes(48).toString('base64'),
       AI_ENABLED: 'false',
@@ -103,6 +106,31 @@ describe('application e2e (disposable infrastructure only)', () => {
     connection = app.get<Connection>(getConnectionToken());
     await Promise.all(
       connection.modelNames().map((name) => connection.model(name).init()),
+    );
+    // Explicit disposable test setup, never an application bootstrap hook.
+    const timeline = environment.DATA_TIMELINE_ID!;
+    const initialized = await applyControlRequest(
+      connection,
+      {
+        action: 'initialize',
+        eventId: randomUUID(),
+        targetTimelineId: timeline,
+        operatorReference: 'disposable-e2e',
+      },
+      { expectedTimelineId: timeline, writeMode: 'CLOSED' },
+    );
+    await applyControlRequest(
+      connection,
+      {
+        action: 'open',
+        eventId: randomUUID(),
+        targetTimelineId: timeline,
+        operatorReference: 'disposable-e2e',
+        expectedTimelineId: timeline,
+        expectedState: 'CLOSED',
+        expectedVersion: initialized.controlVersion,
+      },
+      { expectedTimelineId: timeline, writeMode: 'OPEN' },
     );
     await app.get(ReadinessService).refresh();
   });

@@ -37,12 +37,33 @@ import { MutationReceiptSchema } from '../common/mutation-receipt';
 import { ChatBarrierSchema } from '../ai-coach/schemas/chat-barrier.schema';
 import { validateEnvironment } from '../config/runtime-config';
 import { telemetry } from './telemetry';
+import { CONTROL_COLLECTION } from './timeline-contract';
+import { applyControlRequest } from '../tooling/timeline-control';
 
 async function provisionTestIndexes(connection: Connection) {
   for (const index of CRITICAL_INDEXES)
     await connection
       .db!.collection(index.collection)
       .createIndex(index.key, { unique: true, name: index.id });
+}
+
+async function initializeTestControl(connection: Connection) {
+  await applyControlRequest(
+    connection,
+    {
+      action: 'initialize',
+      eventId: randomUUID(),
+      targetTimelineId: '11111111-1111-4111-8111-111111111111',
+      operatorReference: 'disposable-test',
+    },
+    {
+      expectedTimelineId: '11111111-1111-4111-8111-111111111111',
+      writeMode: 'CLOSED',
+    },
+  );
+  await connection
+    .db!.collection(CONTROL_COLLECTION)
+    .updateOne({}, { $set: { writeState: 'OPEN' } });
 }
 
 let beginWork: () => void;
@@ -86,6 +107,8 @@ describe('8B readiness with disposable MongoDB and temporary storage only', () =
       new ConfigService({
         NODE_ENV: 'production',
         CLIENT_PROTOCOL_POLICY: 'ALLOW_LEGACY',
+        DATA_TIMELINE_ID: '11111111-1111-4111-8111-111111111111',
+        DATA_WRITE_MODE: 'OPEN',
         READINESS_TIMEOUT_MS: 3000,
         READINESS_RECHECK_MS: 10000,
         AI_ENABLED: false,
@@ -109,6 +132,7 @@ describe('8B readiness with disposable MongoDB and temporary storage only', () =
       serverSelectionTimeoutMS: 500,
       monitorCommands: true,
     }).asPromise();
+    await initializeTestControl(connection);
     await provisionTestIndexes(connection);
     service = makeService();
     logs.length = 0;
@@ -146,6 +170,7 @@ describe('8B readiness with disposable MongoDB and temporary storage only', () =
         transactions: 'ok',
         indexes: 'ok',
         uploads: 'ok',
+        timeline: 'ok',
       },
     });
     expect(commands).toContain('find');
@@ -191,6 +216,7 @@ describe('8B readiness with disposable MongoDB and temporary storage only', () =
         transactions: 'failed',
         indexes: 'ok',
         uploads: 'ok',
+        timeline: 'failed',
       });
       expect(result.diagnostics).toContainEqual({
         code: 'UNSUPPORTED_TOPOLOGY',
@@ -236,6 +262,7 @@ describe('8B readiness with disposable MongoDB and temporary storage only', () =
       transactions: 'failed',
       indexes: 'failed',
       uploads: 'ok',
+      timeline: 'failed',
     });
     await absent.close();
   });
@@ -620,6 +647,8 @@ describe('8B readiness with disposable MongoDB and temporary storage only', () =
           useValue: new ConfigService({
             NODE_ENV: 'production',
             CLIENT_PROTOCOL_POLICY: 'ALLOW_LEGACY',
+            DATA_TIMELINE_ID: '11111111-1111-4111-8111-111111111111',
+            DATA_WRITE_MODE: 'OPEN',
             SHUTDOWN_GRACE_MS: grace,
             READINESS_TIMEOUT_MS: 1000,
           }),
@@ -833,6 +862,9 @@ describe('8B readiness with disposable MongoDB and temporary storage only', () =
     }
   });
   test('compiled production startup never repairs indexes or seeds data; routing stays gated until operator provisioning', async () => {
+    const controlBeforeBoot = await connection
+      .db!.collection(CONTROL_COLLECTION)
+      .findOne({});
     const backend = resolve(__dirname, '../..');
     const uploadParent = join(backend, 'uploads');
     await fs.mkdir(uploadParent, { recursive: true });
@@ -860,6 +892,8 @@ describe('8B readiness with disposable MongoDB and temporary storage only', () =
           SystemRoot: process.env.SystemRoot,
           NODE_ENV: 'production',
           CLIENT_PROTOCOL_POLICY: 'ALLOW_LEGACY',
+          DATA_TIMELINE_ID: '11111111-1111-4111-8111-111111111111',
+          DATA_WRITE_MODE: 'OPEN',
           MONGODB_URI: replica.getUri(connection.name),
           ALLOW_LOCAL_MONGODB: 'true',
           JWT_SECRET: randomUUID() + randomUUID(),
@@ -914,6 +948,9 @@ describe('8B readiness with disposable MongoDB and temporary storage only', () =
         0,
       );
       expect(await fs.readdir(productionRoot)).toEqual([]);
+      expect(
+        await connection.db!.collection(CONTROL_COLLECTION).findOne({}),
+      ).toEqual(controlBeforeBoot);
     } finally {
       if (child && child.exitCode === null) {
         const stopped = once(child, 'exit');

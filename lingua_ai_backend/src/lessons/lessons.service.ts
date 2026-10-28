@@ -1,41 +1,14 @@
 import { targetLanguageQuery } from '../common/target-language';
-import { Injectable, OnModuleInit, Logger } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Lesson } from './schemas/lesson.schema';
-import { allLessons } from './data';
-import { developmentSchemaChangesAllowed } from '../operations/schema-startup';
 
 @Injectable()
-export class LessonsService implements OnModuleInit {
-  private readonly logger = new Logger(LessonsService.name);
-
+export class LessonsService {
   constructor(
     @InjectModel(Lesson.name) private readonly lessonModel: Model<Lesson>,
   ) {}
-
-  async onModuleInit() {
-    if (!developmentSchemaChangesAllowed()) return;
-    await this.seedLessons();
-  }
-
-  private async seedLessons() {
-    try {
-      const count = await this.lessonModel.countDocuments();
-      if (count > 0) {
-        this.logger.log(
-          `Database already has ${count} lessons. Skipping seed.`,
-        );
-        return;
-      }
-
-      this.logger.log('Seeding lessons to MongoDB...');
-      await this.lessonModel.insertMany(allLessons);
-      this.logger.log(`Successfully seeded ${allLessons.length} lessons.`);
-    } catch (error) {
-      this.logger.error('Failed to seed lessons', error);
-    }
-  }
 
   async findAll(targetLanguage?: string, level?: string): Promise<Lesson[]> {
     const filter: Record<string, any> = {};

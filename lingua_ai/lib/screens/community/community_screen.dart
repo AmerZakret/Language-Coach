@@ -1,3 +1,4 @@
+import '../../services/data_timeline.dart';
 import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -54,11 +55,12 @@ class _CommunityScreenState extends State<CommunityScreen> {
     final session = _visibleSession;
     final language = _selectedLanguage;
     final revision = _queryRevision;
-    return () => mounted && session.isCurrent && revision == _queryRevision &&
+    return () => mounted && session.isDataCurrent && revision == _queryRevision &&
         language == _selectedLanguage && session.ownerNamespace != 'local_guest';
   }
 
   void _onSessionChanged() {
+    if (_visibleSession.isCurrent) return;
     if (!mounted) return;
     _visibleSession = AuthService().captureSession();
     _queryRevision++;
@@ -69,11 +71,23 @@ class _CommunityScreenState extends State<CommunityScreen> {
     _loadFeed();
   }
 
+  int _timelineRevision = DataTimeline().revision;
+  void _onDataTimelineChanged() {
+    if (_timelineRevision == DataTimeline().revision) return;
+    _timelineRevision = DataTimeline().revision;
+    if (!mounted) return;
+    _visibleSession = AuthService().captureSession();
+    ++_queryRevision;
+    setState(() { _posts = []; _isPosting = false; });
+    _loadFeed();
+  }
+
   @override
   void initState() {
     super.initState();
     _visibleSession = AuthService().captureSession();
     AuthService().addListener(_onSessionChanged);
+    DataTimeline().addListener(_onDataTimelineChanged);
     ConnectivityService().addListener(_onConnectivityChanged);
     // Default learningLanguage to current targetLanguage
     final targetLangCode = TargetLanguageService().currentLanguage;
@@ -88,6 +102,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
   @override
   void dispose() {
     AuthService().removeListener(_onSessionChanged);
+    DataTimeline().removeListener(_onDataTimelineChanged);
     ConnectivityService().removeListener(_onConnectivityChanged);
     _postTextController.dispose();
     super.dispose();

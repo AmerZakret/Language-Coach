@@ -2,7 +2,7 @@
 
 ## Identity and protocol ownership
 
-Protocol revision **1** is the first explicit generation. The backend definition in
+Protocol revision **2** is current for the backend and web. Flutter remains revision **1** until Phase 10D. The backend definition in
 `src/compatibility/protocol-contract.ts` is authoritative; web and Flutter each
 have one client constant, checked against it by runtime contract tests.
 It is a behavioral contract, independent of these unchanged packaging versions:
@@ -120,3 +120,78 @@ journals and their original protocols; see [RELEASE_PACKAGING.md](RELEASE_PACKAG
 Production traffic is still unauthorized until historical Mongo credential
 rotation and revocation are independently verified. Protocol/CI success proves
 neither credential remediation nor live infrastructure readiness.
+
+
+## Historical Phase 10B server-v2/client-v1 contract
+
+The server supports revisions 1 and 2. Revision 1 retains the Phase 9 payload/queue
+contract; revision 2 adds X-Data-Timeline (canonical public UUID v4) for durable
+mutations and reset-receipt recovery. Web/Flutter runtime constants and durable
+queues remain v1 until 10C/10D. Release checks explicitly assert this temporary
+asymmetry and report clientsTimelineAware=false; this is not release authorization.
+
+ALLOW_LEGACY advertises minimumMutationRevision=1 and accepts pre-restore v1 writers,
+while v2 always requires its matching timeline. ENFORCE_MUTATIONS advertises minimum
+2 and rejects v1/missing protocol with 426. Future revisions above 2 are rejected.
+The compatibility response also includes timelineAwareProtocolRevision=2,
+dataTimelineId (matching known control or null) and timelineWriteState
+(OPEN/CLOSED/UNAVAILABLE), with no-store and no internal control/audit metadata.
+
+Malformed timeline is 400 INVALID_DATA_TIMELINE; missing v2 timeline is 428
+SERVER_TIMELINE_REQUIRED; changed timeline is 409 SERVER_TIMELINE_CHANGED; unscoped
+historical receipt under v2 is 409 RECEIPT_TIMELINE_UNVERIFIED. CLOSED/unavailable
+control is safe 503 BACKEND_NOT_READY. None is authentication failure. These errors
+require preserving the original durable intent for later client reconciliation;
+Flutter has not implemented timeline reconciliation yet; web follows 10C below.
+
+All durable DB mutations and authoritative receipt replays use the current shared
+control fence, including legacy writes. This cannot prove where a v1 intent began.
+After restore, keep hard isolation/CLOSED latches until a timeline-aware cohort
+exists and ENFORCE_MUTATIONS is configured before opening fresh B. Known restore
+provenance blocks legacy-mode write readiness. An unannounced restore with unchanged
+external control remains undetectable; enforced operator procedure is mandatory.
+
+Receipt uniqueness stays global across timelines. Historical receipts are never
+relabelled or bulk assigned a timeline. Legacy unscoped replay is transitional only;
+v2 conservatively refuses it. The server validates timeline before receipt replay,
+epoch/revision checks, AI barrier/provider work, file allocation and domain effects.
+
+
+## Phase 10C: web v2, Flutter v1 (historical staged checkpoint)
+
+Web reports protocol 2. Server supports 1/2; Flutter remains 1, with no Flutter
+runtime or durable-store migration in 10C. Release checks report web.timelineAware
+true and clientsTimelineAware false. ALLOW_LEGACY remains the transitional server
+policy; globally enabling ENFORCE_MUTATIONS is not authorized by this phase.
+
+GET /compatibility is the only authoritative timeline discovery source, using
+no-store and omitted credentials. Canonical lowercase UUID v4 validation fails
+closed. Dataset timeline storage is global per API origin and contains no auth.
+UNKNOWN, CURRENT, CHANGED and UNAVAILABLE distinguish cached knowledge from an
+online confirmation. Bootstrap, foreground/online events and every locked drain
+refresh compatibility before sending work. Build checks remain independent.
+
+New queue records (schema 2, container 3) and online intents (schema/container 2)
+capture immutable dataTimelineId before persistence. Direct durable requests also
+capture an explicit operation context before dispatch. Retries use stored provenance;
+the central transport never substitutes the latest timeline. Missing provenance,
+v1 records and corrupt stores cannot dispatch. First confirmation never stamps
+legacy records. Offline creation requires an earlier confirmed timeline.
+
+A restore pauses writes, advertises a distinct global notice, invalidates read
+snapshots and fences late responses. Refreshing current account data and explicitly
+refreshing views remounts affected surfaces. Dependent mutations need a new current
+domain read. Review/discard is local, selected-record and owner scoped; equivalent
+re-entry is a fresh logical operation with a new ID and current epoch/revision.
+Flutter 10D and the full isolated restore drill in 10E remain outstanding. Hard
+external isolation, credential rotation/revocation and release authorization remain
+separate mandatory operator requirements.
+
+## Phase 10D: all clients at protocol 2, enforcement still staged
+
+Flutter now discovers server timeline authority and persists immutable timeline
+provenance in its existing checksummed two-slot storage. Backend, web and Flutter
+are revision 2. `ALLOW_LEGACY` and minimum mutation revision 1 remain unchanged;
+this does not globally enable `ENFORCE_MUTATIONS`. Prior phase sections above
+describe historical checkpoints. See [Flutter storage and writer/cache inventory](PHASE_10D_FLUTTER_TIMELINE_STORAGE.md)
+for migration, restore handling and the online-only evidence classification.

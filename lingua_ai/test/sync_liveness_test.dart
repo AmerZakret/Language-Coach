@@ -100,7 +100,7 @@ void main() {
         probeInterval: const Duration(milliseconds: 40),
         clientFactory: () => MockClient((request) async {
               healthRequests.add(request);
-              return http.Response('{"status":"ok"}', backendAlive ? 200 : 503);
+              return http.Response('{"status":"ok","currentProtocolRevision":2,"minimumMutationRevision":1,"timelineAwareProtocolRevision":2,"timelineWriteState":"OPEN","dataTimelineId":"11111111-1111-4111-8111-111111111111"}', backendAlive ? 200 : 503);
             }));
     final coordinator = SyncCoordinator.forTesting(
         queue: queue, connectivity: health, now: () => now);
@@ -128,7 +128,7 @@ void main() {
               return success(request);
             }));
     expect(
-        healthRequests.every((request) => request.url.path == '/health'), true);
+        healthRequests.every((request) => ['/health', '/compatibility'].contains(request.url.path)), true);
     expect(
         healthRequests
             .every((request) => request.headers['Authorization'] == null),
@@ -286,7 +286,7 @@ void main() {
     final health = ConnectivityService.forTesting(
         networkAvailable: () async => true,
         clientFactory: () =>
-            MockClient((_) async => http.Response('{"status":"ok"}', 200)));
+            MockClient((_) async => http.Response('{"status":"ok","currentProtocolRevision":2,"minimumMutationRevision":1,"timelineAwareProtocolRevision":2,"timelineWriteState":"OPEN","dataTimelineId":"11111111-1111-4111-8111-111111111111"}', 200)));
     final coordinator = SyncCoordinator.forTesting(
         queue: queue, connectivity: health, now: () => now);
     await http.runWithClient(() async {
@@ -325,7 +325,7 @@ void main() {
     final health = ConnectivityService.forTesting(
         networkAvailable: () async => true,
         clientFactory: () =>
-            MockClient((_) async => http.Response('{"status":"ok"}', 200)));
+            MockClient((_) async => http.Response('{"status":"ok","currentProtocolRevision":2,"minimumMutationRevision":1,"timelineAwareProtocolRevision":2,"timelineWriteState":"OPEN","dataTimelineId":"11111111-1111-4111-8111-111111111111"}', 200)));
     final coordinator =
         SyncCoordinator.forTesting(queue: queue, connectivity: health);
     await http.runWithClient(() async {
@@ -370,7 +370,7 @@ void main() {
         networkAvailable: () async => true,
         clientFactory: () => MockClient((_) async {
               probes++;
-              return http.Response('{"status":"ok"}', 200);
+              return http.Response('{"status":"ok","currentProtocolRevision":2,"minimumMutationRevision":1,"timelineAwareProtocolRevision":2,"timelineWriteState":"OPEN","dataTimelineId":"11111111-1111-4111-8111-111111111111"}', 200);
             }));
     final coordinator = SyncCoordinator.forTesting(
         queue: queue, connectivity: health, now: () => now);
@@ -382,7 +382,7 @@ void main() {
       try {
         await Future<void>.delayed(const Duration(milliseconds: 80));
         expect(calls, 1);
-        expect(probes, 1);
+        expect(probes, 2);
         release.complete(
             success(http.Request('POST', Uri.parse('/complete-lesson'))));
         expect(await externalDrain, true);
@@ -410,7 +410,7 @@ void main() {
     final health = ConnectivityService.forTesting(
         networkAvailable: () async => true,
         clientFactory: () =>
-            MockClient((_) async => http.Response('{"status":"ok"}', 200)));
+            MockClient((_) async => http.Response('{"status":"ok","currentProtocolRevision":2,"minimumMutationRevision":1,"timelineAwareProtocolRevision":2,"timelineWriteState":"OPEN","dataTimelineId":"11111111-1111-4111-8111-111111111111"}', 200)));
     final coordinator = SyncCoordinator.forTesting(
         queue: queue, connectivity: health, now: () => now);
     await http.runWithClient(() async {
@@ -453,7 +453,7 @@ void main() {
           return true;
         },
         clientFactory: () =>
-            MockClient((_) async => http.Response('{"status":"ok"}', 200)));
+            MockClient((_) async => http.Response('{"status":"ok","currentProtocolRevision":2,"minimumMutationRevision":1,"timelineAwareProtocolRevision":2,"timelineWriteState":"OPEN","dataTimelineId":"11111111-1111-4111-8111-111111111111"}', 200)));
     await health.refresh();
     expect(health.networkAvailable, false);
     expect(health.backendReachable, false);
@@ -475,7 +475,7 @@ void main() {
     expect(health.networkAvailable, true);
     expect(health.backendReachable, false);
     expect(client.closed, true);
-    response.complete(http.Response('{"status":"ok"}', 200));
+    response.complete(http.Response('{"status":"ok","currentProtocolRevision":2,"minimumMutationRevision":1,"timelineAwareProtocolRevision":2,"timelineWriteState":"OPEN","dataTimelineId":"11111111-1111-4111-8111-111111111111"}', 200));
     health.dispose();
   });
   test('401 stays pending for authentication recovery', () async {
@@ -499,7 +499,7 @@ void main() {
     final health = ConnectivityService.forTesting(
         networkAvailable: () async => true,
         clientFactory: () =>
-            MockClient((_) async => http.Response('{"status":"ok"}', 200)));
+            MockClient((_) async => http.Response('{"status":"ok","currentProtocolRevision":2,"minimumMutationRevision":1,"timelineAwareProtocolRevision":2,"timelineWriteState":"OPEN","dataTimelineId":"11111111-1111-4111-8111-111111111111"}', 200)));
     final coordinator =
         SyncCoordinator.forTesting(queue: queue, connectivity: health);
     await http.runWithClient(() async {

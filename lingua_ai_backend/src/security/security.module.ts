@@ -15,7 +15,7 @@ import { SafeExceptionFilter } from './safe-exception.filter';
 @Module({
   controllers: [CompatibilityController],
   providers: [
-    { provide: APP_GUARD, useClass: ClientProtocolGuard },
+    { provide: APP_INTERCEPTOR, useClass: ClientProtocolGuard },
     AbuseControls,
     ProviderBudget,
     HttpSecurity,

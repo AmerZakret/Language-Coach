@@ -1,4 +1,5 @@
 import 'backend_http.dart' as backend;
+import 'data_timeline.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:connectivity_plus/connectivity_plus.dart';
@@ -67,6 +68,7 @@ class ConnectivityService extends ChangeNotifier {
     _backendState = available
         ? BackendReachability.unknown
         : BackendReachability.unreachable;
+    DataTimeline().unavailable();
     notifyListeners();
   }
 
@@ -100,12 +102,19 @@ class ConnectivityService extends ChangeNotifier {
           .timeout(_probeTimeout);
       reachable = response.statusCode == 200 &&
           jsonDecode(response.body)['status'] == 'ok';
+      if (reachable) {
+        // Compatibility must precede the reachable event that wakes any queue.
+        await DataTimeline().discover(fetch: () => backend.sendWithClient(client,
+            http.Request('GET', Uri.parse('${ApiConfig.baseUrl}/compatibility'))));
+      }
     } catch (_) {
+      reachable = false;
       /* Backend availability never falls back to external DNS. */
     } finally {
       client.close();
     }
     if (_disposed || generation != _generation || !_networkAvailable) return;
+    if (!reachable) DataTimeline().unavailable();
     final state = reachable
         ? BackendReachability.reachable
         : BackendReachability.unreachable;

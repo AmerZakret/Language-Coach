@@ -1,3 +1,4 @@
+import { readTimelineCache, writeTimelineCache } from './timelineCache';
 import type { ProgressState } from '../types/progress';
 import { DEFAULT_PROGRESS } from '../types/progress';
 import type { TargetLanguage } from '../types/language';
@@ -8,7 +9,7 @@ export const validProgressEpoch = (epoch: unknown): epoch is number =>
 const epochKey = (owner: string) => `progress_epoch_${owner}`;
 export function getOwnerProgressEpoch(owner: string): number | undefined {
   if (owner === 'local_guest') return undefined;
-  const raw = localStorage.getItem(epochKey(owner));
+  const raw = readTimelineCache(epochKey(owner));
   if (raw === null || !/^(0|[1-9]\d*)$/.test(raw)) return undefined;
   const value = Number(raw);
   return validProgressEpoch(value) ? value : undefined;
@@ -20,7 +21,7 @@ export function acknowledgeProgressEpoch(owner: string, epoch: unknown): boolean
   if (current !== undefined && epoch < current) return false;
   if (current === epoch) return true;
   resetOwnerProgress(owner);
-  localStorage.setItem(epochKey(owner), String(epoch));
+  writeTimelineCache(epochKey(owner), String(epoch));
   return true;
 }
 
@@ -45,14 +46,14 @@ export function parseProgress(value: any): ProgressState | undefined {
 
 export const loadProgress = (userKey: string, targetLanguage: string, legacyRegisteredKey?: string): ProgressState => {
   const key = getProgressStorageKey(userKey, targetLanguage);
-  let saved = localStorage.getItem(key);
-  if (saved === null) saved = localStorage.getItem(`progress_${userKey}_${targetLanguageCode(targetLanguage)}`);
+  let saved = readTimelineCache(key, userKey === 'local_guest');
+  if (saved === null) saved = readTimelineCache(`progress_${userKey}_${targetLanguageCode(targetLanguage)}`, userKey === 'local_guest');
   // Migrate only a registered user's attributable email cache, never shared guest data.
   if (legacyRegisteredKey) {
     const legacyKey = getProgressStorageKey(legacyRegisteredKey, targetLanguage);
     if (saved === null) {
-      saved = localStorage.getItem(legacyKey);
-      if (saved !== null) localStorage.setItem(key, saved);
+      saved = readTimelineCache(legacyKey, userKey === 'local_guest');
+      if (saved !== null) writeTimelineCache(key, saved, userKey === 'local_guest');
     }
     // Retire the legacy key so resetting progress cannot resurrect the old cache.
     if (saved !== null) localStorage.removeItem(legacyKey);
@@ -74,7 +75,7 @@ export const saveProgress = (userKey: string, targetLanguage: string, progress: 
   const parsed = parseProgress(progress);
   if (!parsed) throw new Error('Unavailable or invalid progress cannot be acknowledged');
   const key = getProgressStorageKey(userKey, targetLanguage);
-  localStorage.setItem(key, JSON.stringify(parsed));
+  writeTimelineCache(key, JSON.stringify(parsed), userKey === 'local_guest');
 };
 
 export const resetProgress = (userKey: string, targetLanguage: TargetLanguage): void => {

@@ -1,3 +1,4 @@
+import 'package:lingua_ai/services/data_timeline.dart';
 import 'package:lingua_ai/services/community_feed_cache.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -76,7 +77,7 @@ void main() {
           () => MockClient((request) async {
                 final intent = (await stored())['intents'].single;
                 expect(request.headers['X-Idempotency-Key'], intent['id']);
-                expect(request.headers['X-Client-Protocol'], '1');
+                expect(request.headers['X-Client-Protocol'], '2');
                 expect(jsonEncode(intent), isNot(contains('fixture-$a')));
                 requests++;
                 receipts.putIfAbsent(intent['id'], () {
@@ -131,7 +132,7 @@ void main() {
       final intent = (await stored())['intents'].single;
       expect(
           intent['state'], [400, 409].contains(status) ? 'failed' : 'pending');
-      expect(intent['protocol'], 1);
+      expect(intent['protocol'], 2);
       if ([429, 503].contains(status)) {
         expect(intent['nextAttemptAt'], greaterThan(clock));
       }
@@ -286,7 +287,7 @@ void main() {
       await recoverOnlineIntents('ai', language: 'de');
       expect(calls, 0);
       await expectLater(recoverOnlineIntents('ai', language: 'en'),
-          throwsA(isA<ApiException>()));
+          throwsA(isA<TimelineRecoveryRequired>()));
     },
         () => MockClient((request) async {
               calls++;
@@ -295,6 +296,8 @@ void main() {
               return http.Response(
                   '{"code":"CLIENT_PROTOCOL_UNSUPPORTED"}', 426);
             }));
+    expect(calls, 0);
+    expect((await stored())['intents'].single['id'], intent['id']);
     expect((await stored())['intents'].single['protocol'], 0);
   });
 }

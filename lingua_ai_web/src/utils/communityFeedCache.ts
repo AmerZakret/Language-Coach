@@ -1,3 +1,4 @@
+import { dataTimeline } from './dataTimeline';
 import { targetLanguageCode } from './targetLanguage';
 import type { GetCommunityPostsResponse } from '../api/communityApi';
 
@@ -26,17 +27,18 @@ export function validCommunityFeed(value: unknown, query: CommunityQuery): value
 // Ownerless v1 entries may contain likedByMe. Never read, adopt or relabel them.
 export function readCommunityFeed(query: CommunityQuery): GetCommunityPostsResponse | undefined {
   try {
+    dataTimeline.reread();
     const raw = localStorage.getItem(communityCacheKey(query));
     if (!raw) return;
     const value = JSON.parse(raw);
-    if (value.schemaVersion !== 2 || value.ownerNamespace !== query.ownerNamespace || value.language !== query.language
+    if (value.schemaVersion !== 3 || value.dataTimelineId !== dataTimeline.snapshot().lastConfirmed || dataTimeline.snapshot().status === 'CHANGED' || value.ownerNamespace !== query.ownerNamespace || value.language !== query.language
       || value.page !== query.page || value.limit !== query.limit || !validCommunityFeed(value.payload, query)) return;
     return value.payload;
   } catch { return; }
 }
 export function writeCommunityFeed(query: CommunityQuery, payload: GetCommunityPostsResponse): void {
   if (!validCommunityFeed(payload, query)) throw new Error('Malformed Community feed');
-  try { localStorage.setItem(communityCacheKey(query), JSON.stringify({ schemaVersion: 2, ...query, payload })); }
+  try { localStorage.setItem(communityCacheKey(query), JSON.stringify({ schemaVersion: 3, ...dataTimeline.capture(), ...query, payload })); }
   catch { /* A cache storage failure must not reject a valid online feed. */ }
 }
 export function invalidateCommunityFeed(owner: string, change: { postId?: string; language?: string }, requireAcknowledgement = false): void {

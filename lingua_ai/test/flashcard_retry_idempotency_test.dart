@@ -1,3 +1,6 @@
+import 'package:lingua_ai/services/flashcard_api_service.dart';
+import 'package:lingua_ai/services/progress_api_service.dart';
+import 'package:lingua_ai/services/data_timeline.dart';
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -41,7 +44,7 @@ void main() {
         id: userId, email: 'guest-test@guest.lingua.local', token: 'test-token');
     await TargetLanguageService().setLanguage('en', syncToBackend: false);
     await settle();
-    await prefs.setString('flashcards_guest_${userId}_en_list', jsonEncode([card.toJson()]));
+    await prefs.setString(DataTimeline().cacheKey('flashcards_guest_${userId}_en_list'), jsonEncode([card.toJson()]));
     await cards.reloadFlashcards();
   });
 
@@ -58,7 +61,9 @@ void main() {
         await settle();
         final action = (await queue.getQueue()).single;
         expect(action.id, requests.single.headers['X-Idempotency-Key']);
-        expect(await queue.processQueue(userId), true);
+        expect(await OfflineQueueService.forTesting(progressApi: ProgressApiService(),
+            flashcardApi: FlashcardApiService(),
+            now: () => DateTime.now().add(const Duration(minutes: 6))).processQueue(userId), true);
         expect(await queue.getQueue(), isEmpty);
       }, () => MockClient((request) async {
         requests.add(request);
@@ -87,7 +92,9 @@ void main() {
       expect(actions.first.payload['targetWord'], 'original');
       expect(actions.first.id, requests.single.headers['X-Idempotency-Key']);
       // The drain re-reads the persisted queue record and its started flag.
-      expect(await queue.processQueue(userId), true);
+      expect(await OfflineQueueService.forTesting(progressApi: ProgressApiService(),
+            flashcardApi: FlashcardApiService(),
+            now: () => DateTime.now().add(const Duration(minutes: 6))).processQueue(userId), true);
       expect(await queue.getQueue(), isEmpty);
     }, () => MockClient((request) async {
       requests.add(request);

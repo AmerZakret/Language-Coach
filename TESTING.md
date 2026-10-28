@@ -252,3 +252,65 @@ release check. `node scripts/package-release.cjs COMPONENT NEW_DIRECTORY [BUILD_
 is a separate explicit writer for ignored/local deployment artifacts, not a deploy
 or sign command. See RELEASE_PACKAGING.md for clean installation and operator
 boundaries. Model caches and developer environments are never packaged.
+
+
+## Phase 10B server fencing
+
+Run backend `npm test` and `npm run test:e2e`, plus `node scripts/quality-check.cjs`
+for the complete repository baseline. `src/operations/mutation-timeline.spec.ts`
+uses only mongodb-memory-server replica sets, isolated temporary upload roots and
+mocked providers. It covers v1/v2 rollout, 400/426/428/409/503, CORS/auth/ownership,
+receipt provenance/uniqueness, lost-receipt restores, account/profile writes,
+in-flight close, image compensation and public CLOSED-state discovery.
+
+The mandatory destructive AI-clear test commits A's clear, restores pre-clear
+messages while removing its receipt/barrier, installs B, sends a B message and
+replays the original A clear key. It verifies 409 before receipt/barrier/delete
+work, no provider call, and preservation of restored plus later messages.
+
+Isolated domain fixtures explicitly call test/timeline-fixture.ts with synthetic
+configuration and disposable loopback Mongo; no runtime or NODE_ENV bootstrap is
+added. Non-database unit suites inject a named UnitTimelineModule test double.
+Catalog fixtures seed reviewed lesson data explicitly; application startup no
+longer inserts lessons. Runtime route metadata plus the public writer inventory
+fail tests when new public mutations lack classification.
+
+Release checks assert server protocol 2, web/Flutter protocol 1, legacy minimum 1
+and clientsTimelineAware=false for this stage. Only client tests recognize that
+staging state; client runtime/queue/cache behavior is unchanged. Four/six concurrent
+transactions exercise real shared-record contention and bounded retries, not load
+characterization. No production Mongo/provider/network action is part of testing.
+
+
+## Phase 10C web timeline checks
+
+Run web npm test (including test/timeline.test.cjs) and an explicit production build
+with VITE_API_URL=https://api.example.invalid. Run node scripts/quality-check.cjs
+for the backend build/unit/e2e, web build/lint/artifacts, Flutter test/analyze,
+pronunciation tests and safe synthetic validate:prod/preflight gates. No production
+connection or provider call is involved.
+
+Timeline tests execute the real discovery/state/HTTP/queue/intent boundaries with
+isolated browser contexts, shared storage and Web Locks. They cover canonical and
+missing/malformed discovery, cached offline creation, unknown offline rejection,
+first-confirmation legacy preservation, stored protocol-2 headers, A-to-B progress
+same-epoch/reset and flashcard replay blocking, Community/AI intent retention,
+AI clear local discard and new B identity, stale responses, cache rejection,
+cross-tab advertisement and lock rereads, and 409/428/426/503/401 classification.
+The mutation inventory compares public durable routes to central behavior. Existing
+Phase 7/9 durability suites run with explicitly confirmed synthetic timeline fixtures;
+legacy migration and unknown discovery tests never receive that fixture shortcut.
+
+Release checks assert server/web protocol 2, Flutter protocol 1 and staged
+enforcement. They do not assert full production restore safety before 10D/10E.
+
+## Phase 10D Flutter timeline checks
+
+Run `node scripts/quality-check.cjs flutter` for locked dependency resolution, the
+complete Flutter suite and analysis. Native restore scenarios live in
+`lingua_ai/test/data_timeline_test.dart`; AI widget scenarios include timeline
+changes and stale clear confirmations. Release checks now assert backend, web
+and Flutter revision 2, with `ALLOW_LEGACY` minimum 1 and no global enforcement
+change. Earlier phase assertions describe historical checkpoints.
+
+See [the Flutter implementation inventory](PHASE_10D_FLUTTER_TIMELINE_STORAGE.md).

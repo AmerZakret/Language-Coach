@@ -1,3 +1,4 @@
+import '../../services/data_timeline.dart';
 import 'package:flutter/material.dart';
 import '../../core/theme/app_theme.dart';
 import '../../widgets/bottom_nav_bar.dart';
@@ -21,18 +22,34 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
   final ScrollController _scrollController = ScrollController();
   final AiCoachApiService _apiService = AiCoachApiService();
   
+  late SessionSnapshot _visibleSession;
   String? _recoveryMessage;
   bool _isLoading = false;
   bool _isHistoryLoading = true;
   int _historyRequestRevision = 0;
   final List<Map<String, dynamic>> _messages = [];
 
+  int _timelineRevision = DataTimeline().revision;
+  void _onDataTimelineChanged() {
+    if (_timelineRevision == DataTimeline().revision) return;
+    _timelineRevision = DataTimeline().revision;
+    _loadHistory(preserveDraft: true);
+  }
+
   @override
   void initState() {
     super.initState();
     TargetLanguageService().addListener(_loadHistory);
-    AuthService().addListener(_loadHistory);
+    _visibleSession = AuthService().captureSession();
+    AuthService().addListener(_onSessionChanged);
+    DataTimeline().addListener(_onDataTimelineChanged);
     ConnectivityService().addListener(_onConnectivityChanged);
+    _loadHistory();
+  }
+
+  void _onSessionChanged() {
+    if (_visibleSession.isCurrent) return;
+    _visibleSession = AuthService().captureSession();
     _loadHistory();
   }
 
@@ -43,7 +60,8 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
   @override
   void dispose() {
     TargetLanguageService().removeListener(_loadHistory);
-    AuthService().removeListener(_loadHistory);
+    AuthService().removeListener(_onSessionChanged);
+    DataTimeline().removeListener(_onDataTimelineChanged);
     ConnectivityService().removeListener(_onConnectivityChanged);
     _messageController.dispose();
     _scrollController.dispose();
@@ -56,14 +74,14 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
     final language = languages.currentLanguage;
     final languageRevision = languages.languageVersion;
     final revision = _historyRequestRevision;
-    return () => mounted && session.isCurrent && revision == _historyRequestRevision &&
+    return () => mounted && session.isDataCurrent && revision == _historyRequestRevision &&
         language == languages.currentLanguage && languageRevision == languages.languageVersion;
   }
 
-  Future<void> _loadHistory() async {
+  Future<void> _loadHistory({bool preserveDraft = false}) async {
     if (!mounted) return;
     final requestRevision = ++_historyRequestRevision;
-    _messageController.clear();
+    if (!preserveDraft) _messageController.clear();
     if (AuthService().token.isEmpty) {
       setState(() { _messages.clear(); _isHistoryLoading = false; _isLoading = false; });
       return;
@@ -73,7 +91,7 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
     final targetLanguage = languages.currentLanguage;
     final languageRevision = languages.languageVersion;
     bool isCurrent() =>
-        mounted && session.isCurrent &&
+        mounted && session.isDataCurrent &&
         requestRevision == _historyRequestRevision &&
         languageRevision == languages.languageVersion &&
         targetLanguage == languages.currentLanguage;
@@ -183,7 +201,7 @@ class _AiCoachScreenState extends State<AiCoachScreen> {
       final ownInvalidation = e is ApiException && e.sessionInvalidated &&
           _historyRequestRevision == historyRevision + 1;
       if (mounted && sameLanguage && canHandleApiError(session, e) && (isCurrent() || ownInvalidation)) {
-        if (session.isCurrent && _messages.isNotEmpty) {
+        if (session.isDataCurrent && _messages.isNotEmpty) {
           setState(() => _recoveryMessage = 'Could not confirm this message. Saved action is preserved; refresh to recover before sending a different message.');
           _messageController.text = text;
         }

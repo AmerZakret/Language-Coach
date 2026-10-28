@@ -1,9 +1,17 @@
+import { TIMELINE_ID_PATTERN } from '../../operations/timeline-contract';
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Schema as MongoSchema } from 'mongoose';
 
 // Durable receipts must outlive offline retries. No TTL.
 @Schema({ timestamps: true })
 export class ProgressReset extends Document {
+  @Prop({
+    type: String,
+    immutable: true,
+    match: new RegExp(TIMELINE_ID_PATTERN),
+  })
+  dataTimelineId?: string;
+
   @Prop({ type: MongoSchema.Types.ObjectId, required: true })
   userId: string;
 

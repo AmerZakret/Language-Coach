@@ -1,3 +1,4 @@
+import { dataTimeline } from '../utils/dataTimeline';
 import { mutationRequest } from './mutationRequest';
 import apiClient from './apiClient';
 import { listOnlineIntents, prepareOnlineIntent, runOnlineIntent } from '../utils/onlineIntents';
@@ -10,7 +11,7 @@ import { releaseCompatibility } from '../utils/releaseCompatibility';
 async function dispatch(intent: OnlineIntent, sessionSnapshot: QueueSession) {
   if (!isSessionCurrent(sessionSnapshot)) throw new Error('Mutation session changed');
   return mutationRequest(intent.id, async () => {
-  const config = { sessionSnapshot, clientProtocolRevision: intent.protocol,
+  const config = { sessionSnapshot, dataTimelineId: intent.dataTimelineId, clientProtocolRevision: intent.protocol,
     headers: { 'X-Idempotency-Key': intent.id } };
   if (intent.kind === 'community-create') {
     const form = new FormData();
@@ -27,7 +28,7 @@ async function dispatch(intent: OnlineIntent, sessionSnapshot: QueueSession) {
   }
   if (intent.kind === 'ai-send') return (await apiClient.post('/ai-coach/chat', intent.payload, config)).data;
   return (await apiClient.delete('/ai-coach/clear', { ...config, params: intent.payload })).data;
-  });
+  }, undefined, intent);
 }
 function accept(result: unknown, intent: OnlineIntent): void {
   if (!result || typeof result !== 'object') throw new Error('The acknowledgement could not be confirmed. Saved action is preserved.');
@@ -40,8 +41,8 @@ function accept(result: unknown, intent: OnlineIntent): void {
   } else if (value.success !== true) throw new Error('Missing clear acknowledgement.');
 }
 export const replayOnlineIntent = (id: string): Promise<unknown> => runOnlineIntent(id, dispatch, accept);
-export async function durableMutation<T>(kind: IntentKind, language: string, payload: Record<string, unknown>, operationId?: string): Promise<T> {
-  const intent = await prepareOnlineIntent(kind, language, payload, operationId);
+export async function durableMutation<T>(kind: IntentKind, language: string, payload: Record<string, unknown>, operationId?: string, timeline?: { readonly dataTimelineId: string }): Promise<T> {
+  const intent = await prepareOnlineIntent(kind, language, payload, operationId, timeline);
   return await replayOnlineIntent(intent.id) as T;
 }
 export async function recoverOnlineIntents(kind: 'community' | 'ai', language?: string): Promise<void> {
@@ -52,6 +53,7 @@ export async function recoverOnlineIntents(kind: 'community' | 'ai', language?: 
   for (const intent of intents) {
     if (!isSessionCurrent(sessionSnapshot)) return;
     if (!intent.kind.startsWith(kind === 'ai' ? 'ai-' : 'community-') || (language && intent.language !== language)) continue;
+    if (dataTimeline.provenance(intent) !== 'CURRENT') continue;
     if (intent.state === 'failed') throw new Error('A saved action was rejected or conflicted. Recovery is required before replacing it.');
     if (intent.nextAttemptAt > Date.now()) throw new Error('A previous action is awaiting confirmation. Retry recovery shortly.');
     try { await replayOnlineIntent(intent.id); }

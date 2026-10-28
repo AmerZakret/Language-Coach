@@ -1,7 +1,7 @@
 import 'dart:async';
 
 class ClientProtocol {
-  static const revision = 1;
+  static const revision = 2;
   static const header = 'X-Client-Protocol';
   static const developmentBuildId = 'development';
   static const buildId =

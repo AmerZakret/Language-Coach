@@ -1,3 +1,5 @@
+import '../../services/data_timeline.dart';
+import '../../services/auth_service.dart';
 import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
@@ -17,6 +19,15 @@ class FlashcardReviewScreen extends StatefulWidget {
 }
 
 class _FlashcardReviewScreenState extends State<FlashcardReviewScreen> with SingleTickerProviderStateMixin {
+  final _session = AuthService().captureSession();
+  final _languageVersion = TargetLanguageService().languageVersion;
+  bool get _contextCurrent => _session.isDataCurrent &&
+      _languageVersion == TargetLanguageService().languageVersion;
+  void _onContextChanged() {
+    if (_contextCurrent || !mounted) return;
+    _slideshowTimer?.cancel();
+    setState(() {});
+  }
   late AnimationController _controller;
   late Animation<double> _animation;
   
@@ -39,6 +50,10 @@ class _FlashcardReviewScreenState extends State<FlashcardReviewScreen> with Sing
   @override
   void initState() {
     super.initState();
+    DataTimeline().addListener(_onContextChanged);
+    AuthService().addListener(_onContextChanged);
+    TargetLanguageService().addListener(_onContextChanged);
+
     _controller = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 500),
@@ -54,6 +69,9 @@ class _FlashcardReviewScreenState extends State<FlashcardReviewScreen> with Sing
 
   @override
   void dispose() {
+    DataTimeline().removeListener(_onContextChanged);
+    AuthService().removeListener(_onContextChanged);
+    TargetLanguageService().removeListener(_onContextChanged);
     _controller.dispose();
     _slideshowTimer?.cancel();
     super.dispose();
@@ -82,11 +100,13 @@ class _FlashcardReviewScreenState extends State<FlashcardReviewScreen> with Sing
   }
 
   Future<void> _handleScore(int score, {bool manual = true}) async {
+    if (!_contextCurrent || !mounted) return;
     final currentCard = _dueCards[_currentIndex];
     _results.add(score);
 
     // Call service to update SRS parameters
     await FlashcardService().reviewCard(currentCard, score);
+    if (!_contextCurrent || !mounted) return;
 
     if (_currentIndex + 1 >= _dueCards.length) {
       _stopSlideshow();
@@ -417,6 +437,12 @@ class _FlashcardReviewScreenState extends State<FlashcardReviewScreen> with Sing
 
   @override
   Widget build(BuildContext context) {
+    if (!_contextCurrent) {
+      return Scaffold(appBar: AppBar(title: const Text('Refresh required')),
+        body: const Center(child: Padding(padding: EdgeInsets.all(24), child: Text(
+          'The account, language or server history changed. Return and refresh before starting a new session.'))));
+    }
+
     return ListenableBuilder(
       listenable: Listenable.merge([LanguageService(), TargetLanguageService(), ThemeService()]),
       builder: (context, child) {

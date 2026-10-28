@@ -1,3 +1,4 @@
+import { dataTimeline } from '../utils/dataTimeline';
 import { targetLanguageName, tryTargetLanguageCode } from '../utils/targetLanguage';
 import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import type { TargetLanguage } from '../types/language';
@@ -40,12 +41,15 @@ export const TargetLanguageProvider: React.FC<{ children: React.ReactNode }> = (
     const isCurrent = captureSession();
     const request = ++languageRequest.current;
     if (!isCurrent()) return;
+    let operation: Readonly<{ dataTimelineId: string }> | undefined;
+    try { if (user && !isGuest && token) operation = dataTimeline.capture(); }
+    catch { console.error('Profile change paused until server data is confirmed.'); return; }
     setTargetLanguageState(lang);
     localStorage.setItem('linguaai_target_language', lang);
 
     if (user && !isGuest && token) {
       try {
-        const updatedUser = await updateProfile({ targetLanguage: lang });
+        const updatedUser = await updateProfile({ targetLanguage: lang }, operation);
         if (!isCurrent() || request !== languageRequest.current) return;
         await updateUser({ ...updatedUser, isGuest: false });
       } catch (e) {

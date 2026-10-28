@@ -199,6 +199,8 @@ describe('8F local deployment preflight (no connections or writes)', () => {
   const production = () => ({
     NODE_ENV: 'production',
     CLIENT_PROTOCOL_POLICY: 'ALLOW_LEGACY',
+    DATA_TIMELINE_ID: '11111111-1111-4111-8111-111111111111',
+    DATA_WRITE_MODE: 'OPEN',
     MONGODB_URI: 'mongodb://db.example.invalid/language',
     JWT_SECRET: randomBytes(48).toString('base64'),
     AI_ENABLED: 'false',

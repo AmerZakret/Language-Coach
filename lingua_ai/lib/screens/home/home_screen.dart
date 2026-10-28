@@ -1,3 +1,4 @@
+import '../../services/data_timeline.dart';
 import '../../services/xp_level.dart';
 import 'package:flutter/material.dart';
 import '../../core/theme/app_theme.dart';
@@ -28,7 +29,15 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     TargetLanguageService().addListener(_onTargetLanguageChanged);
+    DataTimeline().addListener(_onTimelineChanged);
     _lessonsFuture = _apiService.fetchLessons(TargetLanguageService().currentLanguage);
+  }
+
+  int _timelineRevision = DataTimeline().revision;
+  void _onTimelineChanged() {
+    if (_timelineRevision == DataTimeline().revision) return;
+    _timelineRevision = DataTimeline().revision;
+    _onTargetLanguageChanged();
   }
 
   void _onTargetLanguageChanged() {
@@ -42,6 +51,7 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void dispose() {
     TargetLanguageService().removeListener(_onTargetLanguageChanged);
+    DataTimeline().removeListener(_onTimelineChanged);
     super.dispose();
   }
 
@@ -102,6 +112,7 @@ class _HomeScreenState extends State<HomeScreen> {
         return Scaffold(
           body: SafeArea(
             child: FutureBuilder<List<Lesson>>(
+              key: ValueKey(DataTimeline().cacheKey('lessons_${TargetLanguageService().currentLanguage}')),
               future: _lessonsFuture,
               builder: (context, snapshot) {
                 final lessons = snapshot.data ?? [];

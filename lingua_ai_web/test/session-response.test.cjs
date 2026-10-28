@@ -1,3 +1,4 @@
+const { envelope: timelineEnvelope, id: timelineId } = require('./helpers/timelineFixture.cjs');
 const assert = require('node:assert/strict');
 const { readFileSync } = require('node:fs');
 const { join } = require('node:path');
@@ -14,7 +15,7 @@ const deferred = () => {
   return { promise, resolve, reject };
 };
 const user = id => ({ id, name: id === A ? 'A' : 'B', email: `${id}@example.com`, targetLanguage: 'en', isGuest: false });
-const progress = (xp = 20) => ({ progressEpoch: 0, totalXp: xp, streak: 2, completedLessonIds: [], weeklyActivity: [] });
+const progress = (xp = 20) => ({ dataTimelineId: timelineId, progressEpoch: 0, totalXp: xp, streak: 2, completedLessonIds: [], weeklyActivity: [] });
 const card = id => ({ _id: `card-${id}`, userId: id, targetWord: id,
   turkishTranslation: 'translation', interval: 0, easinessFactor: 2.5,
   nextReviewDate: new Date().toISOString(), reviewCount: 0 });
@@ -23,8 +24,14 @@ const translate = text => text;
 
 function harness(initial = {}) {
   const lockManager = locks();
-  const values = new Map(Object.entries(initial));
-  for (const prefix of ['registered', 'guest']) for (const id of [A,B]) { const key = `progress_epoch_${prefix}_${id}`; if (!values.has(key)) values.set(key, '0'); }
+  // Existing domain fixtures represent freshly acknowledged snapshots in the synthetic timeline.
+  const values = new Map(Object.entries(initial).map(([key, raw]) => {
+    if (/^(progress_(?:registered_|guest_|epoch_)|flashcards_(?:all|due)_[a-f0-9]{24}_|linguaai_lessons_)/.test(key)) {
+      try { const value = JSON.parse(raw); if (!value?.dataTimelineId) return [key, timelineEnvelope(value)]; } catch { /* corrupt fixture remains corrupt */ }
+    }
+    return [key, raw];
+  }));
+  for (const prefix of ['registered', 'guest']) for (const id of [A,B]) { const key = `progress_epoch_${prefix}_${id}`; if (!values.has(key)) values.set(key, timelineEnvelope(0)); }
   const localStorage = { getItem: k => values.get(k) ?? null,
     setItem: (k, v) => values.set(k, String(v)), removeItem: k => values.delete(k),
     get length() { return values.size; }, key: i => [...values.keys()][i] ?? null };
@@ -91,7 +98,7 @@ function harness(initial = {}) {
   };
   const jsx = (type, props) => ({ type, props });
   const sources = {
-    protocol: 'utils/clientProtocol.ts', compatibility: 'utils/releaseCompatibility.ts', userKey: 'utils/userKey.ts', queueSession: 'utils/queueSession.ts', authStorage: 'utils/authSessionStorage.ts', coordination: 'utils/browserCoordination.ts', localGuestCards: 'utils/localGuestCards.ts',
+    timelineCache: 'utils/timelineCache.ts', protocol: 'utils/clientProtocol.ts', compatibility: 'utils/releaseCompatibility.ts', userKey: 'utils/userKey.ts', queueSession: 'utils/queueSession.ts', authStorage: 'utils/authSessionStorage.ts', coordination: 'utils/browserCoordination.ts', localGuestCards: 'utils/localGuestCards.ts',
     policy: 'utils/syncRetryPolicy.ts', guard: 'utils/useSessionGuard.ts', auth: 'context/AuthContext.tsx',
     storage: 'utils/progressStorage.ts', types: 'types/progress.ts',
     progress: 'context/ProgressContext.tsx', target: 'context/TargetLanguageContext.tsx',
@@ -130,6 +137,8 @@ function harness(initial = {}) {
       navigator: { locks: lockManager },
       document: { addEventListener() {}, removeEventListener() {} }, window: { confirm: () => true },
       require: path => {
+        if (path.endsWith('/dataTimeline')) return require('./helpers/timelineFixture.cjs').isolatedTimeline;
+        if (path.endsWith('/timelineCache')) return load('timelineCache');
         if (path.endsWith('/onlineIntents')) return { subscribeIntentAcknowledgements: () => () => {} };
         if (path.endsWith('/clientProtocol')) return load('protocol');
         if (path.endsWith('/releaseCompatibility')) return load('compatibility');
@@ -478,7 +487,7 @@ test('FlashcardsPage pending create review delete cancels server creation and lo
   await h.child.exposed.handleStudyScore(4); await h.settle();
   await h.child.exposed.handleDeleteCard(pending._id); await h.settle();
   assert.equal(h.queue.getOfflineQueue().length, 0); assert.equal(h.child.exposed.allCards.length, 0);
-  assert.deepEqual(JSON.parse(h.localStorage.getItem(`flashcards_all_${A}_English`)), []);
+  assert.deepEqual(JSON.parse(h.localStorage.getItem(`flashcards_all_${A}_English`)).payload, []);
   assert.equal(await h.queue.processOfflineQueue(A), true);
   assert.equal(h.calls.filter(([method]) => method === 'post').length, 0);
 });
@@ -660,10 +669,10 @@ test('login screen cannot apply an old login response after B is active', async 
 test('current-session progress and flashcard responses still apply and cache', async () => {
   const h = harness(); h.isOffline = false; h.mountAuth(); await h.login(B); h.mount('progress', 'ProgressProvider'); await h.settle();
   assert.equal(h.child.result.props.value.progress.totalXp, 20);
-  assert.equal(JSON.parse(h.localStorage.getItem(`progress_registered_${B}_English`)).totalXp, 20);
+  assert.equal(JSON.parse(h.localStorage.getItem(`progress_registered_${B}_English`)).payload.totalXp, 20);
   h.child.unmount(); h.isOffline = false; h.mount('cards', 'FlashcardsPage'); await h.settle();
   assert.equal(h.child.exposed.allCards[0].userId, B);
-  assert.equal(JSON.parse(h.localStorage.getItem(`flashcards_all_${B}_English`))[0].userId, B);
+  assert.equal(JSON.parse(h.localStorage.getItem(`flashcards_all_${B}_English`)).payload[0].userId, B);
 });
 
 async function offlineProgressHarness(initial) {
@@ -707,7 +716,7 @@ test('Phase 4E: failed completion remains over fresh server progress and never d
   await h.online(); await h.value().reloadProgress(); await h.settle();
   assert.equal(h.load('queue').getOfflineQueue().length, 1);
   assert.equal(h.value().progress.totalXp, 50); assert.deepEqual(copy(h.value().progress.completedLessonIds), ['one']);
-  assert.equal(JSON.parse(h.localStorage.getItem(`progress_registered_${A}_English`)).totalXp, 0);
+  assert.equal(JSON.parse(h.localStorage.getItem(`progress_registered_${A}_English`)).payload.totalXp, 0);
   // The server may already have accepted a response-lost request.
   h.serverProgress = { ...progress(50), completedLessonIds: ['one'] };
   await h.value().reloadProgress(); await h.settle();
@@ -797,7 +806,7 @@ test('Phase 4E: owner-scoped legacy action lacking a score is retained without i
 
 test('Phase 4E: valid legacy owned score gains cached lesson context without ID replacement', async () => {
   const h = await offlineProgressHarness();
-  h.localStorage.setItem('linguaai_lessons_English', JSON.stringify([{ id: 'legacy', xpReward: 50, targetLanguage: 'English' }]));
+  h.localStorage.setItem('linguaai_lessons_English', timelineEnvelope(JSON.parse(JSON.stringify([{ id: 'legacy', xpReward: 50, targetLanguage: 'English' }]))));
   await h.load('queue').pushToOfflineQueue('complete-lesson', { lessonId: 'legacy', score: 73, progressEpoch: 0 }, `registered_${A}`);
   const id = h.load('queue').getOfflineQueue()[0].id;
   await h.value().reloadProgress(); await h.settle();
@@ -812,7 +821,7 @@ test('Phase 4E: valid legacy owned score gains cached lesson context without ID 
 
 test('Phase 4E: score zero stays zero and cached unscored IDs never generate uploads', async () => {
   const h = await offlineProgressHarness();
-  h.localStorage.setItem(`progress_registered_${A}_English`, JSON.stringify({ ...progress(0), completedLessonIds: ['unscored'] }));
+  h.localStorage.setItem(`progress_registered_${A}_English`, timelineEnvelope(JSON.parse(JSON.stringify({ ...progress(0), completedLessonIds: ['unscored'] }))));
   await h.value().completeLesson('zero', 50, 0, 'en'); await h.online();
   assert.equal(h.sent.length, 1); assert.equal(h.sent[0].score, 0);
 });
@@ -820,7 +829,7 @@ test('Phase 4E: score zero stays zero and cached unscored IDs never generate upl
 test('Phase 4E: reset clears attributable legacy caches in every language', async () => {
   const h = await offlineProgressHarness();
   const legacy = h.load('userKey').getLegacyRegisteredProgressKey(user(A).email, false);
-  h.localStorage.setItem(`progress_${legacy}_German`, JSON.stringify({ ...progress(500), completedLessonIds: ['old-german'] }));
+  h.localStorage.setItem(`progress_${legacy}_German`, timelineEnvelope(JSON.parse(JSON.stringify({ ...progress(500), completedLessonIds: ['old-german'] }))));
   await h.value().resetProgress();
   h.language = 'German'; h.localStorage.setItem('linguaai_target_language', 'German'); h.child.render(); await h.settle();
   assert.equal(h.value().progress.totalXp, 0); assert.equal(h.localStorage.getItem(`progress_${legacy}_German`), null);
@@ -1175,7 +1184,7 @@ test('Phase 6C: GET failures preserve acknowledged progress and expose their exi
 });
 test('Phase 6C: trusted cached lesson repairs old UI-language metadata without changing epoch or operation ID', async () => {
   const h = await offlineProgressHarness(), queue = h.load('queue');
-  h.localStorage.setItem('linguaai_lessons_English', JSON.stringify([{ id: 'one', targetLanguage: 'en', xpReward: 50 }]));
+  h.localStorage.setItem('linguaai_lessons_English', timelineEnvelope(JSON.parse(JSON.stringify([{ id: 'one', targetLanguage: 'en', xpReward: 50 }]))));
   await queue.pushToOfflineQueue('complete-lesson', { lessonId: 'one', score: 73, xpReward: 50,
     targetLanguage: 'German', progressEpoch: 0 }, `registered_${A}`);
   const id = queue.getOfflineQueue()[0].id;
@@ -1185,6 +1194,22 @@ test('Phase 6C: trusted cached lesson repairs old UI-language metadata without c
   assert.equal(queue.getOfflineQueue()[0].payload.progressEpoch, 0);
   assert.equal(queue.getOfflineQueue()[0].payload.targetLanguage, 'en');
 });
+test('10C profile language captures provenance before persisting an optimistic preference', async () => {
+  const h = harness(); h.mountAuth(); await h.login(A);
+  h.mount('target', 'TargetLanguageProvider'); await h.settle();
+  const before = h.localStorage.getItem('linguaai_target_language');
+  const timeline = require('./helpers/timelineFixture.cjs').isolatedTimeline.dataTimeline;
+  const capture = timeline.capture;
+  let requests = 0;
+  h.api.updateProfile = async () => { requests++; return user(A); };
+  try {
+    timeline.capture = () => { throw new Error('Timeline unavailable'); };
+    await h.child.result.props.value.setTargetLanguage('German');
+    assert.equal(h.localStorage.getItem('linguaai_target_language'), before);
+    assert.equal(requests, 0);
+  } finally { timeline.capture = capture; }
+});
+
 test('Phase 6C: invalid newer snapshot cannot advance epoch or erase valid cache', async () => {
   const h = await offlineProgressHarness(), owner = `registered_${A}`, queue = h.load('queue'), store = h.load('storage');
   store.saveProgress(owner, 'en', { ...progress(50), completedLessonIds: ['one'] });

@@ -20,6 +20,8 @@ function production(overrides: Record<string, unknown> = {}) {
   return {
     NODE_ENV: 'production',
     CLIENT_PROTOCOL_POLICY: 'ALLOW_LEGACY',
+    DATA_TIMELINE_ID: '11111111-1111-4111-8111-111111111111',
+    DATA_WRITE_MODE: 'OPEN',
     MONGODB_URI: 'mongodb://db.example.invalid/language',
     JWT_SECRET: randomBytes(48).toString('base64'),
     PORT: '3000',
@@ -355,6 +357,19 @@ describe('Phase 8A production configuration (no external services)', () => {
         signal: AbortSignal.timeout(1000),
       });
       expect(denied.headers.get('access-control-allow-origin')).toBeNull();
+      const inspection = await new mongo.MongoClient(
+        replica.getUri(),
+      ).connect();
+      try {
+        expect(
+          await inspection
+            .db()
+            .listCollections({ name: 'timelinecontrol' })
+            .hasNext(),
+        ).toBe(false);
+      } finally {
+        await inspection.close();
+      }
       expect(output).toContain('"aiEnabled":false');
       expect(output).not.toContain(env.JWT_SECRET);
       expect(output).not.toContain(env.MONGODB_URI);

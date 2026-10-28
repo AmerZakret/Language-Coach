@@ -1,3 +1,4 @@
+import 'data_timeline.dart';
 import 'dart:async';
 import 'dart:convert';
 import '../core/config/client_protocol.dart';
@@ -25,8 +26,11 @@ class OnlineIntentService {
   static final _drains = <String, Future<void>>{};
   static bool isDispatching(String owner) => _drains.containsKey(owner);
 
-  static Future<T> _lock<T>(Map<String, Future<void>> tails, String owner,
-      Future<T> Function() work) async {
+  static Future<T> _lock<T>(
+    Map<String, Future<void>> tails,
+    String owner,
+    Future<T> Function() work,
+  ) async {
     final previous = tails[owner] ?? Future<void>.value();
     final release = Completer<void>();
     tails[owner] = release.future;
@@ -40,7 +44,7 @@ class OnlineIntentService {
   }
 
   static void _session(SessionSnapshot session) {
-    if (!session.isCurrent) {
+    if (!session.isDataCurrent) {
       throw StateError('Mutation session changed');
     }
     if (session.ownerNamespace == 'local_guest' ||
@@ -50,6 +54,10 @@ class OnlineIntentService {
   }
 
   static void _validate(Map<String, dynamic> item, String owner) {
+    if (item['dataTimelineId'] != null &&
+        !DataTimeline.valid(item['dataTimelineId'])) {
+      throw SyncStorageCorruption();
+    }
     final payload = item['payload'];
     final kind = item['kind'];
     if (item['schemaVersion'] != 1 ||
@@ -60,12 +68,15 @@ class OnlineIntentService {
         item['protocol'] < 0 ||
         item['protocol'] > 999999 ||
         !['en', 'de', 'es', 'fr', 'ar'].contains(item['language']) ||
-        !['pending', 'acknowledged', 'failed'].contains(item['state']) ||
+        !['preparing', 'pending', 'acknowledged', 'failed'].contains(item['state']) ||
         item['attempts'] is! int ||
         item['attempts'] < 0 ||
         item['attempts'] > 10000 ||
         item['nextAttemptAt'] is! int ||
         payload is! Map<String, dynamic>) {
+      throw SyncStorageCorruption();
+    }
+    if (item['state'] == 'preparing' && kind != 'community-create') {
       throw SyncStorageCorruption();
     }
     final allowed = kind == 'ai-send'
@@ -89,10 +100,12 @@ class OnlineIntentService {
       final files = payload['files'];
       if (fields is! Map<String, dynamic> ||
           fields['learningLanguage'] != item['language'] ||
-          fields.keys
-              .any((key) => !['learningLanguage', 'text'].contains(key)) ||
-          fields.values
-              .any((value) => value is! String || value.length > 20000) ||
+          fields.keys.any(
+            (key) => !['learningLanguage', 'text'].contains(key),
+          ) ||
+          fields.values.any(
+            (value) => value is! String || value.length > 20000,
+          ) ||
           files is! List ||
           files.length > 1) {
         throw SyncStorageCorruption();
@@ -102,8 +115,11 @@ class OnlineIntentService {
             file['field'] != 'image' ||
             file['filename'] is! String ||
             (file['filename'] as String).length > 255 ||
-            !['image/png', 'image/jpeg', 'image/webp']
-                .contains(file['contentType']) ||
+            ![
+              'image/png',
+              'image/jpeg',
+              'image/webp',
+            ].contains(file['contentType']) ||
             file['bytes'] is! String ||
             base64Decode(file['bytes']).length > 5 * 1024 * 1024) {
           throw SyncStorageCorruption();
@@ -128,6 +144,11 @@ class OnlineIntentService {
       final ids = <String>{};
       for (final item in journal['intents']) {
         _validate(Map<String, dynamic>.from(item), owner);
+        if (item['dataTimelineId'] == null ||
+            (DataTimeline().lastConfirmedDataTimelineId != null &&
+                !DataTimeline().matchesCache(item['dataTimelineId']))) {
+          DataTimeline().noteEvidence();
+        }
         if (!ids.add(item['id'])) throw const FormatException();
       }
       return journal;
@@ -154,25 +175,108 @@ class OnlineIntentService {
   }
 
   static Future<Map<String, dynamic>> prepare(
-      String kind, String language, Map<String, dynamic> payload,
-      {String? operationId}) async {
-    final session = AuthService().captureSession();
+    String kind, String language, Map<String, dynamic> payload,
+    {String? operationId, SessionSnapshot? expectedSession}) =>
+      _prepare(kind, language, payload, operationId: operationId,
+          expectedSession: expectedSession);
+
+  // This initial durable record is committed before file/device/media awaits.
+  // Its timeline and ID never change when preparation later completes.
+  static Future<Map<String, dynamic>> beginCommunityCreate(
+      String language, Map<String, String> fields,
+      {String? operationId, String? selectedFilename,
+      required SessionSnapshot expectedSession}) =>
+      _prepare('community-create', language, {'fields': fields, 'files': <dynamic>[]},
+          operationId: operationId, expectedSession: expectedSession,
+          preparing: true, selectedFilename: selectedFilename);
+
+  static Future<Map<String, dynamic>> finishCommunityPreparation(
+      String id, Map<String, dynamic> payload,
+      {required SessionSnapshot expectedSession}) async {
+    final frozen = jsonDecode(jsonEncode(payload)) as Map<String, dynamic>;
+    return _lock(_tails, expectedSession.ownerNamespace, () async {
+      _session(expectedSession);
+      final journal = await _read(expectedSession.ownerNamespace);
+      _session(expectedSession);
+      final item = (journal['intents'] as List).firstWhere((item) => item['id'] == id);
+      if (item['kind'] != 'community-create' ||
+          !DataTimeline().matchesCache(item['dataTimelineId'])) {
+        throw const TimelineRecoveryRequired();
+      }
+      if (jsonEncode(item['payload']['fields']) != jsonEncode(frozen['fields'])) {
+        throw const ApiException(ApiFailure.client,
+            'Saved operation payload conflicts. Recovery is required.',
+            409, false, 'IDEMPOTENCY_CONFLICT');
+      }
+      if (item['state'] != 'preparing') {
+        if (jsonEncode(item['payload']) != jsonEncode(frozen)) {
+          throw const ApiException(ApiFailure.client,
+              'Saved operation payload conflicts. Recovery is required.',
+              409, false, 'IDEMPOTENCY_CONFLICT');
+        }
+        return Map<String, dynamic>.from(item);
+      }
+      item['payload'] = frozen;
+      item['state'] = 'pending';
+      _validate(Map<String, dynamic>.from(item), expectedSession.ownerNamespace);
+      _session(expectedSession);
+      await _write(expectedSession.ownerNamespace, journal);
+      return Map<String, dynamic>.from(item);
+    });
+  }
+
+  static Future<Map<String, dynamic>> _prepare(
+    String kind,
+    String language,
+    Map<String, dynamic> payload, {
+    String? operationId, SessionSnapshot? expectedSession,
+    bool preparing = false, String? selectedFilename,
+  }) async {
+    final session = expectedSession ?? AuthService().captureSession();
+    _session(session);
+    final timeline = DataTimeline().captureNewWork();
     final frozen = jsonDecode(jsonEncode(payload)) as Map<String, dynamic>;
     ClientCompatibility().ensureMutationAllowed();
     return _lock(_tails, session.ownerNamespace, () async {
       _session(session);
       final journal = await _read(session.ownerNamespace);
+      _session(session);
       final items = journal['intents'] as List;
+      if (operationId != null &&
+          (journal['discardedIds'] as List? ?? []).contains(operationId)) {
+        throw const IntentRecoveryRequired();
+      }
       for (final item in items) {
+        if (item['dataTimelineId'] != timeline) {
+          if (operationId == item['id']) throw const TimelineRecoveryRequired();
+          continue; // Explicit new user work gets a new ID; old evidence stays.
+        }
         if (item['kind'] == kind && item['language'] == language) {
+          if (preparing && kind == 'community-create') {
+            final files = item['payload']['files'] as List;
+            final originalFilename = item['selectedFilename'] ??
+                (files.isEmpty ? null : files.first['filename']);
+            if (jsonEncode(item['payload']['fields']) != jsonEncode(frozen['fields']) ||
+                originalFilename != selectedFilename ||
+                (operationId != null && operationId != item['id'])) {
+              throw const ApiException(ApiFailure.client,
+                  'Saved operation payload conflicts. Recovery is required.',
+                  409, false, 'IDEMPOTENCY_CONFLICT');
+            }
+            return Map<String, dynamic>.from(item);
+          }
+          if (item['dataTimelineId'] != timeline) {
+            throw const TimelineRecoveryRequired();
+          }
           if (jsonEncode(item['payload']) != jsonEncode(frozen) ||
               (operationId != null && operationId != item['id'])) {
             throw const ApiException(
-                ApiFailure.client,
-                'Saved operation payload conflicts. Recovery is required.',
-                409,
-                false,
-                'IDEMPOTENCY_CONFLICT');
+              ApiFailure.client,
+              'Saved operation payload conflicts. Recovery is required.',
+              409,
+              false,
+              'IDEMPOTENCY_CONFLICT',
+            );
           }
           return Map<String, dynamic>.from(item);
         }
@@ -192,12 +296,17 @@ class OnlineIntentService {
         'id': operationId ?? newMutationId(),
         'ownerNamespace': session.ownerNamespace,
         'protocol': ClientProtocol.revision,
+        'dataTimelineId': timeline,
+        if (kind.startsWith('ai-'))
+          'conversationId': (journal['conversations'] ??=
+              <String, dynamic>{})['$timeline:$language'] ??= newMutationId(),
         'kind': kind,
         'language': language,
         'payload': frozen,
-        'state': 'pending',
+        'state': preparing ? 'preparing' : 'pending',
+        if (preparing) 'selectedFilename': selectedFilename,
         'attempts': 0,
-        'nextAttemptAt': 0
+        'nextAttemptAt': 0,
       };
       _validate(intent, session.ownerNamespace);
       items.add(intent);
@@ -207,31 +316,54 @@ class OnlineIntentService {
   }
 
   static Future<Map<String, dynamic>> run(
-      String id,
-      Future<Map<String, dynamic>> Function(
-              Map<String, dynamic>, SessionSnapshot)
-          dispatch,
-      Future<void> Function(Map<String, dynamic>, Map<String, dynamic>)
-          accept) async {
+    String id,
+    Future<Map<String, dynamic>> Function(Map<String, dynamic>, SessionSnapshot)
+        dispatch,
+    Future<void> Function(Map<String, dynamic>, Map<String, dynamic>) accept,
+  ) async {
+    await DataTimeline().ensureFresh();
     final session = AuthService().captureSession();
     final owner = session.ownerNamespace;
     return _lock(_drains, owner, () async {
       _session(session);
       var journal = await _lock(_tails, owner, () => _read(owner));
-      final matches =
-          (journal['intents'] as List).where((item) => item['id'] == id);
+      final matches = (journal['intents'] as List).where(
+        (item) => item['id'] == id,
+      );
       if (matches.isEmpty) throw const IntentRecoveryRequired();
       var intent = Map<String, dynamic>.from(matches.first);
-      if (intent['state'] == 'failed' || intent['nextAttemptAt'] > clock()) {
+      DataTimeline().requireStored(intent['dataTimelineId']);
+      if (intent['protocol'] != 2) throw const TimelineRecoveryRequired();
+      final conversation = intent['conversationId'];
+      if ((intent['kind'] as String).startsWith('ai-') &&
+          (conversation is! String ||
+              journal['conversations']
+                      ?['${intent['dataTimelineId']}:${intent['language']}'] !=
+                  conversation)) {
+        throw const TimelineRecoveryRequired();
+      }
+      if (['timeline', 'provenance'].contains(intent['category']) || intent['state'] == 'preparing' || intent['state'] == 'failed' || intent['nextAttemptAt'] > clock()) {
         throw const IntentRecoveryRequired();
       }
       ClientCompatibility().ensureMutationAllowed();
-      Future<void> change(void Function(Map<String, dynamic>) update) =>
+      Future<void> change(void Function(Map<String, dynamic>) update, {bool requireFresh = true}) =>
           _lock(_tails, owner, () async {
             _session(session);
+            if (requireFresh) {
+              DataTimeline().requireStored(intent['dataTimelineId']);
+            } else if (!DataTimeline().matchesCache(intent['dataTimelineId'])) {
+              throw const TimelineRecoveryRequired();
+            }
             journal = await _read(owner);
-            final current = (journal['intents'] as List)
-                .firstWhere((item) => item['id'] == id);
+            _session(session);
+            if (requireFresh) {
+              DataTimeline().requireStored(intent['dataTimelineId']);
+            } else if (!DataTimeline().matchesCache(intent['dataTimelineId'])) {
+              throw const TimelineRecoveryRequired();
+            }
+            final current = (journal['intents'] as List).firstWhere(
+              (item) => item['id'] == id,
+            );
             update(current);
             await _write(owner, journal);
             intent = Map<String, dynamic>.from(current);
@@ -240,27 +372,39 @@ class OnlineIntentService {
       if (intent['state'] == 'acknowledged') {
         result = Map<String, dynamic>.from(intent['result']);
       } else {
-        await change((item) =>
-            item['attempts'] = (item['attempts'] as int).clamp(0, 9999) + 1);
+        await change(
+          (item) =>
+              item['attempts'] = (item['attempts'] as int).clamp(0, 9999) + 1,
+        );
         try {
-          result = await ClientProtocol.withRecordedRevision(
-              intent['protocol'], () => dispatch(intent, session));
+          result = await DataTimeline.replay(
+            intent['dataTimelineId'],
+            () => ClientProtocol.withRecordedRevision(
+              intent['protocol'],
+              () => dispatch(intent, session),
+            ),
+          );
+          DataTimeline().requireStored(intent['dataTimelineId']);
           _session(session);
           await change((item) {
             item['state'] = 'acknowledged';
             item['result'] = result;
           });
         } catch (error) {
-          if (session.isCurrent) {
-            final status = error is ApiException ? error.statusCode : null;
+          if (session.isDataCurrent && (error is! TimelineRecoveryRequired || error.statusCode != null)) {
+            final timelineError = error is TimelineRecoveryRequired ? error : null;
+            final status = error is ApiException ? error.statusCode : timelineError?.statusCode;
             final paused = status == 401 || status == 426;
-            final terminal = status != null &&
+            final terminal = timelineError == null && status != null &&
                 status >= 400 &&
                 status < 500 &&
                 ![401, 408, 425, 426, 429].contains(status);
             await change((item) {
               item['state'] = terminal ? 'failed' : 'pending';
-              item['category'] = status == 409
+              item['category'] = timelineError != null
+                  ? timelineError.kind == TimelineFailure.maintenance ? 'maintenance'
+                      : timelineError.kind == TimelineFailure.provenance ? 'provenance' : 'timeline'
+                  : status == 409
                   ? 'conflict'
                   : paused
                       ? 'paused'
@@ -268,29 +412,63 @@ class OnlineIntentService {
                           ? 'validation'
                           : 'transient';
               final retryAfter =
-                  error is ApiException ? error.retryAfterMs ?? 0 : 0;
+                  error is ApiException ? error.retryAfterMs ?? 0 : timelineError?.retryAfterMs ?? 0;
+              if (timelineError != null) item['code'] = timelineError.code;
               final attempts = (item['attempts'] as int).clamp(1, 7);
-              item['nextAttemptAt'] = paused
+              item['nextAttemptAt'] = paused || timelineError != null && timelineError.kind != TimelineFailure.maintenance
                   ? 0
                   : clock() +
                       (5000 * (1 << (attempts - 1)))
                           .clamp(5000, 300000)
                           .clamp(retryAfter.clamp(0, 300000), 300000);
-            });
+            }, requireFresh: false);
           }
           rethrow;
         }
       }
       _session(session);
+      DataTimeline().requireStored(intent['dataTimelineId']);
       await accept(result, intent);
       await _lock(_tails, owner, () async {
         _session(session);
         journal = await _read(owner);
+        _session(session);
+        DataTimeline().requireStored(intent['dataTimelineId']);
+        if (intent['kind'] == 'ai-clear') {
+          (journal['conversations']
+                  as Map)['${intent['dataTimelineId']}:${intent['language']}'] =
+              newMutationId();
+        }
         (journal['intents'] as List).removeWhere(
-            (item) => item['id'] == id && item['state'] == 'acknowledged');
+          (item) => item['id'] == id && item['state'] == 'acknowledged',
+        );
         await _write(owner, journal);
       });
       return result;
+    });
+  }
+
+  static Future<void> discardForReconciliation(String id) async {
+    final session = AuthService().captureSession();
+    await _lock(_tails, session.ownerNamespace, () async {
+      _session(session);
+      if (isDispatching(session.ownerNamespace)) {
+        throw const IntentRecoveryRequired();
+      }
+      final journal = await _read(session.ownerNamespace);
+      _session(session);
+      final items = journal['intents'] as List;
+      final matches = items.where((item) => item['id'] == id);
+      if (matches.isEmpty) return;
+      if (DataTimeline().canDispatch(matches.single['dataTimelineId'])) {
+        throw const IntentRecoveryRequired();
+      }
+      // Keep a tombstone so a discarded destructive operation ID is never reused.
+      final discarded = (journal['discardedIds'] ??= <dynamic>[]) as List;
+      if (discarded.length >= 128) throw const IntentRecoveryRequired();
+      discarded.add(id);
+      items.removeWhere((item) => item['id'] == id);
+      await _write(session.ownerNamespace, journal);
     });
   }
 }

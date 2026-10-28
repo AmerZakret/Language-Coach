@@ -1,3 +1,4 @@
+import 'package:lingua_ai/services/data_timeline.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/services.dart';
@@ -126,7 +127,7 @@ void main() {
     await ConnectivityService().init();
     SharedPreferences.setMockInitialValues({
       for (final prefix in ['registered', 'guest'])
-        for (final id in [a, b]) 'progress_epoch_${prefix}_$id': 0
+        for (final id in [a, b]) DataTimeline().cacheKey('progress_epoch_${prefix}_$id'): 0
     });
     await auth.init();
     await language.init();
@@ -138,7 +139,7 @@ void main() {
     await prefs.clear();
     for (final prefix in ['registered', 'guest']) {
       for (final id in [a, b]) {
-        await prefs.setInt('progress_epoch_${prefix}_$id', 0);
+        await prefs.setInt(DataTimeline().cacheKey('progress_epoch_${prefix}_$id'), 0);
       }
     }
     serverIds.clear();
@@ -320,7 +321,7 @@ void main() {
       'valid legacy owned score gains cached context without changing action ID',
       () async {
     await prefs.setString(
-        'lessons_cache_English',
+        DataTimeline().cacheKey('lessons_cache_English'),
         jsonEncode([
           {'id': 'legacy', 'targetLanguage': 'English', 'xpReward': 50}
         ]));
@@ -406,12 +407,12 @@ void main() {
     expect(progress.totalXp, 50);
     expect(progress.completedLessonIds, {'one'});
     expect(await queue.getFailedActions(), hasLength(1));
-    expect(prefs.getInt('progress_epoch_${auth.localStorageNamespace}'), 0);
+    expect(prefs.getInt(DataTimeline().cacheKey('progress_epoch_${auth.localStorageNamespace}')), 0);
     fetchFails = false;
     await progress.resetProgress();
     await sync();
     expect(await queue.getFailedActions(), hasLength(1));
-    expect(prefs.getInt('progress_epoch_${auth.localStorageNamespace}'), 1);
+    expect(prefs.getInt(DataTimeline().cacheKey('progress_epoch_${auth.localStorageNamespace}')), 1);
     await progress.completeLesson('two', 80, score: 90, lessonLanguage: 'en');
     await sync();
     expect(serverXp, 80);
@@ -499,7 +500,7 @@ void main() {
       '6C: older-epoch queued work is not displayed over a newer acknowledged snapshot',
       () async {
     await progress.completeLesson('one', 50, score: 73, lessonLanguage: 'en');
-    await prefs.setInt('progress_epoch_${auth.localStorageNamespace}', 1);
+    await prefs.setInt(DataTimeline().cacheKey('progress_epoch_${auth.localStorageNamespace}'), 1);
     await ProgressSnapshot(
             totalXp: 80,
             progressEpoch: 1,
@@ -531,7 +532,7 @@ void main() {
       '6C: trusted catalog corrects old UI-language metadata without changing operation ID or epoch',
       () async {
     await prefs.setString(
-        'lessons_cache_en',
+        DataTimeline().cacheKey('lessons_cache_en'),
         jsonEncode([
           {'id': 'one', 'targetLanguage': 'en', 'xpReward': 50}
         ]));
@@ -584,4 +585,21 @@ void main() {
         ProgressSnapshot.read(prefs, auth.localStorageNamespace, 'de').totalXp,
         0);
   });
+  test('10D an A reset cannot mask B progress when both epochs equal zero', () async {
+    await progress.resetProgress();
+    final resetA = (await queue.getQueue()).single.toJson();
+    await DataTimeline().discover(fetch: () async => http.Response(jsonEncode({
+      'dataTimelineId': '22222222-2222-4222-8222-222222222222',
+      'currentProtocolRevision': 2, 'minimumMutationRevision': 1,
+      'timelineAwareProtocolRevision': 2, 'timelineWriteState': 'OPEN',
+    }), 200));
+    await queue.saveServerProgress(auth.localStorageNamespace, 'en',
+        await queue.progressRevision(auth.localStorageNamespace),
+        ProgressSnapshot(totalXp: 200, progressEpoch: 0));
+    await progress.reloadProgress();
+    await settle();
+    expect(progress.totalXp, 200);
+    expect((await queue.getQueue()).single.toJson(), resetA);
+  });
+
 }

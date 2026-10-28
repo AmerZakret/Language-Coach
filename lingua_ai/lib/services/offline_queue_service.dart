@@ -1,3 +1,4 @@
+import 'data_timeline.dart';
 import '../core/config/client_protocol.dart';
 import 'client_compatibility.dart';
 import 'dart:async';
@@ -16,6 +17,11 @@ import 'sync_retry_policy.dart';
 import 'package:http/http.dart' as http;
 
 class OfflineQueueAction {
+  bool get reconciliationRequired => ['timeline', 'provenance'].contains(lastErrorCategory);
+  final String? dataTimelineId;
+  TimelineProvenance get timelineProvenance => dataTimelineId == null
+      ? TimelineProvenance.legacyUnverified
+      : TimelineProvenance.verified;
   final int? clientProtocolRevision;
   final String id;
   final String type;
@@ -32,25 +38,29 @@ class OfflineQueueAction {
   final DateTime? failedAt;
   final DateTime? reconciledAt;
   final int? acknowledgedEpoch;
-  OfflineQueueAction(
-      {this.clientProtocolRevision,
-      required this.id,
-      required this.type,
-      required this.ownerNamespace,
-      required this.payload,
-      required this.createdAt,
-      this.schemaVersion = 1,
-      this.attemptCount = 0,
-      this.lastAttemptAt,
-      this.nextAttemptAt,
-      this.lastErrorCategory,
-      this.lastErrorCode,
-      this.lastErrorStatus,
-      this.failedAt,
-      this.reconciledAt,
-      this.acknowledgedEpoch});
+  OfflineQueueAction({
+    this.dataTimelineId,
+    this.clientProtocolRevision,
+    required this.id,
+    required this.type,
+    required this.ownerNamespace,
+    required this.payload,
+    required this.createdAt,
+    this.schemaVersion = 1,
+    this.attemptCount = 0,
+    this.lastAttemptAt,
+    this.nextAttemptAt,
+    this.lastErrorCategory,
+    this.lastErrorCode,
+    this.lastErrorStatus,
+    this.failedAt,
+    this.reconciledAt,
+    this.acknowledgedEpoch,
+  });
   Map<String, dynamic> toJson() => {
-        if (clientProtocolRevision != null) 'clientProtocolRevision': clientProtocolRevision,
+        if (dataTimelineId != null) 'dataTimelineId': dataTimelineId,
+        if (clientProtocolRevision != null)
+          'clientProtocolRevision': clientProtocolRevision,
         'id': id,
         'type': type,
         'ownerNamespace': ownerNamespace,
@@ -68,20 +78,25 @@ class OfflineQueueAction {
         if (reconciledAt != null)
           'reconciledAt': reconciledAt!.toUtc().toIso8601String(),
         if (acknowledgedEpoch != null) 'acknowledgedEpoch': acknowledgedEpoch,
-        'schemaVersion': schemaVersion
+        'schemaVersion': schemaVersion,
       };
   factory OfflineQueueAction.fromJson(Map<String, dynamic> json) {
+    if (json['dataTimelineId'] != null &&
+        !DataTimeline.valid(json['dataTimelineId'])) {
+      throw const FormatException('Malformed timeline provenance');
+    }
     if (json['schemaVersion'] != 1 ||
         json['ownerNamespace'] is! String ||
         (json['ownerNamespace'] as String).isEmpty) {
       throw const FormatException(
-          'Queue action has no supported ownership schema');
+        'Queue action has no supported ownership schema',
+      );
     }
     for (final key in [
       'lastAttemptAt',
       'nextAttemptAt',
       'failedAt',
-      'reconciledAt'
+      'reconciledAt',
     ]) {
       final value = json[key];
       if (value != null &&
@@ -89,7 +104,10 @@ class OfflineQueueAction {
         throw const FormatException('Malformed queue retry metadata');
       }
     }
-    if (json['clientProtocolRevision'] != null && (json['clientProtocolRevision'] is! int || json['clientProtocolRevision'] < 0 || json['clientProtocolRevision'] > 999999)) {
+    if (json['clientProtocolRevision'] != null &&
+        (json['clientProtocolRevision'] is! int ||
+            json['clientProtocolRevision'] < 0 ||
+            json['clientProtocolRevision'] > 999999)) {
       throw const FormatException('Malformed queue protocol metadata');
     }
     if (json['id'] is! String ||
@@ -103,85 +121,92 @@ class OfflineQueueAction {
       throw const FormatException('Malformed queue action metadata');
     }
     return OfflineQueueAction(
-        clientProtocolRevision: json['clientProtocolRevision'] as int?,
-        id: json['id'] as String,
-        type: json['type'] as String,
-        ownerNamespace: json['ownerNamespace'] as String,
-        payload: Map<String, dynamic>.from(json['payload']),
-        createdAt: DateTime.parse(json['createdAt'] as String),
-        attemptCount: json['attemptCount'] as int? ?? 0,
-        lastAttemptAt:
-            DateTime.tryParse(json['lastAttemptAt'] as String? ?? ''),
-        nextAttemptAt:
-            DateTime.tryParse(json['nextAttemptAt'] as String? ?? ''),
-        lastErrorCategory: json['lastErrorCategory'] as String?,
-        lastErrorCode: json['lastErrorCode'] as String?,
-        lastErrorStatus: json['lastErrorStatus'] as int?,
-        failedAt: DateTime.tryParse(json['failedAt'] as String? ?? ''),
-        reconciledAt: DateTime.tryParse(json['reconciledAt'] as String? ?? ''),
-        acknowledgedEpoch: json['acknowledgedEpoch'] as int?);
+      dataTimelineId: json['dataTimelineId'] as String?,
+      clientProtocolRevision: json['clientProtocolRevision'] as int?,
+      id: json['id'] as String,
+      type: json['type'] as String,
+      ownerNamespace: json['ownerNamespace'] as String,
+      payload: Map<String, dynamic>.from(json['payload']),
+      createdAt: DateTime.parse(json['createdAt'] as String),
+      attemptCount: json['attemptCount'] as int? ?? 0,
+      lastAttemptAt: DateTime.tryParse(json['lastAttemptAt'] as String? ?? ''),
+      nextAttemptAt: DateTime.tryParse(json['nextAttemptAt'] as String? ?? ''),
+      lastErrorCategory: json['lastErrorCategory'] as String?,
+      lastErrorCode: json['lastErrorCode'] as String?,
+      lastErrorStatus: json['lastErrorStatus'] as int?,
+      failedAt: DateTime.tryParse(json['failedAt'] as String? ?? ''),
+      reconciledAt: DateTime.tryParse(json['reconciledAt'] as String? ?? ''),
+      acknowledgedEpoch: json['acknowledgedEpoch'] as int?,
+    );
   }
   OfflineQueueAction withPayload(Map<String, dynamic> value) =>
       OfflineQueueAction(
-          clientProtocolRevision: clientProtocolRevision,
-      id: id,
-          type: type,
-          ownerNamespace: ownerNamespace,
-          payload: value,
-          createdAt: createdAt,
-          schemaVersion: schemaVersion,
-          attemptCount: attemptCount,
-          lastAttemptAt: lastAttemptAt,
-          nextAttemptAt: nextAttemptAt,
-          lastErrorCategory: lastErrorCategory,
-          lastErrorCode: lastErrorCode,
-          lastErrorStatus: lastErrorStatus,
-          failedAt: failedAt,
-          reconciledAt: reconciledAt,
-          acknowledgedEpoch: acknowledgedEpoch);
-  OfflineQueueAction withRetry(
-          {required int attempts,
-          required DateTime attemptedAt,
-          DateTime? nextAt,
-          String? category,
-          String? code,
-          int? status,
-          DateTime? failed}) =>
+        dataTimelineId: dataTimelineId,
+        clientProtocolRevision: clientProtocolRevision,
+        id: id,
+        type: type,
+        ownerNamespace: ownerNamespace,
+        payload: value,
+        createdAt: createdAt,
+        schemaVersion: schemaVersion,
+        attemptCount: attemptCount,
+        lastAttemptAt: lastAttemptAt,
+        nextAttemptAt: nextAttemptAt,
+        lastErrorCategory: lastErrorCategory,
+        lastErrorCode: lastErrorCode,
+        lastErrorStatus: lastErrorStatus,
+        failedAt: failedAt,
+        reconciledAt: reconciledAt,
+        acknowledgedEpoch: acknowledgedEpoch,
+      );
+  OfflineQueueAction withRetry({
+    required int attempts,
+    required DateTime attemptedAt,
+    DateTime? nextAt,
+    String? category,
+    String? code,
+    int? status,
+    DateTime? failed,
+  }) =>
       OfflineQueueAction(
-          clientProtocolRevision: clientProtocolRevision,
-      id: id,
-          type: type,
-          ownerNamespace: ownerNamespace,
-          payload: payload,
-          createdAt: createdAt,
-          schemaVersion: schemaVersion,
-          attemptCount: attempts,
-          lastAttemptAt: attemptedAt,
-          nextAttemptAt: nextAt,
-          lastErrorCategory: category,
-          lastErrorCode: code,
-          lastErrorStatus: status,
-          failedAt: failed,
-          reconciledAt: reconciledAt,
-          acknowledgedEpoch: acknowledgedEpoch);
+        dataTimelineId: dataTimelineId,
+        clientProtocolRevision: clientProtocolRevision,
+        id: id,
+        type: type,
+        ownerNamespace: ownerNamespace,
+        payload: payload,
+        createdAt: createdAt,
+        schemaVersion: schemaVersion,
+        attemptCount: attempts,
+        lastAttemptAt: attemptedAt,
+        nextAttemptAt: nextAt,
+        lastErrorCategory: category,
+        lastErrorCode: code,
+        lastErrorStatus: status,
+        failedAt: failed,
+        reconciledAt: reconciledAt,
+        acknowledgedEpoch: acknowledgedEpoch,
+      );
 
   OfflineQueueAction withReceipt(DateTime at, int epoch) => OfflineQueueAction(
-      clientProtocolRevision: clientProtocolRevision,
-      id: id,
-      type: type,
-      ownerNamespace: ownerNamespace,
-      payload: payload,
-      createdAt: createdAt,
-      schemaVersion: schemaVersion,
-      attemptCount: attemptCount,
-      lastAttemptAt: lastAttemptAt,
-      nextAttemptAt: nextAttemptAt,
-      lastErrorCategory: lastErrorCategory,
-      lastErrorCode: lastErrorCode,
-      lastErrorStatus: lastErrorStatus,
-      failedAt: failedAt,
-      reconciledAt: at,
-      acknowledgedEpoch: epoch);
+        dataTimelineId: dataTimelineId,
+        clientProtocolRevision: clientProtocolRevision,
+        id: id,
+        type: type,
+        ownerNamespace: ownerNamespace,
+        payload: payload,
+        createdAt: createdAt,
+        schemaVersion: schemaVersion,
+        attemptCount: attemptCount,
+        lastAttemptAt: lastAttemptAt,
+        nextAttemptAt: nextAttemptAt,
+        lastErrorCategory: lastErrorCategory,
+        lastErrorCode: lastErrorCode,
+        lastErrorStatus: lastErrorStatus,
+        failedAt: failedAt,
+        reconciledAt: at,
+        acknowledgedEpoch: epoch,
+      );
 }
 
 class _QueueState {
@@ -192,11 +217,17 @@ class _QueueState {
   final Set<String> startedCreates;
   String progressRevision;
   List<OfflineQueueAction> failedActions;
+  String? readDataTimelineId;
+  final Map<String, String> tempIdTimelines = {};
   int? progressEpoch;
   final Map<String, dynamic> progressCheckpoints = {};
-  _QueueState(this.actions, this.tempIds, this.startedCreates,
-      [this.progressRevision = '', List<OfflineQueueAction>? failedActions])
-      : failedActions = failedActions ?? [];
+  _QueueState(
+    this.actions,
+    this.tempIds,
+    this.startedCreates, [
+    this.progressRevision = '',
+    List<OfflineQueueAction>? failedActions,
+  ]) : failedActions = failedActions ?? [];
 }
 
 class OfflineQueueService {
@@ -212,12 +243,12 @@ class OfflineQueueService {
         _now = DateTime.now,
         _timeout = replayTimeout;
   @visibleForTesting
-  OfflineQueueService.forTesting(
-      {required ProgressApiService progressApi,
-      required FlashcardApiService flashcardApi,
-      DateTime Function()? now,
-      Duration timeout = replayTimeout})
-      : _progressApi = progressApi,
+  OfflineQueueService.forTesting({
+    required ProgressApiService progressApi,
+    required FlashcardApiService flashcardApi,
+    DateTime Function()? now,
+    Duration timeout = replayTimeout,
+  })  : _progressApi = progressApi,
         _flashcardApi = flashcardApi,
         _now = now ?? DateTime.now,
         _timeout = timeout;
@@ -262,7 +293,7 @@ class OfflineQueueService {
           await storage.write('legacy_unowned', {
             'schemaVersion': 1,
             'ownerNamespace': 'legacy_unowned',
-            'snapshots': snapshots
+            'snapshots': snapshots,
           });
         }
       });
@@ -314,25 +345,46 @@ class OfflineQueueService {
       throw const FormatException('Unsupported queue state');
     }
     final state = _QueueState(
-        (data['actions'] as List)
-            .map((a) =>
-                OfflineQueueAction.fromJson(Map<String, dynamic>.from(a)))
-            .toList(),
-        Map<String, String>.from(data['tempIds']),
-        Set<String>.from(data['startedCreates']),
-        data['progressRevision'] as String? ?? '',
-        (data['failedActions'] as List? ?? [])
-            .map((a) =>
-                OfflineQueueAction.fromJson(Map<String, dynamic>.from(a)))
-            .toList());
-    if ([...state.actions, ...state.failedActions].any((a) =>
-            a.ownerNamespace != owner ||
-            a.id.isEmpty ||
-            a.type.isEmpty ||
-            a.attemptCount < 0) ||
-        state.tempIds.values
-            .any((id) => id.isEmpty || id.startsWith('local_'))) {
+      (data['actions'] as List)
+          .map((a) => OfflineQueueAction.fromJson(Map<String, dynamic>.from(a)))
+          .toList(),
+      Map<String, String>.from(data['tempIds']),
+      Set<String>.from(data['startedCreates']),
+      data['progressRevision'] as String? ?? '',
+      (data['failedActions'] as List? ?? [])
+          .map((a) => OfflineQueueAction.fromJson(Map<String, dynamic>.from(a)))
+          .toList(),
+    );
+    if ([...state.actions, ...state.failedActions].any(
+          (a) =>
+              a.ownerNamespace != owner ||
+              a.id.isEmpty ||
+              a.type.isEmpty ||
+              a.attemptCount < 0,
+        ) ||
+        state.tempIds.values.any(
+          (id) => id.isEmpty || id.startsWith('local_'),
+        )) {
       throw const FormatException('Invalid queue ownership or metadata');
+    }
+    if (data['readDataTimelineId'] != null &&
+        !DataTimeline.valid(data['readDataTimelineId'])) {
+      throw const FormatException('Malformed read timeline');
+    }
+    state.readDataTimelineId = data['readDataTimelineId'];
+    state.tempIdTimelines.addAll(
+      Map<String, String>.from(data['tempIdTimelines'] ?? {}),
+    );
+    if (state.tempIdTimelines.values.any((id) => !DataTimeline.valid(id))) {
+      throw const FormatException('Malformed mapping timeline');
+    }
+    if ([...state.actions, ...state.failedActions].any(
+      (a) =>
+          a.dataTimelineId == null ||
+          (DataTimeline().lastConfirmedDataTimelineId != null &&
+              a.dataTimelineId != DataTimeline().lastConfirmedDataTimelineId),
+    )) {
+      DataTimeline().noteEvidence();
     }
     final epoch = data['progressEpoch'];
     if (epoch != null &&
@@ -340,13 +392,14 @@ class OfflineQueueService {
       throw const FormatException('Invalid durable epoch');
     }
     state.progressEpoch = epoch as int?;
-    state.progressCheckpoints
-        .addAll(Map<String, dynamic>.from(data['progressCheckpoints'] ?? {}));
+    state.progressCheckpoints.addAll(
+      Map<String, dynamic>.from(data['progressCheckpoints'] ?? {}),
+    );
     for (final entry in state.progressCheckpoints.entries) {
       if (TargetLanguage.tryCode(entry.key) != entry.key ||
           !ProgressSnapshot.fromCheckpoint(
-                  Map<String, dynamic>.from(entry.value))
-              .valid ||
+            Map<String, dynamic>.from(entry.value),
+          ).valid ||
           entry.value['progressEpoch'] != epoch) {
         throw const FormatException('Invalid progress checkpoint');
       }
@@ -359,6 +412,9 @@ class OfflineQueueService {
         'ownerNamespace': owner,
         'actions': state.actions.map((a) => a.toJson()).toList(),
         'tempIds': state.tempIds,
+        'tempIdTimelines': state.tempIdTimelines,
+        if (state.readDataTimelineId != null)
+          'readDataTimelineId': state.readDataTimelineId,
         'startedCreates': state.startedCreates.toList(),
         'progressRevision': state.progressRevision,
         'failedActions': state.failedActions.map((a) => a.toJson()).toList(),
@@ -380,29 +436,42 @@ class OfflineQueueService {
   }
 
   Future<void> _project(String owner, _QueueState state) async {
+    if (!DataTimeline().matchesCache(state.readDataTimelineId)) return;
     try {
       final prefs = await SharedPreferences.getInstance();
+      if (!DataTimeline().matchesCache(state.readDataTimelineId)) return;
       if (state.progressEpoch != null) {
         if (SyncStorage.backend.durable &&
             ProgressEpoch.read(prefs, owner) != state.progressEpoch) {
           await ProgressSnapshot.resetOwner(prefs, owner);
+          if (!DataTimeline().matchesCache(state.readDataTimelineId)) return;
           if (!await prefs.setInt(
-              ProgressEpoch.key(owner), state.progressEpoch!)) {
+            ProgressEpoch.key(owner),
+            state.progressEpoch!,
+          )) {
             throw StateError('Epoch projection failed');
           }
         } else {
-          await ProgressEpoch.acknowledge(prefs, owner, state.progressEpoch!);
+          await ProgressEpoch.acknowledge(
+            prefs,
+            owner,
+            state.progressEpoch!,
+            isCurrent: () =>
+                DataTimeline().matchesCache(state.readDataTimelineId),
+          );
         }
       }
       for (final entry in state.progressCheckpoints.entries) {
+        if (!DataTimeline().matchesCache(state.readDataTimelineId)) return;
         await ProgressSnapshot.fromCheckpoint(
-                Map<String, dynamic>.from(entry.value))
-            .save(prefs, owner, entry.key);
+          Map<String, dynamic>.from(entry.value),
+        ).save(prefs, owner, entry.key);
       }
     } catch (_) {
       if (!SyncStorage.backend.durable) rethrow;
       debugPrint(
-          'Sync checkpoint committed; progress cache projection deferred.');
+        'Sync checkpoint committed; progress cache projection deferred.',
+      );
     }
   }
 
@@ -432,13 +501,19 @@ class OfflineQueueService {
     } catch (_) {
       if (storage.durable) {
         await _preserveEvidence(
-            jsonEncode({'sourceKey': _storageKey(owner), 'raw': raw}));
+          jsonEncode({'sourceKey': _storageKey(owner), 'raw': raw}),
+        );
         throw SyncStorageCorruption();
       }
       rethrow;
     }
     final preferenceEpoch = ProgressEpoch.read(prefs, owner);
-    if (preferenceEpoch != null) _advanceEpoch(state, owner, preferenceEpoch);
+    if (preferenceEpoch != null && raw == null) {
+      // This preference key itself includes timeline provenance. Legacy
+      // unscoped epochs are never promoted into a current checkpoint.
+      _advanceEpoch(state, owner, preferenceEpoch);
+      state.readDataTimelineId = DataTimeline().lastConfirmedDataTimelineId;
+    }
     if (storage.durable && (raw != null || state.progressEpoch != null)) {
       // File commit is the migration marker. A crash before preference retirement
       // retries migration; a crash afterward reads the committed owner record.
@@ -452,20 +527,25 @@ class OfflineQueueService {
     return state;
   }
 
-  Future<bool> _write(String owner, _QueueState state,
-      {SessionSnapshot? session}) async {
-    if ([...state.actions, ...state.failedActions]
-        .any((a) => a.ownerNamespace != owner)) {
+  Future<bool> _write(
+    String owner,
+    _QueueState state, {
+    SessionSnapshot? session,
+  }) async {
+    if ([
+      ...state.actions,
+      ...state.failedActions,
+    ].any((a) => a.ownerNamespace != owner)) {
       throw StateError('Cannot save actions in another owner queue');
     }
-    if (session != null && !session.isCurrent) return false;
+    if (session != null && !session.isDataCurrent) return false;
     if (!SyncStorage.backend.durable) await _project(owner, state);
     await SyncStorage.backend.write(owner, _encode(owner, state));
     // Queue/epoch/mapping/removal crossed the durable boundary together. Cache
     // projection is reconstructable and can never undo the committed checkpoint.
     if (SyncStorage.backend.durable) await _project(owner, state);
     _changes.add(null);
-    return session == null || session.isCurrent;
+    return session == null || session.isDataCurrent;
   }
 
   Future<List<OfflineQueueAction>> getQueue() {
@@ -489,7 +569,7 @@ class OfflineQueueService {
         'failed': state.failedActions.length,
         'mappings': state.tempIds.length,
         'startedCreates': state.startedCreates.length,
-        if (state.progressEpoch != null) 'progressEpoch': state.progressEpoch!
+        if (state.progressEpoch != null) 'progressEpoch': state.progressEpoch!,
       };
     });
   }
@@ -499,30 +579,39 @@ class OfflineQueueService {
   Future<bool> reconcileFailedReset(String actionId) async {
     final session = AuthService().captureSession();
     final owner = session.ownerNamespace;
-    if (!session.isCurrent ||
+    if (!session.isDataCurrent ||
         owner == 'local_guest' ||
         AuthService().token.trim().isEmpty) {
       return false;
     }
     final action = await _locked(owner, () async {
       final state = await _read(owner);
-      if (!session.isCurrent) return null;
+      if (!session.isDataCurrent) return null;
       final matches = state.failedActions.where((a) => a.id == actionId);
       return matches.length == 1 ? matches.single : null;
     });
     if (action == null ||
         action.ownerNamespace != owner ||
         action.type != 'reset-progress' ||
+        !DataTimeline().canDispatch(action.dataTimelineId) ||
         !ProgressEpoch.valid(action.payload['expectedEpoch']) ||
         action.payload['expectedEpoch'] >= 9007199254740991) {
       return false;
     }
     final identity = jsonEncode(action.toJson());
     try {
-      final result = await _progressApi.getResetReceipt(session.userId,
-          expectedEpoch: action.payload['expectedEpoch'] as int,
-          operationId: action.id);
-      if (!session.isCurrent ||
+      final result = await DataTimeline.replay(
+        action.dataTimelineId,
+        () => ClientProtocol.withRecordedRevision(
+          action.clientProtocolRevision,
+          () => _progressApi.getResetReceipt(
+            session.userId,
+            expectedEpoch: action.payload['expectedEpoch'] as int,
+            operationId: action.id,
+          ),
+        ),
+      );
+      if (!session.isDataCurrent ||
           result['userId'] != session.userId ||
           result['operationId'] != action.id ||
           result['expectedEpoch'] != action.payload['expectedEpoch'] ||
@@ -531,18 +620,23 @@ class OfflineQueueService {
       }
       return await _locked(owner, () async {
         final state = await _read(owner);
-        if (!session.isCurrent) return false;
+        if (!session.isDataCurrent) return false;
         final current = state.failedActions.where((a) => a.id == action.id);
         if (current.length != 1 ||
             jsonEncode(current.single.toJson()) != identity) {
           return false;
         }
         _advanceEpoch(state, owner, result['progressEpoch'] as int);
-        if (!session.isCurrent) return false;
+        if (!session.isDataCurrent) return false;
         state.failedActions = state.failedActions
-            .map((a) => a.id == action.id
-                ? a.withReceipt(_now().toUtc(), result['progressEpoch'] as int)
-                : a)
+            .map(
+              (a) => a.id == action.id
+                  ? a.withReceipt(
+                      _now().toUtc(),
+                      result['progressEpoch'] as int,
+                    )
+                  : a,
+            )
             .toList();
         state.progressRevision = 'receipt_${action.id}';
         return _write(owner, state, session: session);
@@ -565,13 +659,20 @@ class OfflineQueueService {
   bool _dependent(String type) => [
         'update-flashcard',
         'delete-flashcard',
-        'review-flashcard'
+        'review-flashcard',
       ].contains(type);
   Map<String, dynamic> _resolve(
-      _QueueState state, String type, Map<String, dynamic> payload) {
+    _QueueState state,
+    String type,
+    Map<String, dynamic> payload,
+  ) {
     final value = Map<String, dynamic>.from(payload);
     if (_dependent(type)) {
-      final mapped = state.tempIds[_cardId(value)];
+      final id = _cardId(value);
+      final mapped = state.tempIdTimelines[id] ==
+              DataTimeline().lastConfirmedDataTimelineId
+          ? state.tempIds[id]
+          : null;
       if (mapped != null) {
         if (value.containsKey('cardId')) value['cardId'] = mapped;
         if (value.containsKey('id')) value['id'] = mapped;
@@ -580,34 +681,62 @@ class OfflineQueueService {
     return value;
   }
 
-  void _append(_QueueState state, String owner, String type,
-      Map<String, dynamic> payload,
-      {String? operationId, bool dispatched = false}) {
+  void _append(
+    _QueueState state,
+    String owner,
+    String type,
+    Map<String, dynamic> payload, {
+    required String dataTimelineId,
+    String? operationId,
+    bool dispatched = false,
+  }) {
     if ((type == 'reset-progress' || type == 'complete-lesson') &&
         operationId != null &&
         state.failedActions.any((a) => a.id == operationId)) {
       throw StateError(
-          'A quarantined progress operation cannot be reactivated');
+        'A quarantined progress operation cannot be reactivated',
+      );
     }
+    if (state.actions.any((a) => a.id == operationId) ||
+        state.failedActions.any((a) => a.id == operationId)) {
+      throw const TimelineRecoveryRequired();
+    }
+    bool same(OfflineQueueAction a) => a.dataTimelineId == dataTimelineId;
     if (type == 'reset-progress') {
       state.actions.removeWhere(
-          (a) => a.type == 'complete-lesson' || a.type == 'reset-progress');
+        (a) =>
+            same(a) &&
+            (a.type == 'complete-lesson' || a.type == 'reset-progress'),
+      );
     }
     final originalId = _cardId(payload);
     if (type == 'delete-flashcard' &&
-        state.failedActions.any((a) =>
-            a.type == 'create-flashcard' &&
-            a.payload['tempId'] == originalId)) {
-      state.failedActions.removeWhere((a) =>
-          (a.type == 'create-flashcard' && a.payload['tempId'] == originalId) ||
-          (_dependent(a.type) && _cardId(a.payload) == originalId));
+        state.failedActions.any(
+          (a) =>
+              same(a) &&
+              a.type == 'create-flashcard' &&
+              a.payload['tempId'] == originalId,
+        )) {
+      state.failedActions.removeWhere(
+        (a) =>
+            (same(a) &&
+                a.type == 'create-flashcard' &&
+                a.payload['tempId'] == originalId) ||
+            (same(a) && _dependent(a.type) && _cardId(a.payload) == originalId),
+      );
       state.actions.removeWhere(
-          (a) => _dependent(a.type) && _cardId(a.payload) == originalId);
+        (a) =>
+            same(a) && _dependent(a.type) && _cardId(a.payload) == originalId,
+      );
       return;
     }
     final creates = state.actions
-        .where((a) =>
-            a.type == 'create-flashcard' && a.payload['tempId'] == originalId)
+        .where(
+          (a) =>
+              same(a) &&
+              a.type == 'create-flashcard' &&
+              a.payload['tempId'] == originalId,
+        )
         .toList();
     if (_dependent(type) &&
         originalId != null &&
@@ -615,9 +744,13 @@ class OfflineQueueService {
         !state.startedCreates.contains(creates.first.id)) {
       final create = creates.first;
       if (type == 'delete-flashcard') {
-        state.actions.removeWhere((a) =>
-            a.id == create.id ||
-            (_dependent(a.type) && _cardId(a.payload) == originalId));
+        state.actions.removeWhere(
+          (a) =>
+              a.id == create.id ||
+              (same(a) &&
+                  _dependent(a.type) &&
+                  _cardId(a.payload) == originalId),
+        );
         return;
       }
       if (type == 'update-flashcard') {
@@ -626,7 +759,8 @@ class OfflineQueueService {
         // lost when those actions are replaced by the compacted create.
         final fields = <String, dynamic>{};
         for (final action in state.actions) {
-          if (action.type == 'update-flashcard' &&
+          if (same(action) &&
+              action.type == 'update-flashcard' &&
               _cardId(action.payload) == originalId) {
             fields.addAll(action.payload);
           }
@@ -638,22 +772,29 @@ class OfflineQueueService {
           ..remove('tempId')
           ..remove('userId');
         state.actions = state.actions
-            .where((a) => !(a.type == 'update-flashcard' &&
-                _cardId(a.payload) == originalId))
-            .map((a) => a.id == create.id
-                ? a.withPayload({...a.payload, ...fields})
-                : a)
+            .where(
+              (a) => !(same(a) &&
+                  a.type == 'update-flashcard' &&
+                  _cardId(a.payload) == originalId),
+            )
+            .map(
+              (a) => a.id == create.id
+                  ? a.withPayload({...a.payload, ...fields})
+                  : a,
+            )
             .toList();
         return;
       }
     }
     final action = OfflineQueueAction(
-        clientProtocolRevision: ClientProtocol.revision,
-        id: operationId ?? createOperationId(),
-        type: type,
-        ownerNamespace: owner,
-        payload: _resolve(state, type, payload),
-        createdAt: DateTime.now().toUtc());
+      dataTimelineId: dataTimelineId,
+      clientProtocolRevision: ClientProtocol.revision,
+      id: operationId ?? createOperationId(),
+      type: type,
+      ownerNamespace: owner,
+      payload: _resolve(state, type, payload),
+      createdAt: DateTime.now().toUtc(),
+    );
     state.actions.add(action);
     if (type == 'complete-lesson' || type == 'reset-progress') {
       state.progressRevision = action.id;
@@ -663,24 +804,41 @@ class OfflineQueueService {
     }
   }
 
-  Future<void> pushAction(String type, Map<String, dynamic> payload,
-          {required String ownerNamespace,
-          String? operationId,
-          bool dispatched = false}) =>
-      _locked(ownerNamespace, () async {
-    ClientCompatibility().ensureMutationAllowed();
-        final state = await _read(ownerNamespace);
-        _append(state, ownerNamespace, type, payload,
-            operationId: operationId, dispatched: dispatched);
-        await _write(ownerNamespace, state);
-      });
+  Future<void> pushAction(
+    String type,
+    Map<String, dynamic> payload, {
+    required String ownerNamespace,
+    String? operationId,
+    bool dispatched = false,
+  }) {
+    final session = AuthService().captureSession();
+    if (session.ownerNamespace != ownerNamespace) {
+      throw const TimelineRecoveryRequired();
+    }
+    final timeline = DataTimeline().captureNewWork();
+    final frozen = Map<String, dynamic>.from(jsonDecode(jsonEncode(payload)));
+    return _locked(ownerNamespace, () async {
+      final state = await _read(ownerNamespace);
+      _append(
+        state,
+        ownerNamespace,
+        type,
+        frozen,
+        dataTimelineId: timeline,
+        operationId: operationId,
+        dispatched: dispatched,
+      );
+      await _write(ownerNamespace, state);
+    });
+  }
 
   Future<void> preparePendingProgress(String owner) => _locked(owner, () async {
         final state = await _read(owner);
         final prefs = await SharedPreferences.getInstance();
         var changed = false;
         state.actions = state.actions.map((action) {
-          if (action.ownerNamespace != owner ||
+          if (!DataTimeline().matchesCache(action.dataTimelineId) ||
+              action.ownerNamespace != owner ||
               action.type != 'complete-lesson' ||
               action.payload['_lessonLanguageBound'] == true) {
             return action;
@@ -691,14 +849,18 @@ class OfflineQueueService {
             'de': 'German',
             'es': 'Spanish',
             'fr': 'French',
-            'ar': 'Arabic'
+            'ar': 'Arabic',
           };
           for (final entry in names.entries) {
             Map<String, dynamic>? lesson;
             for (final language in [entry.key, entry.value]) {
               try {
                 final rows = jsonDecode(
-                    prefs.getString('lessons_cache_$language') ?? '[]');
+                  prefs.getString(
+                        DataTimeline().cacheKey('lessons_cache_$language'),
+                      ) ??
+                      '[]',
+                );
                 if (rows is List) {
                   for (final row in rows) {
                     if (row is Map &&
@@ -710,22 +872,27 @@ class OfflineQueueService {
                     }
                   }
                 }
-              } catch (_) {/* Unusable catalog stays untouched. */}
+              } catch (_) {
+                /* Unusable catalog stays untouched. */
+              }
             }
             if (lesson != null ||
-                ProgressSnapshot.read(prefs, owner, entry.key)
-                    .lessonIds
-                    .contains(action.payload['lessonId'])) {
+                ProgressSnapshot.read(
+                  prefs,
+                  owner,
+                  entry.key,
+                ).lessonIds.contains(action.payload['lessonId'])) {
               matches.add({
                 'targetLanguage': entry.key,
                 '_lessonLanguageBound': true,
-                if (lesson?['xpReward'] is int) 'xpReward': lesson!['xpReward']
+                if (lesson?['xpReward'] is int) 'xpReward': lesson!['xpReward'],
               });
             }
           }
           if (matches.length != 1) return action;
-          if (matches.single.entries
-              .every((entry) => action.payload[entry.key] == entry.value)) {
+          if (matches.single.entries.every(
+            (entry) => action.payload[entry.key] == entry.value,
+          )) {
             return action;
           }
           changed = true;
@@ -737,17 +904,30 @@ class OfflineQueueService {
         }
       });
 
-  Future<int> epochForNewProgress(String owner, {bool forReset = false}) =>
+  Future<int> epochForNewProgress(
+    String owner, {
+    bool forReset = false,
+  }) =>
       _locked(owner, () async {
         final state = await _read(owner);
+        if (!DataTimeline().matchesCache(state.readDataTimelineId)) {
+          throw const TimelineRecoveryRequired();
+        }
         final epoch = state.progressEpoch;
-        if (!forReset && state.actions.any((a) => a.type == 'reset-progress')) {
+        if (!forReset &&
+            state.actions.any(
+              (a) =>
+                  DataTimeline().matchesCache(a.dataTimelineId) &&
+                  a.type == 'reset-progress',
+            )) {
           throw StateError(
-              'Wait for progress reset acknowledgement before submitting new progress');
+            'Wait for progress reset acknowledgement before submitting new progress',
+          );
         }
         if (epoch == null) {
           throw StateError(
-              'Connect to acknowledge server progress before submitting progress');
+            'Connect to acknowledge server progress before submitting progress',
+          );
         }
         return epoch;
       });
@@ -755,11 +935,20 @@ class OfflineQueueService {
   Future<String> progressRevision(String owner) =>
       _locked(owner, () async => (await _read(owner)).progressRevision);
 
-  Future<bool> saveServerProgress(String owner, String language,
-          String revision, ProgressSnapshot progress,
-          {bool Function()? isCurrent}) =>
+  Future<bool> saveServerProgress(
+    String owner,
+    String language,
+    String revision,
+    ProgressSnapshot progress, {
+    bool Function()? isCurrent,
+  }) =>
       _locked(owner, () async {
         final state = await _read(owner);
+        if (state.readDataTimelineId !=
+            DataTimeline().lastConfirmedDataTimelineId) {
+          state.progressEpoch = null;
+          state.progressCheckpoints.clear();
+        }
         if (state.progressRevision != revision ||
             isCurrent?.call() == false ||
             !progress.valid ||
@@ -767,46 +956,75 @@ class OfflineQueueService {
             !_advanceEpoch(state, owner, progress.progressEpoch!)) {
           return false;
         }
+        state.readDataTimelineId = DataTimeline().captureNewWork();
         state.progressCheckpoints[language] = progress.toCheckpoint();
         if (isCurrent?.call() == false) return false;
         await _write(owner, state);
         return isCurrent?.call() ?? true;
       });
 
-  Future<void> modifyLocalProgress(String owner, String language,
-          ProgressSnapshot Function(ProgressSnapshot) update) =>
+  Future<void> modifyLocalProgress(
+    String owner,
+    String language,
+    ProgressSnapshot Function(ProgressSnapshot) update,
+  ) =>
       _locked(owner, () async {
         final prefs = await SharedPreferences.getInstance();
-        await update(ProgressSnapshot.read(prefs, owner, language))
-            .save(prefs, owner, language);
+        await update(
+          ProgressSnapshot.read(prefs, owner, language),
+        ).save(prefs, owner, language);
       });
 
   /// A local ID is backend-pending only if its owner has a create or mapping.
   /// Permanently local cards must never become backend writes.
   Future<bool> mutatePendingCard(String type, Map<String, dynamic> payload,
-          {required String ownerNamespace}) =>
-      _locked(ownerNamespace, () async {
-        if (ownerNamespace == 'local_guest') return false;
-        final state = await _read(ownerNamespace);
-        final id = _cardId(payload);
-        if (!state.tempIds.containsKey(id) &&
-            ![...state.actions, ...state.failedActions].any((a) =>
-                a.type == 'create-flashcard' && a.payload['tempId'] == id)) {
-          return false;
-        }
-        _append(state, ownerNamespace, type, payload);
-        await _write(ownerNamespace, state);
-        return true;
-      });
+      {required String ownerNamespace}) {
+    final session = AuthService().captureSession();
+    if (session.ownerNamespace != ownerNamespace) {
+      throw const TimelineRecoveryRequired();
+    }
+    if (ownerNamespace == 'local_guest') return Future.value(false);
+    final timeline = DataTimeline().captureNewWork();
+    final frozen = Map<String, dynamic>.from(jsonDecode(jsonEncode(payload)));
+    return _locked(ownerNamespace, () async {
+      final state = await _read(ownerNamespace);
+      if (!session.isDataCurrent) throw const TimelineRecoveryRequired();
+      final id = _cardId(frozen);
+      if (state.tempIds.containsKey(id) &&
+          state.tempIdTimelines[id] != timeline) {
+        throw const TimelineRecoveryRequired();
+      }
+      if (!state.tempIds.containsKey(id) &&
+          ![...state.actions, ...state.failedActions].any((a) =>
+              a.type == 'create-flashcard' && a.payload['tempId'] == id)) {
+        return false;
+      }
+      if ([
+        ...state.actions,
+        ...state.failedActions
+      ].any((a) => a.payload['tempId'] == id && a.dataTimelineId != timeline)) {
+        throw const TimelineRecoveryRequired();
+      }
+      _append(state, ownerNamespace, type, frozen, dataTimelineId: timeline);
+      await _write(ownerNamespace, state);
+      return true;
+    });
+  }
 
   Future<bool> processQueue(String userId, {bool waitForActive = false}) async {
     if (ClientCompatibility().updateRequired) return false;
+    // Every entry point (including screens) must discover before any replay.
+    try {
+      await DataTimeline().ensureFresh();
+    } catch (_) {
+      return false;
+    }
     final auth = AuthService();
     final session = auth.captureSession();
     final owner = session.ownerNamespace;
     if (waitForActive && _drainWaiters.containsKey(owner)) {
       await _drainWaiters[owner]!.future;
-      if (!session.isCurrent) return false;
+      if (!session.isDataCurrent) return false;
       return processQueue(userId, waitForActive: true);
     }
     if (owner == 'local_guest' ||
@@ -829,20 +1047,30 @@ class OfflineQueueService {
         if (SyncStorage.backend.durable) rethrow;
         return false;
       }
-      if (!session.isCurrent || batch.any((a) => a.ownerNamespace != owner)) {
+      if (!session.isDataCurrent ||
+          batch.any((a) => a.ownerNamespace != owner)) {
         return false;
       }
       for (final scheduled in batch) {
-        if (!session.isCurrent) return false;
+        if (!session.isDataCurrent) return false;
+        if (scheduled.reconciliationRequired || !DataTimeline().canDispatch(scheduled.dataTimelineId) ||
+            scheduled.clientProtocolRevision != 2) {
+          DataTimeline().noteEvidence();
+          hadFailure = true;
+          continue; // Preserve old evidence; new-lineage work may proceed.
+        }
         final action = await _locked(owner, () async {
           final state = await _read(owner);
-          if (!session.isCurrent) return null;
+          if (!session.isDataCurrent) return null;
           final found =
               state.actions.where((a) => a.id == scheduled.id).toList();
           if (found.isEmpty) return null; // Cancelled before dispatch.
           if (found.single.nextAttemptAt?.isAfter(_now()) == true) return null;
-          final replayPayload =
-              _resolve(state, found.single.type, found.single.payload);
+          final replayPayload = _resolve(
+            state,
+            found.single.type,
+            found.single.payload,
+          );
           // Freeze the new wire contract before first dispatch. Previously
           // attempted updates retain their old shape for existing receipts.
           if (found.single.type == 'update-flashcard' &&
@@ -855,8 +1083,9 @@ class OfflineQueueService {
             replayPayload['_languageContract'] = 1;
           }
           final current = found.single.withPayload(replayPayload).withRetry(
-              attempts: found.single.attemptCount + 1,
-              attemptedAt: _now().toUtc());
+                attempts: found.single.attemptCount + 1,
+                attemptedAt: _now().toUtc(),
+              );
           if (current.ownerNamespace != owner) {
             throw StateError('Queue owner mismatch');
           }
@@ -870,7 +1099,7 @@ class OfflineQueueService {
           if (!await _write(owner, state, session: session)) return null;
           return current;
         });
-        if (!session.isCurrent) return false;
+        if (!session.isDataCurrent) return false;
         if (action == null) {
           final remaining = await getQueue();
           if (remaining.any((a) => a.id == scheduled.id)) {
@@ -889,55 +1118,67 @@ class OfflineQueueService {
               (cardId == null || cardId.startsWith('local_'))) {
             throw const InvalidQueuedPayload();
           }
-          if (!session.isCurrent) return false;
-          await ClientProtocol.withRecordedRevision(action.clientProtocolRevision, () => withDeferredUnauthorizedInvalidation(() =>
-              http.runWithClient(() async {
-                switch (action.type) {
-                  case 'reset-progress':
-                    if (!ProgressEpoch.valid(payload['expectedEpoch']) ||
-                        payload['expectedEpoch'] >= 9007199254740991) {
-                      throw InvalidQueuedPayload(
+          if (!session.isDataCurrent) return false;
+          await DataTimeline.replay(
+            action.dataTimelineId,
+            () => ClientProtocol.withRecordedRevision(
+              action.clientProtocolRevision,
+              () => withDeferredUnauthorizedInvalidation(
+                () => http.runWithClient(() async {
+                  switch (action.type) {
+                    case 'reset-progress':
+                      if (!ProgressEpoch.valid(payload['expectedEpoch']) ||
+                          payload['expectedEpoch'] >= 9007199254740991) {
+                        throw InvalidQueuedPayload(
                           payload.containsKey('expectedEpoch')
                               ? 'INVALID_PROGRESS_EPOCH'
-                              : 'MISSING_PROGRESS_EPOCH');
-                    }
-                    resetResult = await _progressApi.resetProgress(userId,
+                              : 'MISSING_PROGRESS_EPOCH',
+                        );
+                      }
+                      resetResult = await _progressApi.resetProgress(
+                        userId,
                         expectedEpoch: payload['expectedEpoch'] as int,
-                        operationId: action.id);
-                    if (resetResult?['progressEpoch'] !=
-                        payload['expectedEpoch'] + 1) {
-                      throw const InvalidQueuedPayload();
-                    }
-                    break;
-                  case 'complete-lesson':
-                    if (payload['score'] is! int) {
-                      throw const InvalidQueuedPayload();
-                    }
-                    if (!ProgressEpoch.valid(payload['progressEpoch'])) {
-                      throw InvalidQueuedPayload(
+                        operationId: action.id,
+                      );
+                      if (resetResult?['progressEpoch'] !=
+                          payload['expectedEpoch'] + 1) {
+                        throw const InvalidQueuedPayload();
+                      }
+                      break;
+                    case 'complete-lesson':
+                      if (payload['score'] is! int) {
+                        throw const InvalidQueuedPayload();
+                      }
+                      if (!ProgressEpoch.valid(payload['progressEpoch'])) {
+                        throw InvalidQueuedPayload(
                           payload.containsKey('progressEpoch')
                               ? 'INVALID_PROGRESS_EPOCH'
-                              : 'MISSING_PROGRESS_EPOCH');
-                    }
-                    completion = await _progressApi.completeLesson(userId,
-                        payload['lessonId'].toString(), payload['score'] as int,
+                              : 'MISSING_PROGRESS_EPOCH',
+                        );
+                      }
+                      completion = await _progressApi.completeLesson(
+                        userId,
+                        payload['lessonId'].toString(),
+                        payload['score'] as int,
                         progressEpoch: payload['progressEpoch'] as int,
-                        operationId: action.id);
-                    if (completion?['data']?['progressEpoch'] !=
-                        payload['progressEpoch']) {
-                      throw const InvalidQueuedPayload();
-                    }
-                    final data = completion?['data'];
-                    if ((data?['newTotalXp'] != null &&
-                            !ProgressEpoch.valid(data['newTotalXp'])) ||
-                        (data?['score'] != null &&
-                            !ProgressSnapshot.validScore(data['score']))) {
-                      throw const FormatException(
-                          'Invalid completion acknowledgement');
-                    }
-                    break;
-                  case 'create-flashcard':
-                    final card = await _flashcardApi.createFlashcard(
+                        operationId: action.id,
+                      );
+                      if (completion?['data']?['progressEpoch'] !=
+                          payload['progressEpoch']) {
+                        throw const InvalidQueuedPayload();
+                      }
+                      final data = completion?['data'];
+                      if ((data?['newTotalXp'] != null &&
+                              !ProgressEpoch.valid(data['newTotalXp'])) ||
+                          (data?['score'] != null &&
+                              !ProgressSnapshot.validScore(data['score']))) {
+                        throw const FormatException(
+                          'Invalid completion acknowledgement',
+                        );
+                      }
+                      break;
+                    case 'create-flashcard':
+                      final card = await _flashcardApi.createFlashcard(
                         payload['targetWord'].toString(),
                         payload['turkishTranslation'].toString(),
                         payload['targetLanguage'].toString(),
@@ -948,20 +1189,24 @@ class OfflineQueueService {
                         note: payload['note']?.toString(),
                         operationId: action.id,
                         preserveLegacyLanguage:
-                            payload['_languageContract'] != 1);
-                    serverId = card.id;
-                    if (payload['tempId'] != null &&
-                        (serverId!.isEmpty || serverId!.startsWith('local_'))) {
-                      throw StateError('Create response has no server card ID');
-                    }
-                    break;
-                  case 'update-flashcard':
-                    final legacy = payload['_mutationContract'] != 2;
-                    String? optional(String field) {
-                      final value = payload[field]?.toString();
-                      return legacy && value == '' ? null : value;
-                    }
-                    await _flashcardApi.updateFlashcard(
+                            payload['_languageContract'] != 1,
+                      );
+                      serverId = card.id;
+                      if (payload['tempId'] != null &&
+                          (serverId!.isEmpty ||
+                              serverId!.startsWith('local_'))) {
+                        throw StateError(
+                          'Create response has no server card ID',
+                        );
+                      }
+                      break;
+                    case 'update-flashcard':
+                      final legacy = payload['_mutationContract'] != 2;
+                      String? optional(String field) {
+                        final value = payload[field]?.toString();
+                        return legacy && value == '' ? null : value;
+                      }
+                      await _flashcardApi.updateFlashcard(
                         cardId!,
                         payload['targetWord']?.toString(),
                         payload['turkishTranslation']?.toString(),
@@ -976,41 +1221,58 @@ class OfflineQueueService {
                         note: optional('note'),
                         operationId: action.id,
                         preserveLegacyLanguage:
-                            payload['_languageContract'] != 1);
-                    break;
-                  case 'delete-flashcard':
-                    await _flashcardApi.deleteFlashcard(cardId!,
-                        operationId: action.id);
-                    break;
-                  case 'review-flashcard':
-                    await _flashcardApi.reviewCard(
-                        cardId!, payload['score'] as int? ?? 4,
-                        operationId: action.id);
-                    break;
-                  default:
-                    throw const InvalidQueuedPayload();
-                }
-              }, () => replayClient))).timeout(_timeout);
+                            payload['_languageContract'] != 1,
+                      );
+                      break;
+                    case 'delete-flashcard':
+                      await _flashcardApi.deleteFlashcard(
+                        cardId!,
+                        operationId: action.id,
+                      );
+                      break;
+                    case 'review-flashcard':
+                      await _flashcardApi.reviewCard(
+                        cardId!,
+                        payload['score'] as int? ?? 4,
+                        operationId: action.id,
+                      );
+                      break;
+                    default:
+                      throw const InvalidQueuedPayload();
+                  }
+                }, () => replayClient),
+              ),
+            ),
+          ).timeout(_timeout);
         } catch (e) {
-          if (!session.isCurrent) return false;
+          if (!session.isDataCurrent || e is TimelineRecoveryRequired && e.statusCode == null) {
+            return false;
+          }
           final failure = SyncFailure.classify(e);
-          if (failure.category == 'compatibility') { ClientCompatibility().requireUpdate(); return false; }
+          if (failure.category == 'compatibility') {
+            ClientCompatibility().requireUpdate();
+            return false;
+          }
           await _locked(owner, () async {
             final state = await _read(owner);
-            if (!session.isCurrent) return;
+            if (!session.isDataCurrent) return;
             final found = state.actions.where((a) => a.id == action.id);
             if (found.isEmpty) return; // Reset/cancellation won during HTTP.
             final current = found.single;
+            final retryAfterMs = e is TimelineRecoveryRequired ? e.retryAfterMs ?? 0
+                : e is ApiException ? e.retryAfterMs ?? 0 : 0;
+            final baseDelayMs = retryDelay(current.attemptCount).inMilliseconds;
             final failed = current.withRetry(
-                attempts: current.attemptCount,
-                attemptedAt: current.lastAttemptAt!,
-                category: failure.category,
-                code: failure.code,
-                status: failure.statusCode,
-                failed: failure.terminal ? _now().toUtc() : null,
-                nextAt: failure.terminal
-                    ? null
-                    : _now().toUtc().add(retryDelay(current.attemptCount)));
+              attempts: current.attemptCount,
+              attemptedAt: current.lastAttemptAt!,
+              category: failure.category,
+              code: failure.code,
+              status: failure.statusCode,
+              failed: failure.terminal ? _now().toUtc() : null,
+              nextAt: failure.terminal
+                  ? null
+                  : _now().toUtc().add(Duration(milliseconds: baseDelayMs < retryAfterMs ? retryAfterMs : baseDelayMs)),
+            );
             if (failure.terminal) {
               bool blocked(OfflineQueueAction a) =>
                   a.id == action.id ||
@@ -1018,14 +1280,18 @@ class OfflineQueueService {
                       action.payload['tempId'] != null &&
                       _dependent(a.type) &&
                       _cardId(a.payload) == action.payload['tempId']);
-              state.failedActions.addAll(state.actions.where(blocked).map((a) =>
-                  a.id == action.id
-                      ? failed
-                      : a.withRetry(
-                          attempts: a.attemptCount,
-                          attemptedAt: _now().toUtc(),
-                          category: 'dependency',
-                          failed: _now().toUtc())));
+              state.failedActions.addAll(
+                state.actions.where(blocked).map(
+                      (a) => a.id == action.id
+                          ? failed
+                          : a.withRetry(
+                              attempts: a.attemptCount,
+                              attemptedAt: _now().toUtc(),
+                              category: 'dependency',
+                              failed: _now().toUtc(),
+                            ),
+                    ),
+              );
               state.actions.removeWhere(blocked);
               if (action.type == 'complete-lesson' ||
                   action.type == 'reset-progress') {
@@ -1038,7 +1304,7 @@ class OfflineQueueService {
             }
             await _write(owner, state, session: session);
           });
-          if (failure.category == 'authentication') {
+          if (failure.category == 'authentication' && session.isDataCurrent) {
             AuthService().invalidateSession(session);
           }
           hadFailure = true;
@@ -1049,47 +1315,51 @@ class OfflineQueueService {
         } finally {
           replayClient.close();
         }
-        if (!session.isCurrent) return false;
+        if (!session.isDataCurrent) return false;
         final acknowledged = await _locked(owner, () async {
           final state = await _read(owner);
-          if (!session.isCurrent) return false;
+          if (!session.isDataCurrent) return false;
           final prefs = await SharedPreferences.getInstance();
-          if (!session.isCurrent) return false;
+          if (!session.isDataCurrent) return false;
           if (state.actions.any((a) => a.id == action.id) &&
               action.type == 'complete-lesson') {
             final result = completion?['data'];
-            final language = TargetLanguage.tryCode(result?['targetLanguage'] ??
-                (action.payload['_lessonLanguageBound'] == true
-                    ? action.payload['targetLanguage']
-                    : null));
+            final language = TargetLanguage.tryCode(
+              result?['targetLanguage'] ??
+                  (action.payload['_lessonLanguageBound'] == true
+                      ? action.payload['targetLanguage']
+                      : null),
+            );
             if (language != null &&
                 result?['newTotalXp'] is int &&
                 _advanceEpoch(state, owner, result['progressEpoch'] as int)) {
-              if (!session.isCurrent) return false;
+              if (!session.isDataCurrent) return false;
               final base = ProgressSnapshot.read(prefs, owner, language);
               final checkpoint = ProgressSnapshot(
-                      totalXp: result['newTotalXp'] as int,
-                      progressEpoch: result['progressEpoch'] as int,
-                      lessonScores: {
-                        ...base.lessonScores,
-                        if (ProgressSnapshot.validScore(result['score']))
-                          action.payload['lessonId'].toString():
-                              result['score'] as int
-                      },
-                      streak: base.streak,
-                      lessonIds: {
-                        ...base.lessonIds,
-                        action.payload['lessonId'].toString()
-                      },
-                      activity: base.activity)
-                  .toCheckpoint();
+                totalXp: result['newTotalXp'] as int,
+                progressEpoch: result['progressEpoch'] as int,
+                lessonScores: {
+                  ...base.lessonScores,
+                  if (ProgressSnapshot.validScore(result['score']))
+                    action.payload['lessonId'].toString():
+                        result['score'] as int,
+                },
+                streak: base.streak,
+                lessonIds: {
+                  ...base.lessonIds,
+                  action.payload['lessonId'].toString(),
+                },
+                activity: base.activity,
+              ).toCheckpoint();
+              state.readDataTimelineId = action.dataTimelineId;
               state.progressCheckpoints[language] = checkpoint;
             }
             state.progressRevision = 'ack_${action.id}';
           }
           if (action.type == 'reset-progress') {
+            state.readDataTimelineId = action.dataTimelineId;
             _advanceEpoch(state, owner, resetResult!['progressEpoch'] as int);
-            if (!session.isCurrent) return false;
+            if (!session.isDataCurrent) return false;
             final legacyOwner =
                 action.payload['legacyOwnerNamespace'] as String?;
             if (legacyOwner != null) {
@@ -1100,19 +1370,24 @@ class OfflineQueueService {
           final tempId = action.payload['tempId']?.toString();
           if (action.type == 'create-flashcard' && tempId != null) {
             state.tempIds[tempId] = serverId!;
+            state.tempIdTimelines[tempId] = action.dataTimelineId!;
           }
           // Commit mapping, all dependent rewrites, and removal together using
           // the current record, including appends made during the HTTP request.
           state.actions = state.actions
               .where((a) => a.id != action.id)
-              .map((a) => a.withPayload(_resolve(state, a.type, a.payload)))
+              .map(
+                (a) => a.dataTimelineId == action.dataTimelineId
+                    ? a.withPayload(_resolve(state, a.type, a.payload))
+                    : a,
+              )
               .toList();
           state.startedCreates.remove(action.id);
           return _write(owner, state, session: session);
         });
         if (!acknowledged) return false;
       }
-      return !hadFailure && session.isCurrent;
+      return !hadFailure && session.isDataCurrent;
     } finally {
       _drainingOwners.remove(owner);
       _drainWaiters.remove(owner);

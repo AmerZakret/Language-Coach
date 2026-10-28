@@ -1,3 +1,4 @@
+import 'package:lingua_ai/services/data_timeline.dart';
 import 'dart:convert';
 import 'dart:io';
 
@@ -19,7 +20,7 @@ void main() {
       () async {
     SharedPreferences.setMockInitialValues({
       'progress_guest_en_totalXp': 999,
-      'flashcards_guest_en_list': '[{"targetWord":"shared legacy card"}]',
+      DataTimeline().cacheKey('flashcards_guest_en_list'): '[{"targetWord":"shared legacy card"}]',
     });
     final auth = AuthService();
     final progress = ProgressService();
@@ -53,7 +54,7 @@ void main() {
     await writeData(10, 'Guest A word');
     expect(ProgressSnapshot.read(prefs, 'guest_$idA', 'en').totalXp, 10);
     expect(
-        jsonDecode(prefs.getString('flashcards_guest_${idA}_en_list')!)[0]
+        jsonDecode(prefs.getString(DataTimeline().cacheKey('flashcards_guest_${idA}_en_list'))!)[0]
             ['targetWord'],
         'Guest A word');
     final persistedA = {
@@ -79,7 +80,7 @@ void main() {
     await writeData(20, 'Guest B word');
     expect(ProgressSnapshot.read(prefs, 'guest_$idB', 'en').totalXp, 20);
     expect(
-        jsonDecode(prefs.getString('flashcards_guest_${idB}_en_list')!)[0]
+        jsonDecode(prefs.getString(DataTimeline().cacheKey('flashcards_guest_${idB}_en_list'))!)[0]
             ['targetWord'],
         'Guest B word');
     expect(ProgressSnapshot.read(prefs, 'guest_$idA', 'en').totalXp, 10);
@@ -148,7 +149,7 @@ void main() {
     expect(prefs.getInt('progress_guest_${idB}_en_streak'), 7);
 
     await HttpOverrides.runZoned(() async {
-      // Attributable registered email caches migrate; resets never revive them.
+      // Pre-timeline server caches remain unverified and cannot populate current reads.
       await prefs.setInt('progress_member_example_com_en_totalXp', 40);
       await prefs.setInt('progress_member_example_com_en_streak', 2);
       await prefs.setStringList(
@@ -157,7 +158,7 @@ void main() {
       await prefs.setStringList(
           'progress_member_example_com_en_weeklyActivity', ['0.4']);
       await prefs.setString('flashcards_member_example_com_en_list',
-          prefs.getString('flashcards_guest_${idA}_en_list')!);
+          prefs.getString(DataTimeline().cacheKey('flashcards_guest_${idA}_en_list'))!);
       await prefs.setBool('isGuest', false);
       await prefs.setBool('isLoggedIn', true);
       await prefs.setString('currentUserId', idA);
@@ -167,14 +168,14 @@ void main() {
       await progress.reloadProgress();
       await cards.reloadFlashcards();
       await Future<void>.delayed(Duration.zero);
-      expect(progress.totalXp, 40);
-      expect(progress.streak, 2);
-      expect(progress.completedLessonIds, {'member-lesson'});
-      expect(progress.weeklyActivity, [0.4]);
-      expect(cards.allCards.single.targetWord, 'Guest A word');
+      expect(progress.totalXp, 0);
+      expect(progress.streak, 0);
+      expect(progress.completedLessonIds, isEmpty);
+      expect(progress.weeklyActivity, everyElement(0.0));
+      expect(cards.allCards, isEmpty);
       expect(
-          prefs.getString('flashcards_registered_${idA}_en_list'), isNotNull);
-      expect(prefs.containsKey('flashcards_member_example_com_en_list'), false);
+          prefs.getString(DataTimeline().cacheKey('flashcards_registered_${idA}_en_list')), isNull);
+      expect(prefs.containsKey('flashcards_member_example_com_en_list'), true);
       expect(
           prefs.containsKey('progress_member_example_com_en_totalXp'), false);
       expect(ProgressSnapshot.read(prefs, 'guest_$idB', 'en').totalXp, 20);

@@ -1,3 +1,4 @@
+import { readTimelineCache, writeTimelineCache } from '../utils/timelineCache';
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { BookOpen, CheckCircle2, Lock, Star } from "lucide-react";
@@ -28,10 +29,10 @@ export function LessonsPage() {
       try {
         const data = await getLessons(targetLanguage);
         setLessons(data);
-        localStorage.setItem(cacheKey, JSON.stringify(data));
+        writeTimelineCache(cacheKey, JSON.stringify(data));
       } catch (e) {
         console.error("Failed to load lessons, using cache or fallback", e);
-        const cached = localStorage.getItem(cacheKey);
+        const cached = readTimelineCache(cacheKey);
         if (cached) {
           try {
             setLessons(JSON.parse(cached));

@@ -1,3 +1,4 @@
+import { dataTimeline } from '../utils/dataTimeline';
 import { targetLanguageCode } from '../utils/targetLanguage';
 import apiClient from './apiClient';
 import type { User } from '../types/auth';
@@ -19,7 +20,9 @@ function parseSession(value: unknown): { access_token: string; user: User } {
   if (!data || typeof data.access_token !== 'string' || !data.access_token.trim()) {
     throw new Error('Authentication returned an incomplete session.');
   }
-  return { access_token: data.access_token, user: parsePublicUser(data.user) };
+  const user = parsePublicUser(data.user);
+  dataTimeline.confirmRead(`${user.isGuest ? 'guest' : 'registered'}_${user.id}`, '/users/me');
+  return { access_token: data.access_token, user };
 }
 
 export const login = async (email: string, password: string): Promise<{ access_token: string, user: User }> => {
@@ -28,7 +31,9 @@ export const login = async (email: string, password: string): Promise<{ access_t
 };
 
 export const register = async (name: string, email: string, password: string): Promise<{ access_token: string, user: User }> => {
-  const response = await apiClient.post('/auth/register', { name, email, password });
+  await dataTimeline.ensureDiscovered();
+  const operation = dataTimeline.capture();
+  const response = await apiClient.post('/auth/register', { name, email, password }, operation);
   return parseSession(response.data);
 };
 
@@ -37,7 +42,8 @@ export const fetchMe = async (session?: QueueSession): Promise<User> => {
   return parsePublicUser(response.data);
 };
 
-export const updateProfile = async (profileData: { name?: string; targetLanguage?: string }): Promise<User> => {
-  const response = await apiClient.patch<User>('/users/profile', { ...profileData, ...(profileData.targetLanguage !== undefined ? { targetLanguage: targetLanguageCode(profileData.targetLanguage) } : {}) }, getSessionRequestConfig());
+export const updateProfile = async (profileData: { name?: string; targetLanguage?: string }, storedTimeline?: Readonly<{ dataTimelineId: string }>): Promise<User> => {
+  const operation = storedTimeline ?? dataTimeline.capture();
+  const response = await apiClient.patch<User>('/users/profile', { ...profileData, ...(profileData.targetLanguage !== undefined ? { targetLanguage: targetLanguageCode(profileData.targetLanguage) } : {}) }, { ...getSessionRequestConfig(), ...operation });
   return parsePublicUser(response.data);
 };

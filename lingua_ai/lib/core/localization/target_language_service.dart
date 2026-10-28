@@ -1,3 +1,5 @@
+import '../../services/api_response.dart';
+import '../../services/data_timeline.dart';
 import 'target_language.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -24,7 +26,7 @@ class TargetLanguageService extends ChangeNotifier {
     final session = AuthService().captureSession();
     final version = ++_languageVersion;
     _prefs = await SharedPreferences.getInstance();
-    if (!session.isCurrent || version != _languageVersion) return;
+    if (!session.isDataCurrent || version != _languageVersion) return;
     final saved = _prefs.getString('targetLanguage');
     // A missing preference starts a new English session. Invalid saved values
     // retain the current selection and are reported instead of coercing to en.
@@ -42,23 +44,27 @@ class TargetLanguageService extends ChangeNotifier {
   Future<void> setLanguage(String langCode, {bool syncToBackend = true}) async {
     final session = AuthService().captureSession();
     final version = ++_languageVersion;
-    bool isCurrent() => session.isCurrent && version == _languageVersion;
-    _currentLanguage = TargetLanguage.code(langCode);
-    await _prefs.setString('targetLanguage', _currentLanguage);
-    if (!isCurrent()) return;
-
-    if (syncToBackend) {
-      final auth = AuthService();
-      if (auth.isLoggedIn && !auth.isGuest) {
-        try {
-          await UserApiService().updateProfile(
-            targetLanguage: _currentLanguage,
-          );
-        } catch (e) {
-          debugPrint('Failed to sync target language to backend: $e');
-        }
+    bool isCurrent() => session.isDataCurrent && version == _languageVersion;
+    final requested = TargetLanguage.code(langCode);
+    final auth = AuthService();
+    if (syncToBackend && auth.isLoggedIn && !auth.isGuest) {
+      // The boundary commits immutable timeline evidence before either the
+      // backend write or this persistent optimistic preference.
+      DataTimeline().captureNewWork();
+      try {
+        await UserApiService().updateProfile(targetLanguage: requested);
+      } on TimelineRecoveryRequired {
+        if (!isCurrent()) return;
+        rethrow;
+      } catch (e) {
+        if (!isCurrent()) return;
+        if (e is! ApiException) rethrow;
+        debugPrint('Failed to sync target language to backend: $e');
       }
     }
+    if (!isCurrent()) return;
+    _currentLanguage = requested;
+    await _prefs.setString('targetLanguage', requested);
     if (!isCurrent()) return;
     
     ProgressService().reloadProgress();
@@ -70,7 +76,7 @@ class TargetLanguageService extends ChangeNotifier {
     final version = ++_languageVersion;
     _currentLanguage = 'en';
     await _prefs.remove('targetLanguage');
-    if (!session.isCurrent || version != _languageVersion) return;
+    if (!session.isDataCurrent || version != _languageVersion) return;
     notifyListeners();
   }
 

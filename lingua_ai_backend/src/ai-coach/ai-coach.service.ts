@@ -36,7 +36,8 @@ export class AiCoachService {
     @InjectModel(User.name)
     private userModel: Model<User>,
     private readonly receipts: MutationReceipts,
-    @InjectModel(ChatBarrier.name) private readonly barriers: Model<ChatBarrier>,
+    @InjectModel(ChatBarrier.name)
+    private readonly barriers: Model<ChatBarrier>,
     @Optional() private readonly budget?: ProviderBudget,
   ) {}
 
@@ -69,9 +70,7 @@ export class AiCoachService {
     operationId?: string,
   ) {
     const user = await this.findUser(userId);
-
     const targetCode = targetLanguageCode(targetLanguage ?? 'en');
-    await this.ensureBarrier(userId, targetCode);
     let generated: ParsedAIResponse | undefined;
     return this.receipts.execute(userId, operationId, 'ai-send',
       { message, language, targetLanguage: targetCode }, async session => {
@@ -89,14 +88,18 @@ export class AiCoachService {
       });
   }
 
-  private async ensureBarrier(userId: string, targetLanguage: string) {
-    try { await this.barriers.updateOne({ userId, targetLanguage }, { $setOnInsert: { revision: 0 } }, { upsert: true, writeConcern: { w: 'majority' } }).exec(); }
-    catch (error) {
-      if (error?.code !== 11000) throw new ServiceUnavailableException({ code: 'RETRYABLE_SERVER_FAILURE', message: 'History ordering could not be acknowledged. Retry the same operation.' });
-    }
-  }
-
-  private async advanceBarrier(userId: string, targetLanguage: string, session: ClientSession) {
+  private async advanceBarrier(
+    userId: string,
+    targetLanguage: string,
+    session: ClientSession,
+  ) {
+    await this.barriers
+      .updateOne(
+        { userId, targetLanguage },
+        { $setOnInsert: { revision: 0 } },
+        { upsert: true, session },
+      )
+      .exec();
     const result = await this.barriers.updateOne({ userId, targetLanguage }, { $inc: { revision: 1 } }, { session }).exec();
     if (result.matchedCount !== 1) throw new ServiceUnavailableException({ code: 'RETRYABLE_SERVER_FAILURE', message: 'History ordering could not be acknowledged. Retry the same operation.' });
   }
@@ -169,8 +172,13 @@ Do not include markdown code block formatting like \`\`\`json. Return pure JSON.
       }
 
       const parsedResponse = JSON.parse(textResponse) as ParsedAIResponse;
-      if (!parsedResponse || typeof parsedResponse.reply !== 'string' || !parsedResponse.reply.trim()
-        || typeof parsedResponse.correction !== 'string') throw new Error('Invalid provider response');
+      if (
+        !parsedResponse ||
+        typeof parsedResponse.reply !== 'string' ||
+        !parsedResponse.reply.trim() ||
+        typeof parsedResponse.correction !== 'string'
+      )
+        throw new Error('Invalid provider response');
       return parsedResponse;
     } catch (error) {
       if (error instanceof HttpException) throw error;
@@ -266,14 +274,30 @@ Return ONLY this JSON. Do not include markdown formatting like \`\`\`json.`;
         throw new ProviderFailure('PROVIDER_INVALID_RESPONSE', false);
       }
       const scoreFields = ['grammarScore', 'vocabularyScore', 'clarityScore', 'overallScore'];
-      if (!evaluation || scoreFields.some(field => typeof evaluation[field] !== 'number'
-        || !Number.isFinite(evaluation[field]) || evaluation[field] < 0 || evaluation[field] > 100)
-        || typeof evaluation.feedback !== 'string' || typeof evaluation.improvedVersion !== 'string'
-        || !Array.isArray(evaluation.corrections)
-        || evaluation.corrections.some((item: any) => !item || ['original', 'correction', 'explanation']
-          .some(field => typeof item[field] !== 'string'))) {
+      const candidate = evaluation as Record<string, unknown> | null;
+      if (
+        !candidate ||
+        scoreFields.some((field) => {
+          const score = candidate[field];
+          return (
+            typeof score !== 'number' ||
+            !Number.isFinite(score) ||
+            score < 0 ||
+            score > 100
+          );
+        }) ||
+        typeof candidate.feedback !== 'string' ||
+        typeof candidate.improvedVersion !== 'string' ||
+        !Array.isArray(candidate.corrections) ||
+        candidate.corrections.some((item: unknown) => {
+          if (!item || typeof item !== 'object') return true;
+          const correction = item as Record<string, unknown>;
+          return ['original', 'correction', 'explanation'].some(
+            (field) => typeof correction[field] !== 'string',
+          );
+        })
+      )
         throw new ProviderFailure('PROVIDER_INVALID_RESPONSE', false);
-      }
       // Scores are percentages (0-100), including decimals; never infer a second scale.
       return {
         grammarScore: evaluation.grammarScore,
@@ -312,12 +336,15 @@ Return ONLY this JSON. Do not include markdown formatting like \`\`\`json.`;
   /**
    * Deletes all chat history log mappings for a user.
    */
-  async clearHistory(userId: string, targetLanguage: string, operationId?: string) {
+  async clearHistory(
+    userId: string,
+    targetLanguage: string,
+    operationId?: string,
+  ) {
     const user = await this.findUser(userId);
     const targetCode = targetLanguageCode(targetLanguage ?? 'en');
-    await this.ensureBarrier(userId, targetCode);
     return this.receipts.execute(userId, operationId, 'ai-clear', { targetLanguage: targetCode }, async session => {
-      await this.advanceBarrier(userId, targetCode, session);
+        await this.advanceBarrier(userId, targetCode, session);
       const deleted = await this.chatMessageModel.deleteMany({ userId: user._id.toString(), targetLanguage: targetLanguageQuery(targetCode) }, { session }).exec();
       return { success: true, deletedCount: deleted.deletedCount };
     });

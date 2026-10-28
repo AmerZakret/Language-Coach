@@ -1,5 +1,15 @@
-import { INestApplication, UnauthorizedException, ValidationPipe } from '@nestjs/common';
-import { getConnectionToken, getModelToken, MongooseModule } from '@nestjs/mongoose';
+import { MutationTimeline } from '../operations/mutation-timeline';
+import { initializeTestTimeline } from '../../test/timeline-fixture';
+import {
+  INestApplication,
+  UnauthorizedException,
+  ValidationPipe,
+} from '@nestjs/common';
+import {
+  getConnectionToken,
+  getModelToken,
+  MongooseModule,
+} from '@nestjs/mongoose';
 import { Test } from '@nestjs/testing';
 import { Connection, Model, Types } from 'mongoose';
 import { MongoMemoryReplSet } from 'mongodb-memory-server';
@@ -30,46 +40,98 @@ describe('Queued flashcard idempotency', () => {
   let b: User;
   let cardA: Flashcard;
   let cardB: Flashcard;
-  const ai = { generateContext: jest.fn(async () => ({ sentences: ['example'], mnemonic: 'hint' })) };
-  const body = { targetWord: 'word',
-    turkishTranslation: 'translation', targetLanguage: 'English', note: 'original' };
+  const ai = {
+    generateContext: jest.fn(() =>
+      Promise.resolve({
+        sentences: ['example'],
+        mnemonic: 'hint',
+      }),
+    ),
+  };
+  const body = {
+    targetWord: 'word',
+    turkishTranslation: 'translation',
+    targetLanguage: 'English',
+    note: 'original',
+  };
   const review = (card = cardA, key = 'review-1', owner = a, score = 4) =>
-    request(app.getHttpServer()).put(`/flashcards/${card._id}/review`)
-      .auth(owner._id.toString(), { type: 'bearer' }).set('X-Idempotency-Key', key).send({ score });
-  const create = (key = 'create-1', payload = body) => request(app.getHttpServer()).post('/flashcards')
-    .auth(a._id.toString(), { type: 'bearer' }).set('X-Idempotency-Key', key).send(payload);
-  const remove = (key = 'delete-1', owner = a) => request(app.getHttpServer()).delete(`/flashcards/${cardA._id}`)
-    .auth(owner._id.toString(), { type: 'bearer' }).set('X-Idempotency-Key', key);
+    request(app.getHttpServer() as import('node:http').Server)
+      .put(`/flashcards/${card._id.toString()}/review`)
+      .auth(owner._id.toString(), { type: 'bearer' })
+      .set('X-Idempotency-Key', key)
+      .send({ score });
+  const create = (key = 'create-1', payload = body) =>
+    request(app.getHttpServer() as import('node:http').Server)
+      .post('/flashcards')
+      .auth(a._id.toString(), { type: 'bearer' })
+      .set('X-Idempotency-Key', key)
+      .send(payload);
+  const remove = (key = 'delete-1', owner = a) =>
+    request(app.getHttpServer() as import('node:http').Server)
+      .delete(`/flashcards/${cardA._id.toString()}`)
+      .auth(owner._id.toString(), { type: 'bearer' })
+      .set('X-Idempotency-Key', key);
 
   beforeAll(async () => {
     replica = await MongoMemoryReplSet.create({ replSet: { count: 1 } });
     const module = await Test.createTestingModule({
-      imports: [MongooseModule.forRoot(replica.getUri()), FlashcardsModule, ProgressModule],
-    }).overrideProvider(AiContextService).useValue(ai)
-      .overrideGuard(JwtAuthGuard).useValue({ canActivate: async context => {
-        const req = context.switchToHttp().getRequest();
-        const id = req.headers.authorization?.replace(/^Bearer /, '');
-        if (!id || !Types.ObjectId.isValid(id)) throw new UnauthorizedException();
-        req.user = await users.findById(id);
-        if (!req.user) throw new UnauthorizedException();
-        return true;
-      } }).compile();
+      imports: [
+        MongooseModule.forRoot(replica.getUri()),
+        FlashcardsModule,
+        ProgressModule,
+      ],
+    })
+      .overrideProvider(AiContextService)
+      .useValue(ai)
+      .overrideGuard(JwtAuthGuard)
+      .useValue({
+        canActivate: async (
+          context: import('@nestjs/common').ExecutionContext,
+        ) => {
+          const req = context.switchToHttp().getRequest<{
+            headers: Record<string, string | undefined>;
+            user: unknown;
+          }>();
+          const id = req.headers.authorization?.replace(/^Bearer /, '');
+          if (!id || !Types.ObjectId.isValid(id))
+            throw new UnauthorizedException();
+          req.user = await users.findById(id);
+          if (!req.user) throw new UnauthorizedException();
+          return true;
+        },
+      })
+      .compile();
     app = module.createNestApplication();
     app.useLogger(false);
-    app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
+    app.useGlobalPipes(
+      new ValidationPipe({
+        whitelist: true,
+        forbidNonWhitelisted: true,
+        transform: true,
+      }),
+    );
     cards = module.get(getModelToken(Flashcard.name));
     operations = module.get(getModelToken(FlashcardOperation.name));
     users = module.get(getModelToken(User.name));
     await app.init();
-    await Promise.all([cards.init(), users.init(), module.get<Model<Progress>>(getModelToken(Progress.name)).init()]);
+    await initializeTestTimeline(app);
+    await Promise.all([
+      cards.init(),
+      users.init(),
+      module.get<Model<Progress>>(getModelToken(Progress.name)).init(),
+    ]);
   });
 
   beforeEach(async () => {
     jest.restoreAllMocks();
     ai.generateContext.mockClear();
-    await Promise.all([cards.deleteMany({}), operations.deleteMany({}), users.deleteMany({}),
+    await Promise.all([
+      cards.deleteMany({}),
+      operations.deleteMany({}),
+      users.deleteMany({}),
       app.get<Model<Progress>>(getModelToken(Progress.name)).deleteMany({}),
-      app.get<Model<Lesson>>(getModelToken(Lesson.name)).deleteMany({})]);
+      app.get<Model<Lesson>>(getModelToken(Lesson.name)).deleteMany({}),
+    ]);
     [a, b] = await users.create([
       { name: 'A', email: 'a@example.com', passwordHash: 'fixture' },
       { name: 'B', email: 'b@example.com', passwordHash: 'fixture' },
@@ -80,7 +142,10 @@ describe('Queued flashcard idempotency', () => {
     ]);
   });
 
-  afterAll(async () => { await app?.close(); await replica?.stop(); });
+  afterAll(async () => {
+    await app?.close();
+    await replica?.stop();
+  });
 
   it('applies duplicate review once without changing SRS/history/date on retry', async () => {
     const first = await review().expect(200);
@@ -95,44 +160,66 @@ describe('Queued flashcard idempotency', () => {
   it('lost-response retry remains single-review state after service restart', async () => {
     await review().expect(200); // Server commits; client discards this response.
     const before = (await cards.findById(cardA._id))!.toObject();
-    const restarted = new FlashcardIdempotencyService(app.get<Connection>(getConnectionToken()), operations, cards);
-    const controller = new FlashcardsController(app.get(FlashcardsService), restarted);
-    await controller.review(cardA._id.toString(), { score: 4 }, { user: a }, 'review-1');
+    const restarted = new FlashcardIdempotencyService(
+      app.get<Connection>(getConnectionToken()),
+      operations,
+      cards,
+      app.get(MutationTimeline),
+    );
+    const controller = new FlashcardsController(
+      app.get(FlashcardsService),
+      restarted,
+    );
+    await controller.review(
+      cardA._id.toString(),
+      { score: 4 },
+      { user: a },
+      'review-1',
+    );
     expect((await cards.findById(cardA._id))!.toObject()).toEqual(before);
   });
 
   it('different operation IDs apply two legitimate reviews', async () => {
-    await review().expect(200); await review(cardA, 'review-2').expect(200);
+    await review().expect(200);
+    await review(cardA, 'review-2').expect(200);
     const saved = await cards.findById(cardA._id);
-    expect(saved?.reviewCount).toBe(2); expect(saved?.history).toHaveLength(2);
+    expect(saved?.reviewCount).toBe(2);
+    expect(saved?.history).toHaveLength(2);
     expect(saved?.interval).toBe(6);
   });
 
   it('same operation ID is isolated by authenticated user', async () => {
-    await review().expect(200); await review(cardB, 'review-1', b).expect(200);
+    await review().expect(200);
+    await review(cardB, 'review-1', b).expect(200);
     expect((await cards.findById(cardA._id))?.reviewCount).toBe(1);
     expect((await cards.findById(cardB._id))?.reviewCount).toBe(1);
     expect(await operations.countDocuments()).toBe(2);
   });
 
   it('concurrent same-ID reviews commit exactly once', async () => {
-    const replies = await Promise.all(Array.from({ length: 6 }, () => review()));
-    expect(replies.map(r => r.status)).toEqual(Array(6).fill(200));
+    const replies = await Promise.all(
+      Array.from({ length: 6 }, () => review()),
+    );
+    expect(replies.map((r) => r.status)).toEqual(Array(6).fill(200));
     const saved = await cards.findById(cardA._id);
-    expect(saved?.reviewCount).toBe(1); expect(saved?.history).toHaveLength(1);
+    expect(saved?.reviewCount).toBe(1);
+    expect(saved?.history).toHaveLength(1);
     expect(await operations.countDocuments()).toBe(1);
   });
 
   it('concurrent distinct review IDs both apply using current SRS state', async () => {
     const replies = await Promise.all([review(), review(cardA, 'review-2')]);
-    expect(replies.map(r => r.status)).toEqual([200, 200]);
+    expect(replies.map((r) => r.status)).toEqual([200, 200]);
     const saved = await cards.findById(cardA._id);
-    expect(saved?.reviewCount).toBe(2); expect(saved?.history).toHaveLength(2);
+    expect(saved?.reviewCount).toBe(2);
+    expect(saved?.history).toHaveLength(2);
     expect(saved?.interval).toBe(6);
   });
 
   it('rolls back the review when its durable receipt cannot be saved', async () => {
-    jest.spyOn(operations, 'create').mockRejectedValueOnce(new Error('Receipt write interrupted') as never);
+    jest
+      .spyOn(operations, 'create')
+      .mockRejectedValueOnce(new Error('Receipt write interrupted'));
     await review().expect(500);
     expect((await cards.findById(cardA._id))?.reviewCount).toBe(0);
     expect(await operations.countDocuments()).toBe(0);
@@ -152,25 +239,35 @@ describe('Queued flashcard idempotency', () => {
     await cards.deleteMany({ userId: a._id });
     const first = await create().expect(201);
     const duplicate = await create().expect(201);
-    expect(duplicate.body._id).toBe(first.body._id);
+    expect((duplicate.body as { _id: string })._id).toBe(
+      (first.body as { _id: string })._id,
+    );
     expect(await cards.countDocuments({ userId: a._id })).toBe(1);
     expect(ai.generateContext).toHaveBeenCalledTimes(1);
   });
 
   it('concurrent duplicate creates claim the key before AI/business effects', async () => {
     await cards.deleteMany({ userId: a._id });
-    const replies = await Promise.all(Array.from({ length: 4 }, () => create()));
-    expect(replies.map(r => r.status)).toEqual(Array(4).fill(201));
-    expect(new Set(replies.map(r => r.body._id)).size).toBe(1);
+    const replies = await Promise.all(
+      Array.from({ length: 4 }, () => create()),
+    );
+    expect(replies.map((r) => r.status)).toEqual(Array(4).fill(201));
+    expect(
+      new Set(replies.map((r) => (r.body as { _id: string })._id)).size,
+    ).toBe(1);
     expect(ai.generateContext).toHaveBeenCalledTimes(1);
     expect(await cards.countDocuments({ userId: a._id })).toBe(1);
   });
 
   it('aborts a saved create when final receipt reference persistence fails', async () => {
     await cards.deleteMany({ userId: a._id });
-    jest.spyOn(operations, 'updateOne').mockImplementationOnce(() => ({
-      exec: async () => { throw new Error('Receipt finalization interrupted'); },
-    }) as any);
+    jest.spyOn(operations, 'updateOne').mockImplementationOnce(
+      () =>
+        ({
+          exec: () =>
+            Promise.reject(new Error('Receipt finalization interrupted')),
+        }) as unknown as ReturnType<typeof operations.updateOne>,
+    );
     await create().expect(500);
     expect(await cards.countDocuments({ userId: a._id })).toBe(0);
     expect(await operations.countDocuments()).toBe(0);
@@ -182,41 +279,63 @@ describe('Queued flashcard idempotency', () => {
     await create().expect(201);
     await create('create-2', { ...body, note: 'new note' }).expect(201);
     const oldRetry = await create().expect(201);
-    expect(oldRetry.body.note).toBe('new note');
+    expect((oldRetry.body as { note: string }).note).toBe('new note');
     expect(await cards.countDocuments({ userId: a._id })).toBe(1);
     expect(ai.generateContext).toHaveBeenCalledTimes(2);
   });
 
   it('old create retry cannot recreate a card after it was renamed or deleted', async () => {
     const created = await create().expect(201);
-    await cards.updateOne({ _id: created.body._id }, { targetWord: 'renamed' });
-    expect((await create().expect(201)).body.targetWord).toBe('renamed');
-    await cards.deleteOne({ _id: created.body._id });
-    expect((await create().expect(201)).body._id).toBe(created.body._id);
+    await cards.updateOne(
+      { _id: (created.body as { _id: string })._id },
+      { targetWord: 'renamed' },
+    );
+    expect(
+      ((await create().expect(201)).body as { targetWord: string }).targetWord,
+    ).toBe('renamed');
+    await cards.deleteOne({ _id: (created.body as { _id: string })._id });
+    expect(((await create().expect(201)).body as { _id: string })._id).toBe(
+      (created.body as { _id: string })._id,
+    );
     expect(await cards.countDocuments({ userId: a._id })).toBe(0);
     expect(ai.generateContext).toHaveBeenCalledTimes(1);
   });
 
   it('old duplicate update cannot overwrite a newer acknowledged update', async () => {
-    const update = (key, note) => request(app.getHttpServer()).put(`/flashcards/${cardA._id}`)
-      .auth(a._id.toString(), { type: 'bearer' }).set('X-Idempotency-Key', key)
-      .send({ targetWord: 'word', turkishTranslation: 'translation', note });
+    const update = (key: string, note: string) =>
+      request(app.getHttpServer() as import('node:http').Server)
+        .put(`/flashcards/${cardA._id.toString()}`)
+        .auth(a._id.toString(), { type: 'bearer' })
+        .set('X-Idempotency-Key', key)
+        .send({ targetWord: 'word', turkishTranslation: 'translation', note });
     await update('edit-1', 'first').expect(200);
     await update('edit-2', 'newest').expect(200);
-    expect((await update('edit-1', 'first').expect(200)).body.note).toBe('newest');
+    expect(
+      ((await update('edit-1', 'first').expect(200)).body as { note: string })
+        .note,
+    ).toBe('newest');
     expect(ai.generateContext).toHaveBeenCalledTimes(2);
   });
 
   it('does not bypass ownership or JWT authentication with another user receipt', async () => {
     await review(cardB, 'shared-key', b).expect(200);
     await review(cardB, 'shared-key', a).expect(403);
-    await request(app.getHttpServer()).put(`/flashcards/${cardB._id}`)
-      .auth(a._id.toString(), { type: 'bearer' }).set('X-Idempotency-Key', 'shared-key')
-      .send({ targetWord: 'changed', turkishTranslation: 'translation' }).expect(403);
-    await request(app.getHttpServer()).delete(`/flashcards/${cardB._id}`)
-      .auth(a._id.toString(), { type: 'bearer' }).set('X-Idempotency-Key', 'shared-key').expect(403);
-    await request(app.getHttpServer()).put(`/flashcards/${cardB._id}/review`)
-      .set('X-Idempotency-Key', 'shared-key').send({ score: 4 }).expect(401);
+    await request(app.getHttpServer() as import('node:http').Server)
+      .put(`/flashcards/${cardB._id.toString()}`)
+      .auth(a._id.toString(), { type: 'bearer' })
+      .set('X-Idempotency-Key', 'shared-key')
+      .send({ targetWord: 'changed', turkishTranslation: 'translation' })
+      .expect(403);
+    await request(app.getHttpServer() as import('node:http').Server)
+      .delete(`/flashcards/${cardB._id.toString()}`)
+      .auth(a._id.toString(), { type: 'bearer' })
+      .set('X-Idempotency-Key', 'shared-key')
+      .expect(403);
+    await request(app.getHttpServer() as import('node:http').Server)
+      .put(`/flashcards/${cardB._id.toString()}/review`)
+      .set('X-Idempotency-Key', 'shared-key')
+      .send({ score: 4 })
+      .expect(401);
     expect((await cards.findById(cardB._id))?.reviewCount).toBe(1);
     expect(await operations.countDocuments()).toBe(1);
   });
@@ -236,8 +355,11 @@ describe('Queued flashcard idempotency', () => {
   });
 
   it('acknowledges a committed review even if a later operation deleted its card', async () => {
-    await review().expect(200); await remove().expect(200);
-    expect((await review().expect(200)).body._id).toBe(cardA._id.toString());
+    await review().expect(200);
+    await remove().expect(200);
+    expect(((await review().expect(200)).body as { _id: string })._id).toBe(
+      cardA._id.toString(),
+    );
     expect(await cards.findById(cardA._id)).toBeNull();
   });
 
@@ -245,27 +367,54 @@ describe('Queued flashcard idempotency', () => {
     await review().expect(200);
     const receipt = (await operations.findOne())!.toObject();
     delete receipt._id;
-    await expect(operations.create(receipt)).rejects.toMatchObject({ code: 11000 });
+    await expect(operations.create(receipt)).rejects.toMatchObject({
+      code: 11000,
+    });
     const indexes = await operations.collection.indexes();
-    expect(indexes).toEqual(expect.arrayContaining([expect.objectContaining({
-      key: { userId: 1, operationId: 1, operationType: 1 }, unique: true,
-    })]));
-    expect(indexes.some(index => index.expireAfterSeconds !== undefined)).toBe(false);
+    expect(indexes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: { userId: 1, operationId: 1, operationType: 1 },
+          unique: true,
+        }),
+      ]),
+    );
+    expect(
+      indexes.some((index) => index.expireAfterSeconds !== undefined),
+    ).toBe(false);
   });
 
   it('ordinary unkeyed review callers remain compatible', async () => {
-    await request(app.getHttpServer()).put(`/flashcards/${cardA._id}/review`)
-      .auth(a._id.toString(), { type: 'bearer' }).send({ score: 4 }).expect(200);
+    await request(app.getHttpServer() as import('node:http').Server)
+      .put(`/flashcards/${cardA._id.toString()}/review`)
+      .auth(a._id.toString(), { type: 'bearer' })
+      .send({ score: 4 })
+      .expect(200);
     expect((await cards.findById(cardA._id))?.reviewCount).toBe(1);
   });
 
   it('7D: decades-old create receipts prevent recreating renamed/deleted cards', async () => {
     const created = await create().expect(201);
-    await operations.collection.updateMany({}, { $set: { createdAt: new Date('2000-01-01'), updatedAt: new Date('2000-01-01') } });
-    await cards.updateOne({ _id: created.body._id }, { targetWord: 'renamed-late' });
-    expect((await create().expect(201)).body.targetWord).toBe('renamed-late');
-    await cards.deleteOne({ _id: created.body._id });
-    expect((await create().expect(201)).body._id).toBe(created.body._id);
+    await operations.collection.updateMany(
+      {},
+      {
+        $set: {
+          createdAt: new Date('2000-01-01'),
+          updatedAt: new Date('2000-01-01'),
+        },
+      },
+    );
+    await cards.updateOne(
+      { _id: (created.body as { _id: string })._id },
+      { targetWord: 'renamed-late' },
+    );
+    expect(
+      ((await create().expect(201)).body as { targetWord: string }).targetWord,
+    ).toBe('renamed-late');
+    await cards.deleteOne({ _id: (created.body as { _id: string })._id });
+    expect(((await create().expect(201)).body as { _id: string })._id).toBe(
+      (created.body as { _id: string })._id,
+    );
     expect(await cards.countDocuments({ userId: a._id })).toBe(0);
     expect(ai.generateContext).toHaveBeenCalledTimes(1);
     expect(await operations.countDocuments()).toBe(1);
@@ -273,37 +422,70 @@ describe('Queued flashcard idempotency', () => {
 
   it('7D: decades-old review replay cannot apply SRS/history a second time', async () => {
     await review().expect(200);
-    await operations.collection.updateMany({}, { $set: { createdAt: new Date('2000-01-01') } });
+    await operations.collection.updateMany(
+      {},
+      { $set: { createdAt: new Date('2000-01-01') } },
+    );
     const before = (await cards.findById(cardA._id))!.toObject();
     await review().expect(200);
     expect((await cards.findById(cardA._id))!.toObject()).toEqual(before);
   });
 
   it('7D: old update and delete receipts retain their operation keys after later mutations', async () => {
-    const update = (key: string, note: string) => request(app.getHttpServer()).put(`/flashcards/${cardA._id}`)
-      .auth(a._id.toString(), { type: 'bearer' }).set('X-Idempotency-Key', key)
-      .send({ targetWord: 'word', turkishTranslation: 'translation', note });
+    const update = (key: string, note: string) =>
+      request(app.getHttpServer() as import('node:http').Server)
+        .put(`/flashcards/${cardA._id.toString()}`)
+        .auth(a._id.toString(), { type: 'bearer' })
+        .set('X-Idempotency-Key', key)
+        .send({ targetWord: 'word', turkishTranslation: 'translation', note });
     await update('old-edit', 'old').expect(200);
-    await operations.collection.updateMany({}, { $set: { createdAt: new Date('2000-01-01') } });
+    await operations.collection.updateMany(
+      {},
+      { $set: { createdAt: new Date('2000-01-01') } },
+    );
     await update('new-edit', 'new').expect(200);
-    expect((await update('old-edit', 'old').expect(200)).body.note).toBe('new');
+    expect(
+      ((await update('old-edit', 'old').expect(200)).body as { note: string })
+        .note,
+    ).toBe('new');
     await remove('old-delete').expect(200);
-    await operations.collection.updateMany({}, { $set: { createdAt: new Date('2000-01-01') } });
+    await operations.collection.updateMany(
+      {},
+      { $set: { createdAt: new Date('2000-01-01') } },
+    );
     await remove('old-delete').expect(200);
     expect(await cards.findById(cardA._id)).toBeNull();
-    expect(await operations.countDocuments({ operationType: 'delete-flashcard' })).toBe(1);
+    expect(
+      await operations.countDocuments({ operationType: 'delete-flashcard' }),
+    ).toBe(1);
   });
 
   it('lesson completion natural key prevents duplicate XP on queued retries', async () => {
-    await app.get<Model<Lesson>>(getModelToken(Lesson.name)).create({ id: 'lesson-1',
-      targetLanguage: 'English', title: 'Lesson', description: 'Test', category: 'test',
-      difficulty: 'easy', level: 'Beginner', order: 1, duration: 5, xpReward: 50 });
-    const complete = () => request(app.getHttpServer()).post(`/progress/${a._id}/complete-lesson`)
-      .auth(a._id.toString(), { type: 'bearer' }).set('X-Idempotency-Key', 'complete-1')
-      .send({ lessonId: 'lesson-1', score: 90, progressEpoch: 0 });
+    await app.get<Model<Lesson>>(getModelToken(Lesson.name)).create({
+      id: 'lesson-1',
+      targetLanguage: 'English',
+      title: 'Lesson',
+      description: 'Test',
+      category: 'test',
+      difficulty: 'easy',
+      level: 'Beginner',
+      order: 1,
+      duration: 5,
+      xpReward: 50,
+    });
+    const complete = () =>
+      request(app.getHttpServer() as import('node:http').Server)
+        .post(`/progress/${a._id.toString()}/complete-lesson`)
+        .auth(a._id.toString(), { type: 'bearer' })
+        .set('X-Idempotency-Key', 'complete-1')
+        .send({ lessonId: 'lesson-1', score: 90, progressEpoch: 0 });
     expect((await complete().expect(201)).body.data.xpEarned).toBe(50);
     expect((await complete().expect(201)).body.data.xpEarned).toBe(0);
     expect((await users.findById(a._id))?.totalXp).toBe(50);
-    expect(await app.get<Model<Progress>>(getModelToken(Progress.name)).countDocuments()).toBe(1);
+    expect(
+      await app
+        .get<Model<Progress>>(getModelToken(Progress.name))
+        .countDocuments(),
+    ).toBe(1);
   });
 });

@@ -16,6 +16,7 @@ test('AI and pronunciation helpers omit body/query identity and keep active rout
       compilerOptions: { module: ts.ModuleKind.CommonJS, esModuleInterop: true },
     }).outputText, { module, exports: module.exports, FormData, Blob, crypto: require('node:crypto').webcrypto,
       require: name => {
+        if (name.endsWith('/dataTimeline')) return require('./helpers/timelineFixture.cjs').isolatedTimeline;
         if (name.endsWith('/onlineIntents')) return {};
         if (name.endsWith('/intentRecovery')) return require('./helpers/isolatedIntentBoundary.cjs').isolatedIntentBoundary(client);
         if (name === './mutationRequest') return load('mutationRequest.ts');

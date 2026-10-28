@@ -1,3 +1,4 @@
+import 'package:lingua_ai/services/data_timeline.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
@@ -311,7 +312,7 @@ void main() {
         failed: DateTime.utc(2001));
     await prefs.setString(
         key, jsonEncode(envelope([action('legacy')], failed: [failed])));
-    await prefs.setInt('progress_epoch_$owner', 0);
+    await prefs.setInt(DataTimeline().cacheKey('progress_epoch_$owner'), 0);
     expect((await queue.getQueue()).single.id, 'legacy');
     expect(prefs.containsKey(key), false);
     final before = await SyncStorage.backend.read(owner);
@@ -319,7 +320,7 @@ void main() {
     expect(await SyncStorage.backend.read(owner), before);
     expect((await queue.getQueue()).single.id, 'legacy');
     expect((await queue.getFailedActions()).single.toJson(), failed.toJson());
-    expect(await queue.epochForNewProgress(owner), 0);
+    await expectLater(queue.epochForNewProgress(owner), throwsA(isA<TimelineRecoveryRequired>()));
     expect(before!['tempIds']['local_retained'], 'server-retained');
   });
   test('clearly owned legacy action lists migrate without ID/payload changes',
@@ -341,9 +342,11 @@ void main() {
           'progressEpoch': 5
         }));
     expect((await queue.getQueue()).single.payload['progressEpoch'], 0);
-    expect(await queue.epochForNewProgress(owner), 5);
+    await expectLater(queue.epochForNewProgress(owner), throwsA(isA<TimelineRecoveryRequired>()));
+    expect((await SyncStorage.backend.read(owner))!['progressEpoch'], 5);
     await restart();
-    expect(await queue.epochForNewProgress(owner), 5);
+    await expectLater(queue.epochForNewProgress(owner), throwsA(isA<TimelineRecoveryRequired>()));
+    expect((await SyncStorage.backend.read(owner))!['progressEpoch'], 5);
   });
   test(
       'malformed retry metadata is durably quarantined rather than silently dropped',
@@ -423,7 +426,7 @@ void main() {
   test(
       'completion/epoch checkpoint and reset acknowledgement survive lost preference projections',
       () async {
-    await prefs.setInt('progress_epoch_$owner', 0);
+    await prefs.setInt(DataTimeline().cacheKey('progress_epoch_$owner'), 0);
     queue = service(CheckpointProgress());
     await push('lesson');
     expect(await queue.processQueue(a), true);

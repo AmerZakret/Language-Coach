@@ -7,6 +7,9 @@ import {
   inspectIndexes,
   IndexFailure,
 } from './index-inventory';
+import { verifyTimelineSchema } from './timeline-gate';
+import type { TimelineWriteGate } from './timeline-gate';
+import { TimelineControlError } from './timeline-contract';
 
 export type Check = 'ok' | 'failed' | 'pending';
 export type ReadinessChecks = {
@@ -14,6 +17,7 @@ export type ReadinessChecks = {
   transactions: Check;
   indexes: Check;
   uploads: Check;
+  timeline: Check;
 };
 export type ProbeResult = {
   checks: ReadinessChecks;
@@ -25,6 +29,7 @@ export function pendingChecks(): ReadinessChecks {
     transactions: 'pending',
     indexes: 'pending',
     uploads: 'pending',
+    timeline: 'pending',
   };
 }
 
@@ -50,18 +55,16 @@ export async function verifyTransactions(
       readPreference: 'primary',
     });
     // Empty predicate guarantees no user data is returned; no write/commit occurs.
-    await db
-      .collection('users')
-      .findOne(
-        { _id: { $in: [] } },
-        {
-          session,
-          signal,
-          timeoutMS,
-          maxTimeMS: timeoutMS,
-          projection: { _id: 1 },
-        },
-      );
+    await db.collection('users').findOne(
+      { _id: { $in: [] } },
+      {
+        session,
+        signal,
+        timeoutMS,
+        maxTimeMS: timeoutMS,
+        projection: { _id: 1 },
+      },
+    );
     result = 'ok';
   } catch {
     result = 'TRANSACTION_CHECK_FAILED';
@@ -165,11 +168,29 @@ export async function runReadinessProbes(
   signal: AbortSignal,
   timeoutMS: number,
   expectedRealRoot?: string,
+  timelineGate?: TimelineWriteGate,
 ): Promise<ProbeResult & { realRoot?: string }> {
   const checks = pendingChecks();
   const diagnostics: ProbeResult['diagnostics'] = [];
   let realRoot: string | undefined;
   await Promise.all([
+    (async () => {
+      try {
+        if (!timelineGate)
+          throw new TimelineControlError('TIMELINE_CONTROL_UNAVAILABLE');
+        await verifyTimelineSchema(connection, timeoutMS);
+        await timelineGate.resolveControl();
+        checks.timeline = 'ok';
+      } catch (error) {
+        checks.timeline = 'failed';
+        diagnostics.push({
+          code:
+            error instanceof TimelineControlError
+              ? error.code
+              : 'TIMELINE_CONTROL_UNAVAILABLE',
+        });
+      }
+    })(),
     (async () => {
       if (connection.readyState !== 1 || !connection.db) {
         checks.database = checks.transactions = checks.indexes = 'failed';

@@ -1,3 +1,4 @@
+import 'package:lingua_ai/services/data_timeline.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart';
@@ -54,7 +55,7 @@ void main() {
   test('404 remains terminal even when an exact playable fallback and cache exist', () async {
     final lesson = DummyData.getLessons('en').first;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('lessons_cache_en', jsonEncode([lesson.toJson()]));
+    await prefs.setString(DataTimeline().cacheKey('lessons_cache_en'), jsonEncode([lesson.toJson()]));
     await http.runWithClient(() async {
       await expectLater(LessonApiService().fetchLessonById(lesson.id),
           throwsA(isA<LessonNotFoundException>().having((error) => error.id, 'id', lesson.id)));
@@ -78,7 +79,7 @@ void main() {
   test('cached summaries are skipped offline in favor of the exact playable fallback', () async {
     final lesson = DummyData.getLessons('en')[1];
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('lessons_cache_en', jsonEncode([lesson.toJson()..remove('questions')]));
+    await prefs.setString(DataTimeline().cacheKey('lessons_cache_en'), jsonEncode([lesson.toJson()..remove('questions')]));
     await http.runWithClient(() async {
       expect((await LessonApiService().fetchLessonById(lesson.id)).toJson(), lesson.toJson());
       await expectLater(LessonApiService().fetchLessonById('missing'), throwsA(isA<LessonNotFoundException>()));
@@ -88,7 +89,7 @@ void main() {
   test('an exact cached playable detail remains available during transport failure', () async {
     final cached = DummyData.getLessons('en').first.toJson()..['id'] = 'custom-lesson';
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('lessons_cache_en', jsonEncode([cached]));
+    await prefs.setString(DataTimeline().cacheKey('lessons_cache_en'), jsonEncode([cached]));
     await http.runWithClient(() async {
       expect((await LessonApiService().fetchLessonById('custom-lesson')).toJson(), cached);
     }, () => MockClient((_) async => throw const SocketException('offline')));

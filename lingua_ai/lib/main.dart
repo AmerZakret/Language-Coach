@@ -12,6 +12,9 @@ import 'services/connectivity_service.dart';
 import 'services/sync_coordinator.dart';
 import 'services/offline_queue_service.dart';
 import 'core/config/api_config.dart';
+import 'services/data_timeline.dart';
+import 'services/online_intent_service.dart';
+import 'services/direct_mutation_evidence.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -20,7 +23,6 @@ void main() async {
     throw StateError('BUILD_ID must be a public identifier of 1 to 96 safe characters.');
   }
 
-  await ConnectivityService().init();
   await ThemeService().init();
   await LanguageService().init();
   await TargetLanguageService().init();
@@ -28,6 +30,9 @@ void main() async {
   try {
     // Migrate/check the active owner before progress or sync can consume it.
     await OfflineQueueService().getQueue();
+    if (AuthService().token.isNotEmpty) await OnlineIntentService.list();
+    await DirectMutationEvidence.list();
+    await DataTimeline().load();
   } catch (_) {
     // Never turn unreadable pending work into an empty queue or start replay.
     runApp(const MaterialApp(
@@ -43,6 +48,8 @@ void main() async {
     )))));
     return;
   }
+  await ConnectivityService().init();
+  await AuthService().fetchLatestProfile();
   await ProgressService().init();
   await SoundService().init();
   await FlashcardService().init();

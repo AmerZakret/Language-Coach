@@ -5,8 +5,11 @@ import { tmpdir } from 'node:os';
 import { isIP } from 'node:net';
 import type { ConfigService } from '@nestjs/config';
 import type { CorsOptions } from '@nestjs/common/interfaces/external/cors-options.interface';
+import { isTimelineId, WriteState } from '../operations/timeline-contract';
 
 export interface RuntimeConfig extends Record<string, unknown> {
+  DATA_TIMELINE_ID: string;
+  DATA_WRITE_MODE: WriteState;
   CLIENT_PROTOCOL_POLICY: 'ALLOW_LEGACY' | 'ENFORCE_MUTATIONS';
   RELEASE_BUILD_ID: string;
   NODE_ENV: 'development' | 'test' | 'production';
@@ -102,6 +105,7 @@ export function corsOptions(config: Pick<ConfigService, 'get'>): CorsOptions {
       'X-Resource-Revision',
       'X-Request-ID',
       CLIENT_PROTOCOL_HEADER,
+      'X-Data-Timeline',
     ],
     exposedHeaders: ['Retry-After', 'X-Request-ID'],
     origin: (origin, done) => done(null, originAllowed(config, origin)),
@@ -177,6 +181,16 @@ export function validateEnvironment(
       'CLIENT_PROTOCOL_POLICY',
       'must explicitly be ALLOW_LEGACY or ENFORCE_MUTATIONS',
     );
+  // No generated/default identity, in any environment. Local setup is explicit.
+  const timeline = env.DATA_TIMELINE_ID;
+  if ((production || timeline !== undefined) && !isTimelineId(timeline))
+    invalid(
+      'DATA_TIMELINE_ID',
+      'must be an explicit canonical lowercase UUID v4 (36 public characters)',
+    );
+  const writeMode = env.DATA_WRITE_MODE ?? (production ? '' : 'CLOSED');
+  if (writeMode !== 'OPEN' && writeMode !== 'CLOSED')
+    invalid('DATA_WRITE_MODE', 'must explicitly be OPEN or CLOSED');
   const buildId =
     env.RELEASE_BUILD_ID === undefined
       ? 'development'
@@ -349,6 +363,8 @@ export function validateEnvironment(
   };
   return {
     ...env,
+    DATA_TIMELINE_ID: typeof timeline === 'string' ? timeline : '',
+    DATA_WRITE_MODE: writeMode,
     CLIENT_PROTOCOL_POLICY:
       protocolPolicy as RuntimeConfig['CLIENT_PROTOCOL_POLICY'],
     RELEASE_BUILD_ID: buildId,
@@ -421,6 +437,8 @@ export function validateEnvironment(
 export function safeConfigSummary(config: Pick<ConfigService, 'get'>) {
   return {
     environment: config.get('NODE_ENV'),
+    timelineConfigured: isTimelineId(config.get('DATA_TIMELINE_ID')),
+    dataWriteMode: config.get<WriteState>('DATA_WRITE_MODE'),
     clientProtocolPolicy: config.get<RuntimeConfig['CLIENT_PROTOCOL_POLICY']>(
       'CLIENT_PROTOCOL_POLICY',
     ),

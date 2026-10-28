@@ -1,3 +1,4 @@
+import 'package:lingua_ai/services/data_timeline.dart';
 import 'package:lingua_ai/services/online_intent_service.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -26,7 +27,7 @@ void main() {
   }
 
   Future<void> login(String id, {String? token}) async {
-    auth.setBackendSession(
+    await auth.setBackendSession(
         id: id, name: id, email: '$id@example.com', token: token ?? 'test-$id');
     await settle();
   }
@@ -38,6 +39,14 @@ void main() {
       200);
   http.Response progress() => http.Response(
       '{"stats":{"totalXp":0,"streak":0},"completedLessons":[]}', 200);
+
+  Future<void> changeTimeline() async {
+    await DataTimeline().discover(fetch: () async => http.Response(jsonEncode({
+      'dataTimelineId': '22222222-2222-4222-8222-222222222222',
+      'currentProtocolRevision': 2, 'minimumMutationRevision': 1,
+      'timelineAwareProtocolRevision': 2, 'timelineWriteState': 'OPEN',
+    }), 200));
+  }
 
   setUpAll(() async {
     SharedPreferences.setMockInitialValues({});
@@ -60,7 +69,8 @@ void main() {
     'language',
     'account',
     'token refresh',
-    'language ABA'
+    'language ABA',
+    'timeline'
   ]) {
     testWidgets('AI history ignores late results after $boundary switch',
         (tester) async {
@@ -77,6 +87,8 @@ void main() {
           if (boundary == 'language ABA') {
             await languages.setLanguage('en', syncToBackend: false);
           }
+        } else if (boundary == 'timeline') {
+          await changeTimeline();
         } else {
           await login(boundary == 'account' ? b : a,
               token: 'replacement-token');
@@ -233,7 +245,7 @@ void main() {
   });
 
   for (final operation in ['send', 'clear']) {
-    for (final boundary in ['language', 'account', 'language ABA']) {
+    for (final boundary in ['language', 'account', 'language ABA', 'timeline']) {
       testWidgets('AI $operation ignores late completion after $boundary', (tester) async {
         final pending = Completer<http.Response>();
         await http.runWithClient(() async {
@@ -247,6 +259,7 @@ void main() {
             await tester.tap(find.text(LanguageService().getString('delete')).last); await tester.pump();
           }
           if (boundary == 'account') { await login(b); }
+          else if (boundary == 'timeline') { await changeTimeline(); }
           else {
             await languages.setLanguage('de', syncToBackend: false);
             if (boundary == 'language ABA') { await languages.setLanguage('en', syncToBackend: false); }
@@ -264,5 +277,37 @@ void main() {
       });
     }
   }
+
+  testWidgets('10D clear confirmation opened on A cannot authorize a B deletion', (tester) async {
+    var clears = 0;
+    await http.runWithClient(() async {
+      await login(a);
+      await tester.pumpWidget(const MaterialApp(home: AiCoachScreen()));
+      await tester.pumpAndSettle();
+      await tester.tap(find.byIcon(Icons.delete_sweep_rounded));
+      await tester.pumpAndSettle();
+      await changeTimeline();
+      await tester.pumpAndSettle();
+      await tester.tap(find.text(LanguageService().getString('delete')).last);
+      await tester.pumpAndSettle();
+      expect(clears, 0);
+      // The fresh B action requires its own dialog confirmation and new intent.
+      await tester.tap(find.byIcon(Icons.delete_sweep_rounded));
+      await tester.pumpAndSettle();
+      expect(clears, 0);
+      await tester.tap(find.text(LanguageService().getString('delete')).last);
+      await tester.pumpAndSettle();
+      expect(clears, 1);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox.shrink());
+    }, () => MockClient((request) async {
+      if (request.url.path.endsWith('/clear')) {
+        clears++;
+        expect(request.headers['X-Data-Timeline'], '22222222-2222-4222-8222-222222222222');
+        return http.Response('{"success":true}', 200);
+      }
+      return request.url.path.endsWith('/history') ? history('current history') : progress();
+    }));
+  });
 
 }

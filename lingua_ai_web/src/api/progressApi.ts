@@ -1,3 +1,5 @@
+import { mutationRequest } from './mutationRequest';
+import { dataTimeline } from '../utils/dataTimeline';
 import { targetLanguageCode } from '../utils/targetLanguage';
 import apiClient from './apiClient';
 import type { ProgressState } from '../types/progress';
@@ -21,6 +23,7 @@ interface BackendProgressResponse {
 }
 
 export const fetchProgress = async (userId: string, targetLanguage: string): Promise<ProgressState> => {
+  const context = dataTimeline.context();
   const response = await apiClient.get<BackendProgressResponse>(`/progress/${userId}`, {
     ...getSessionRequestConfig(),
     params: { targetLanguage: targetLanguageCode(targetLanguage) }
@@ -30,6 +33,7 @@ export const fetchProgress = async (userId: string, targetLanguage: string): Pro
     throw new Error('Invalid progress response');
   }
   const progress = parseProgress({
+    dataTimelineId: context.dataTimelineId,
     progressEpoch: data.progressEpoch,
     totalXp: data.stats?.totalXp,
     streak: data.stats?.streak,
@@ -41,11 +45,10 @@ export const fetchProgress = async (userId: string, targetLanguage: string): Pro
   return progress;
 };
 
-export const saveProgressToBackend = async (userId: string, lessonId: string, score: number, progressEpoch: number): Promise<void> => {
-  await apiClient.post(`/progress/${userId}/complete-lesson`, { lessonId, score, progressEpoch }, getSessionRequestConfig());
+export const saveProgressToBackend = async (userId: string, lessonId: string, score: number, progressEpoch: number, operation = dataTimeline.capture()): Promise<void> => {
+  await apiClient.post(`/progress/${userId}/complete-lesson`, { lessonId, score, progressEpoch }, { ...getSessionRequestConfig(), ...operation });
 };
 
 export const resetProgressInBackend = async (userId: string, expectedEpoch: number, operationId: string): Promise<void> => {
-  await apiClient.delete(`/progress/${userId}`, { ...getSessionRequestConfig(),
-    data: { expectedEpoch }, headers: { 'X-Idempotency-Key': operationId } });
+  await mutationRequest(operationId, config => apiClient.delete(`/progress/${userId}`, { ...config, data: { expectedEpoch } }), `progress-reset:${userId}`);
 };
