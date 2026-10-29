@@ -1,0 +1,145 @@
+{
+  "name": "language-coach-11b-local",
+  "services": {
+    "mongo": {
+      "image": "mongo:7.0.45-jammy",
+      "platform": "linux/amd64",
+      "command": ["mongod", "--replSet", "staging-rs", "--bind_ip_all"],
+      "volumes": ["mongo-data:/data/db"],
+      "networks": ["database"],
+      "healthcheck": {
+        "test": ["CMD-SHELL", "mongosh --quiet --eval 'db.hello().isWritablePrimary' | grep -q true"],
+        "interval": "10s",
+        "timeout": "5s",
+        "retries": 15,
+        "start_period": "30s"
+      }
+    },
+    "mongo-init": {
+      "image": "mongo:7.0.45-jammy",
+      "platform": "linux/amd64",
+      "entrypoint": ["/bin/sh", "-ec"],
+      "command": "until mongosh --quiet --host mongo:27017 --eval 'db.adminCommand({ping:1}).ok' | grep -q 1; do sleep 2; done; mongosh --quiet --host mongo:27017 /init/replica-init.js",
+      "volumes": ["./replica-init.js:/init/replica-init.js:ro"],
+      "networks": ["database"],
+      "depends_on": {"mongo": {"condition": "service_started"}},
+      "restart": "no"
+    },
+    "pronunciation": {
+      "build": {"context": "../..", "dockerfile": "deployment/staging/Dockerfile.pronunciation"},
+      "platform": "linux/amd64",
+      "environment": {
+        "NODE_ENV": "production",
+        "PRONUNCIATION_HOST": "0.0.0.0",
+        "PRONUNCIATION_PORT": "8001",
+        "PRONUNCIATION_SERVICE_TOKEN": "${STAGING_PRONUNCIATION_SERVICE_TOKEN:?supply a distinct local staging token}",
+        "PRONUNCIATION_ALLOW_INSECURE_LOCAL": "false",
+        "WHISPER_MODEL": "/models/model",
+        "WHISPER_CACHE_DIR": "/models",
+        "WHISPER_ALLOW_DOWNLOAD": "false",
+        "INFERENCE_CONCURRENCY": "1"
+      },
+      "volumes": ["model-cache:/models:ro"],
+      "tmpfs": ["/tmp:size=64m,mode=1777"],
+      "read_only": true,
+      "networks": ["inference"],
+      "stop_grace_period": "30s"
+    },
+    "backend": {
+      "build": {
+        "context": "../..",
+        "dockerfile": "deployment/staging/Dockerfile.backend",
+        "target": "runtime",
+        "args": {"BUILD_ID": "${STAGING_BUILD_ID:-phase11b-local}"}
+      },
+      "platform": "linux/amd64",
+      "environment": {
+        "NODE_ENV": "production",
+        "PORT": "3000",
+        "MONGODB_URI": "mongodb://mongo:27017/lingua_staging?replicaSet=staging-rs",
+        "JWT_SECRET": "${STAGING_JWT_SECRET:?supply a distinct local staging secret}",
+        "DATA_TIMELINE_ID": "${STAGING_TIMELINE_ID:?supply a synthetic staging timeline UUID}",
+        "DATA_WRITE_MODE": "${STAGING_DATA_WRITE_MODE:-CLOSED}",
+        "CLIENT_PROTOCOL_POLICY": "ENFORCE_MUTATIONS",
+        "UPLOAD_ROOT": "/srv/uploads",
+        "CORS_ORIGINS": "https://app.staging.test:8443",
+        "TRUST_PROXY": "172.30.50.10",
+        "AI_ENABLED": "false",
+        "PRONUNCIATION_ENABLED": "${STAGING_PRONUNCIATION_ENABLED:-false}",
+        "PRONUNCIATION_SERVICE_URL": "http://pronunciation:8001",
+        "PRONUNCIATION_SERVICE_TOKEN": "${STAGING_PRONUNCIATION_SERVICE_TOKEN:?supply a distinct local staging token}",
+        "RELEASE_BUILD_ID": "${STAGING_BUILD_ID:-phase11b-local}"
+      },
+      "volumes": ["uploads:/srv/uploads"],
+      "tmpfs": ["/tmp:size=64m,mode=1777"],
+      "read_only": true,
+      "networks": ["frontend", "database", "inference"],
+      "depends_on": {"mongo-init": {"condition": "service_completed_successfully"}},
+      "deploy": {"replicas": 1},
+      "stop_grace_period": "40s"
+    },
+    "web": {
+      "build": {
+        "context": "../..",
+        "dockerfile": "deployment/staging/Dockerfile.web",
+        "args": {
+          "BUILD_ID": "${STAGING_BUILD_ID:-phase11b-local}",
+          "VITE_API_URL": "https://api.staging.test:8443"
+        }
+      },
+      "platform": "linux/amd64",
+      "networks": ["frontend"],
+      "tmpfs": ["/tmp:size=32m,mode=1777"],
+      "read_only": true,
+      "stop_grace_period": "15s"
+    },
+    "ingress": {
+      "image": "caddy:2.11.6-alpine",
+      "platform": "linux/amd64",
+      "user": "10001:10001",
+      "environment": {
+        "XDG_DATA_HOME": "/tmp/caddy/data",
+        "XDG_CONFIG_HOME": "/tmp/caddy/config"
+      },
+      "volumes": ["./Caddyfile.ingress:/etc/caddy/Caddyfile:ro"],
+      "ports": ["127.0.0.1:8443:8443"],
+      "tmpfs": ["/tmp:size=32m,mode=1777"],
+      "read_only": true,
+      "networks": {"frontend": {"ipv4_address": "172.30.50.10"}},
+      "depends_on": {"backend": {"condition": "service_started"}, "web": {"condition": "service_started"}},
+      "healthcheck": {
+        "test": ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8081/health/live"],
+        "interval": "15s",
+        "timeout": "3s",
+        "retries": 3
+      }
+    },
+    "backend-tools": {
+      "profiles": ["tools"],
+      "build": {"context": "../..", "dockerfile": "deployment/staging/Dockerfile.backend", "target": "tooling"},
+      "platform": "linux/amd64",
+      "environment": {
+        "STAGING_BOOTSTRAP": "${STAGING_BOOTSTRAP:-disabled}",
+        "NODE_ENV": "production",
+        "MONGODB_URI": "mongodb://mongo:27017/lingua_staging?replicaSet=staging-rs",
+        "DATA_TIMELINE_ID": "${STAGING_TIMELINE_ID:?supply a synthetic staging timeline UUID}",
+        "DATA_WRITE_MODE": "${STAGING_DATA_WRITE_MODE:-CLOSED}",
+        "CLIENT_PROTOCOL_POLICY": "ENFORCE_MUTATIONS",
+        "RELEASE_BUILD_ID": "${STAGING_BUILD_ID:-phase11b-local}",
+        "JWT_SECRET": "${STAGING_JWT_SECRET:?supply a distinct local staging secret}",
+        "CORS_ORIGINS": "https://app.staging.test:8443",
+        "UPLOAD_ROOT": "/srv/uploads",
+        "AI_ENABLED": "false",
+        "PRONUNCIATION_ENABLED": "false"
+      },
+      "networks": ["database"],
+      "depends_on": {"mongo-init": {"condition": "service_completed_successfully"}}
+    }
+  },
+  "networks": {
+    "frontend": {"driver": "bridge", "ipam": {"config": [{"subnet": "172.30.50.0/24"}]}},
+    "database": {"internal": true},
+    "inference": {"internal": true}
+  },
+  "volumes": {"mongo-data": {}, "uploads": {}, "model-cache": {}}
+}

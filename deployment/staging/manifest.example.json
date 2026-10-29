@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "environment": "staging",
+  "deploymentIdentity": "language-coach-11b-local-disposable",
+  "buildId": "phase11b-local",
+  "protocolRevision": 2,
+  "dataTimelineId": "44444444-4444-4444-8444-444444444444",
+  "mongo": {
+    "targetIdentity": "local-compose-single-node",
+    "host": "mongo:27017",
+    "database": "lingua_staging",
+    "replicaSet": "staging-rs"
+  },
+  "uploads": {
+    "storageIdentity": "language-coach-11b-local_uploads",
+    "root": "/srv/uploads"
+  },
+  "pronunciation": {
+    "internalUrl": "http://pronunciation:8001",
+    "modelIdentity": "UNPROVISIONED_FIXTURE",
+    "modelSha256": "PENDING_MODEL"
+  },
+  "artifacts": {
+    "backendSha256": "PENDING_BUILD",
+    "webSha256": "PENDING_BUILD",
+    "pronunciationSha256": "PENDING_BUILD"
+  },
+  "ingress": {
+    "webUrl": "https://app.staging.test:8443",
+    "apiUrl": "https://api.staging.test:8443",
+    "trustedProxyIp": "172.30.50.10"
+  },
+  "backendInstances": 1,
+  "clientFloor": {
+    "protocolRevision": 2,
+    "capability": "timeline-aware-protocol-2"
+  },
+  "externalTimelineControl": "REQUIRED_11B_C"
+}

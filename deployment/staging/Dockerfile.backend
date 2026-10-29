@@ -1,0 +1,41 @@
+# Node runtime matches the reviewed baseline; build/install stages pin npm separately.
+FROM node:22.14.0-bookworm-slim AS build
+WORKDIR /src
+RUN npm install --global npm@10.9.0
+COPY . .
+WORKDIR /src/lingua_ai_backend
+RUN npm ci && npm run build
+WORKDIR /src
+ARG BUILD_ID=phase11b-local
+RUN mkdir -p /out && node scripts/package-release.cjs backend /out/backend "$BUILD_ID"
+
+FROM node:22.14.0-bookworm-slim AS runtime-dependencies
+WORKDIR /app
+RUN npm install --global npm@10.9.0
+COPY --from=build /out/backend/package.json /out/backend/package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
+
+# Explicit operator tooling has production dependencies only and is absent from the app image.
+FROM node:22.14.0-bookworm-slim AS tooling
+ENV NODE_ENV=production
+WORKDIR /src
+COPY --from=build /src/lingua_ai_backend/dist /src/lingua_ai_backend/dist
+COPY --from=runtime-dependencies /app/node_modules /src/lingua_ai_backend/node_modules
+COPY deployment/staging/bootstrap-indexes.cjs /src/deployment/staging/bootstrap-indexes.cjs
+USER node
+CMD ["node", "deployment/staging/bootstrap-indexes.cjs"]
+
+FROM node:22.14.0-bookworm-slim AS runtime
+ENV NODE_ENV=production
+WORKDIR /app
+RUN mkdir -p /srv/uploads && chown node:node /srv/uploads \
+    && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+      /usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack /usr/local/bin/yarn /usr/local/bin/yarnpkg \
+    && ! command -v npm
+COPY --from=build --chown=node:node /out/backend/ ./
+COPY --from=runtime-dependencies --chown=node:node /app/node_modules ./node_modules
+USER node
+EXPOSE 3000
+# The orchestrator health gate is readiness; /health/live remains available to a process supervisor.
+HEALTHCHECK --interval=15s --timeout=3s --start-period=40s --retries=3 CMD node -e "fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+CMD ["node", "scripts/start-production.cjs"]

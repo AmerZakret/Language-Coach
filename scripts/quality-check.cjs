@@ -63,7 +63,7 @@ const jobs = {
       CORS_ORIGINS: 'https://app.example.invalid', UPLOAD_ROOT: resolve(root, '.quality-upload-contract') };
     run(npm, ['run', 'validate:prod'], cwd, env); run(npm, ['run', 'preflight:deploy'], cwd, env);
   },
-  hygiene() { run(process.execPath, ['--test', 'scripts/quality-tools.test.cjs', 'scripts/release-artifacts.test.cjs']); run(process.execPath, ['scripts/check-hygiene.cjs']); },
+  hygiene() { run(process.execPath, ['--test', 'scripts/quality-tools.test.cjs', 'scripts/release-artifacts.test.cjs', 'scripts/validate-staging-deployment.test.cjs']); run(process.execPath, ['scripts/validate-staging-deployment.cjs']); run(process.execPath, ['scripts/check-hygiene.cjs']); },
 };
 function main() {
   const selected = process.argv[2] || 'all';
