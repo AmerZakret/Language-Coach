@@ -3,6 +3,8 @@
 .agents
 .codex
 .aws
+.phase9a-validation
+.release-validation
 **/node_modules
 **/dist
 **/build

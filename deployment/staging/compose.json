@@ -19,7 +19,7 @@
       "image": "mongo:7.0.45-jammy",
       "platform": "linux/amd64",
       "entrypoint": ["/bin/sh", "-ec"],
-      "command": "until mongosh --quiet --host mongo:27017 --eval 'db.adminCommand({ping:1}).ok' | grep -q 1; do sleep 2; done; mongosh --quiet --host mongo:27017 /init/replica-init.js",
+      "command": ["until mongosh --quiet --host mongo:27017 --eval 'db.adminCommand({ping:1}).ok' | grep -q 1; do sleep 2; done; mongosh --quiet --host mongo:27017 /init/replica-init.js"],
       "volumes": ["./replica-init.js:/init/replica-init.js:ro"],
       "networks": ["database"],
       "depends_on": {"mongo": {"condition": "service_started"}},
