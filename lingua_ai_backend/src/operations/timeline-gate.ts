@@ -2,6 +2,7 @@ import type { ConfigService } from '@nestjs/config';
 import type { ClientSession, Connection } from 'mongoose';
 import { ConnectionStates } from 'mongoose';
 import { isDeepStrictEqual } from 'node:util';
+import type { DurableTimelineAuthority } from './durable-authority';
 import {
   CONTROL_COLLECTION,
   CONTROL_ID,
@@ -73,7 +74,29 @@ export class TimelineWriteGate {
     private readonly config: Pick<ConfigService, 'get'>,
     private readonly draining: () => boolean,
     private readonly infrastructureReady: () => boolean,
+    private readonly authority?: DurableTimelineAuthority,
   ) {}
+  durableRequired() {
+    return this.config.get('TIMELINE_AUTHORITY_MODE') === 'DURABLE_REQUIRED';
+  }
+  async fileEffect<T>(
+    expected: string,
+    kind: 'upload-store' | 'upload-remove' | 'readiness-probe',
+    work: (check: () => Promise<void>) => Promise<T>,
+  ): Promise<T> {
+    if (!this.durableRequired()) return work(() => Promise.resolve());
+    this.expectation(expected);
+    if (!this.authority)
+      throw new TimelineControlError('TIMELINE_CONTROL_UNAVAILABLE');
+    return this.authority.fileEffect(expected, kind, work);
+  }
+  private async independent(expected: string) {
+    if (this.config.get('TIMELINE_AUTHORITY_MODE') !== 'DURABLE_REQUIRED')
+      return;
+    if (!this.authority)
+      throw new TimelineControlError('TIMELINE_CONTROL_UNAVAILABLE');
+    await this.authority.assertOpen(expected);
+  }
   private expectation(expectedTimeline?: string): string {
     const configured = this.config.get<unknown>('DATA_TIMELINE_ID');
     if (!isTimelineId(configured))
@@ -108,6 +131,7 @@ export class TimelineWriteGate {
   }> {
     try {
       const row = await readTimelineControl(this.connection, this.timeout());
+      await this.independent(row.dataTimelineId);
       if (row.dataTimelineId !== this.config.get('DATA_TIMELINE_ID'))
         return { dataTimelineId: null, timelineWriteState: 'UNAVAILABLE' };
       return {
@@ -131,6 +155,7 @@ export class TimelineWriteGate {
   async resolveControl(): Promise<TimelineControl> {
     this.expectation();
     const row = await readTimelineControl(this.connection, this.timeout());
+    await this.independent(row.dataTimelineId);
     return this.check(row, this.expectation());
   }
   async assertWritesPermitted(): Promise<TimelineControl> {
@@ -148,6 +173,7 @@ export class TimelineWriteGate {
   ): Promise<void> {
     try {
       const expected = this.expectation(expectedTimeline);
+      await this.independent(expected);
       if (
         !session.inTransaction() ||
         session.hasEnded ||

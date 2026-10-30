@@ -1,5 +1,10 @@
 # Phase 8A production configuration contract
 
+Phase 11B-C1 adds an independent PostgreSQL authority in explicit DURABLE_REQUIRED
+mode. See [its configuration and limits](INDEPENDENT_TIMELINE_AUTHORITY.md).
+The disposable staging profile requires it; LEGACY_LOCAL injected configuration
+remains compatible but cannot satisfy that profile or prove independent control.
+
 The offline 8A preflight validates configuration shape, not production readiness. It never
 connects to MongoDB/providers, creates indexes, or verifies credential rotation.
 Runtime topology/index/storage readiness is now enforced by Phase 8B below.

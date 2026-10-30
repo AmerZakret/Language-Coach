@@ -30,6 +30,7 @@ function safeEndpoint(value) {
 function secretCategory(text) {
   const rules = [
     ['credentialed Mongo URI', /mongodb(?:\+srv)?:\/\/[^\s:/"']+:[^\s@"']+@/i],
+    ['credentialed PostgreSQL URI', /postgres(?:ql)?:\/\/[^\s:/"']+:[^\s@"']+@/i],
     ['private key', /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/],
     ['provider key', /AIza[\w-]{30,}/], ['GitHub token', /gh[pousr]_[A-Za-z0-9]{30,}/],
     ['cloud access key', /AKIA[A-Z0-9]{16}/],

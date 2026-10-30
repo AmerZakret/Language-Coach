@@ -79,41 +79,43 @@ export class CommunityService {
     image?: Express.Multer.File,
     operationId?: string,
   ) {
-    if (!text && !image)
-      throw new BadRequestException(
-        'Post must contain either text or an image',
-      );
-    const language = targetLanguageCode(learningLanguage);
-    let imageUrl: string | undefined;
-    try {
-      return await this.receipts.execute(
-        userId,
-        operationId,
-        'community-create',
-        { language, text, ...this.fingerprint(image) },
-        async (session) => {
-          // The unique transaction claim precedes file allocation. Reuse the file
-          // on a transaction callback retry; a completed replay never stores one.
-          return new this.communityPostModel({
-            userId,
-            userName,
-            learningLanguage: language,
-            text,
-            imageUrl,
-            likes: [],
-            likesCount: 0,
-            revision: 0,
-          }).save({ session });
-        },
-        image
-          ? async () => {
-              imageUrl = await this.images.store(image);
-            }
-          : undefined,
-      );
-    } finally {
-      await this.cleanupUnreferenced(imageUrl, 'create reconciliation');
-    }
+    return this.receipts.scoped(async () => {
+      if (!text && !image)
+        throw new BadRequestException(
+          'Post must contain either text or an image',
+        );
+      const language = targetLanguageCode(learningLanguage);
+      let imageUrl: string | undefined;
+      try {
+        return await this.receipts.execute(
+          userId,
+          operationId,
+          'community-create',
+          { language, text, ...this.fingerprint(image) },
+          async (session) => {
+            // The unique transaction claim precedes file allocation. Reuse the file
+            // on a transaction callback retry; a completed replay never stores one.
+            return new this.communityPostModel({
+              userId,
+              userName,
+              learningLanguage: language,
+              text,
+              imageUrl,
+              likes: [],
+              likesCount: 0,
+              revision: 0,
+            }).save({ session });
+          },
+          image
+            ? async () => {
+                imageUrl = await this.images.store(image);
+              }
+            : undefined,
+        );
+      } finally {
+        await this.cleanupUnreferenced(imageUrl, 'create reconciliation');
+      }
+    });
   }
 
   async findAll(
@@ -213,60 +215,62 @@ export class CommunityService {
     operationId?: string,
     expectedRevision?: number,
   ) {
-    if (!Number.isSafeInteger(expectedRevision) || expectedRevision! < 0)
-      throw new BadRequestException({
-        code: 'INVALID_RESOURCE_REVISION',
-        message: 'Expected revision is required',
-      });
-    let newImageUrl: string | undefined, oldImageUrl: string | undefined;
-    let committed = false;
-    try {
-      const result = await this.receipts.execute(
-        userId,
-        operationId,
-        'community-update',
-        {
-          id,
-          text,
-          removeImage: !!removeImage,
-          expectedRevision,
-          ...this.fingerprint(image),
-        },
-        async (session) => {
-          const post = await this.owned(id, userId, session);
-          if ((post.revision ?? 0) !== expectedRevision)
-            throw new ConflictException({
-              code: 'STALE_RESOURCE_REVISION',
-              message: 'Post changed. Refresh before editing.',
-            });
-          oldImageUrl = post.imageUrl;
-          const nextText = text === undefined ? post.text : text;
-          if (!nextText && !image && (removeImage || !oldImageUrl))
-            throw new BadRequestException('Post cannot be empty');
-          if (text !== undefined) post.text = text;
-          if (newImageUrl || removeImage) post.imageUrl = newImageUrl;
-          post.revision = expectedRevision! + 1;
-          return post.save({ session });
-        },
-        image
-          ? async () => {
-              const post = await this.owned(id, userId);
-              if ((post.revision ?? 0) !== expectedRevision)
-                throw new ConflictException({
-                  code: 'STALE_RESOURCE_REVISION',
-                  message: 'Post changed. Refresh before editing.',
-                });
-              newImageUrl = await this.images.store(image);
-            }
-          : undefined,
-      );
-      committed = true;
-      return result;
-    } finally {
-      await this.cleanupUnreferenced(newImageUrl, 'update reconciliation');
-      if (committed && (newImageUrl || removeImage))
-        await this.cleanupUnreferenced(oldImageUrl, 'replaced image');
-    }
+    return this.receipts.scoped(async () => {
+      if (!Number.isSafeInteger(expectedRevision) || expectedRevision! < 0)
+        throw new BadRequestException({
+          code: 'INVALID_RESOURCE_REVISION',
+          message: 'Expected revision is required',
+        });
+      let newImageUrl: string | undefined, oldImageUrl: string | undefined;
+      let committed = false;
+      try {
+        const result = await this.receipts.execute(
+          userId,
+          operationId,
+          'community-update',
+          {
+            id,
+            text,
+            removeImage: !!removeImage,
+            expectedRevision,
+            ...this.fingerprint(image),
+          },
+          async (session) => {
+            const post = await this.owned(id, userId, session);
+            if ((post.revision ?? 0) !== expectedRevision)
+              throw new ConflictException({
+                code: 'STALE_RESOURCE_REVISION',
+                message: 'Post changed. Refresh before editing.',
+              });
+            oldImageUrl = post.imageUrl;
+            const nextText = text === undefined ? post.text : text;
+            if (!nextText && !image && (removeImage || !oldImageUrl))
+              throw new BadRequestException('Post cannot be empty');
+            if (text !== undefined) post.text = text;
+            if (newImageUrl || removeImage) post.imageUrl = newImageUrl;
+            post.revision = expectedRevision! + 1;
+            return post.save({ session });
+          },
+          image
+            ? async () => {
+                const post = await this.owned(id, userId);
+                if ((post.revision ?? 0) !== expectedRevision)
+                  throw new ConflictException({
+                    code: 'STALE_RESOURCE_REVISION',
+                    message: 'Post changed. Refresh before editing.',
+                  });
+                newImageUrl = await this.images.store(image);
+              }
+            : undefined,
+        );
+        committed = true;
+        return result;
+      } finally {
+        await this.cleanupUnreferenced(newImageUrl, 'update reconciliation');
+        if (committed && (newImageUrl || removeImage))
+          await this.cleanupUnreferenced(oldImageUrl, 'replaced image');
+      }
+    });
   }
 
   async delete(
@@ -275,33 +279,35 @@ export class CommunityService {
     operationId?: string,
     expectedRevision?: number,
   ) {
-    if (!Number.isSafeInteger(expectedRevision) || expectedRevision! < 0)
-      throw new BadRequestException({
-        code: 'INVALID_RESOURCE_REVISION',
-        message: 'Expected revision is required',
-      });
-    let imageUrl: string | undefined;
-    const result = await this.receipts.execute(
-      userId,
-      operationId,
-      'community-delete',
-      { id, expectedRevision },
-      async (session) => {
-        const post = await this.owned(id, userId, session);
-        if ((post.revision ?? 0) !== expectedRevision)
-          throw new ConflictException({
-            code: 'STALE_RESOURCE_REVISION',
-            message: 'Post changed. Refresh before deleting.',
-          });
-        imageUrl = post.imageUrl;
-        await this.communityPostModel
-          .deleteOne({ _id: id, userId }, { session })
-          .exec();
-        return { success: true };
-      },
-    );
-    await this.cleanupUnreferenced(imageUrl, 'deleted post');
-    return result;
+    return this.receipts.scoped(async () => {
+      if (!Number.isSafeInteger(expectedRevision) || expectedRevision! < 0)
+        throw new BadRequestException({
+          code: 'INVALID_RESOURCE_REVISION',
+          message: 'Expected revision is required',
+        });
+      let imageUrl: string | undefined;
+      const result = await this.receipts.execute(
+        userId,
+        operationId,
+        'community-delete',
+        { id, expectedRevision },
+        async (session) => {
+          const post = await this.owned(id, userId, session);
+          if ((post.revision ?? 0) !== expectedRevision)
+            throw new ConflictException({
+              code: 'STALE_RESOURCE_REVISION',
+              message: 'Post changed. Refresh before deleting.',
+            });
+          imageUrl = post.imageUrl;
+          await this.communityPostModel
+            .deleteOne({ _id: id, userId }, { session })
+            .exec();
+          return { success: true };
+        },
+      );
+      await this.cleanupUnreferenced(imageUrl, 'deleted post');
+      return result;
+    });
   }
 
   async setLike(

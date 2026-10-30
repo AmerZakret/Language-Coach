@@ -1,5 +1,11 @@
 # Production deployment and recovery runbooks
 
+For Phase 11B-C1 required-mode deployments, the
+[independent-authority procedure](INDEPENDENT_TIMELINE_AUTHORITY.md) extends the
+Phase 10 Mongo fence with separate PostgreSQL control, ledger and crash recovery.
+Older injected-control instructions below are legacy history, not a replacement
+for the required close/barrier/maintenance ordering. No real restore is executed.
+
 Phase 8F operator procedures; no production deployment, rotation, backup, migration
 or restore has been performed by these documents or the local preflight. Assign a
 release owner, database/storage owner, security owner and incident commander before

@@ -58,6 +58,9 @@ export async function initializeTestTimeline(
 }
 
 export const unitTimeline = {
+  durableRequired: () => false,
+  fileEffect: <T>(_kind: string, work: (check: () => Promise<void>) => T): T =>
+    work(() => Promise.resolve()),
   assertTransaction: () => undefined,
   transaction: async <T>(
     _domain: string,

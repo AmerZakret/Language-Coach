@@ -6,6 +6,16 @@ import {
   tryTargetLanguage,
 } from '../common/target-language';
 
+// This legacy utility does not participate in the Phase 10 singleton fence.
+// Required-mode repairs need a separately reviewed fenced implementation.
+export function assertLegacyProgressMutationAllowed(env = process.env) {
+  if (
+    env.TIMELINE_AUTHORITY_MODE === 'DURABLE_REQUIRED' ||
+    env.DEPLOYMENT_PROFILE === 'DURABLE_REQUIRED'
+  )
+    throw new Error('DURABLE_AUTHORITY_REPAIR_DISABLED');
+}
+
 export type Classification =
   | 'DETERMINISTIC_REPAIR'
   | 'AMBIGUOUS_REVIEW'
@@ -525,6 +535,7 @@ export class ProgressAuditTool {
     report: UserAudit,
     options: { apply: boolean },
   ): Promise<mongo.Document | null> {
+    assertLegacyProgressMutationAllowed();
     if (options.apply !== true)
       throw new Error('Mutation requires explicit --apply');
     const id = objectId(report.userId);
@@ -592,6 +603,7 @@ export class ProgressAuditTool {
     receiptId: string,
     options: { apply: boolean },
   ): Promise<mongo.Document> {
+    assertLegacyProgressMutationAllowed();
     if (options.apply !== true)
       throw new Error('Rollback requires explicit --apply');
     const session = this.client.startSession();
@@ -683,6 +695,7 @@ export class ProgressAuditTool {
     apply = false,
     count: (users: number) => void = () => {},
   ): Promise<{ users: number; failedUsers: number; dangerousRows: number }> {
+    if (apply) assertLegacyProgressMutationAllowed();
     if (
       !Number.isInteger(options.batchSize) ||
       options.batchSize < 1 ||

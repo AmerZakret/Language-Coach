@@ -12,6 +12,7 @@ import {
 } from '../compatibility/protocol-validation';
 import type { ProtocolPolicy } from '../compatibility/protocol-contract';
 import { telemetry } from './telemetry';
+import { DurableTimelineAuthority } from './durable-authority';
 
 export interface MutationAdmission {
   readonly dataTimelineId: string;
@@ -113,6 +114,25 @@ export class MutationTimeline {
       throw new ServerTimelineError('SERVER_TIMELINE_CHANGED');
     return scope;
   }
+  durableRequired() {
+    return this.gate.durableRequired();
+  }
+  async fileEffect<T>(
+    kind: 'upload-store' | 'upload-remove',
+    work: (check: () => Promise<void>) => Promise<T>,
+    admitted?: MutationAdmission,
+  ): Promise<T> {
+    const scope = await this.fresh(admitted);
+    try {
+      return await this.gate.fileEffect(scope.dataTimelineId, kind, (check) =>
+        this.run(scope, () => work(check)),
+      );
+    } catch (error) {
+      if (error instanceof TimelineControlError)
+        throw new ServerTimelineError('BACKEND_NOT_READY');
+      throw error;
+    }
+  }
   assertReceipt(
     receipt: { dataTimelineId?: string },
     scope: MutationAdmission,
@@ -203,6 +223,7 @@ export class MutationTimeline {
 @Module({
   imports: [ConfigModule],
   providers: [
+    DurableTimelineAuthority,
     TimelineRuntimeState,
     {
       provide: TimelineWriteGate,
@@ -210,14 +231,21 @@ export class MutationTimeline {
         connection: Connection,
         config: ConfigService,
         state: TimelineRuntimeState,
+        authority: DurableTimelineAuthority,
       ) =>
         new TimelineWriteGate(
           connection,
           config,
           () => state.draining(),
           () => state.infrastructureReady(),
+          authority,
         ),
-      inject: [getConnectionToken(), ConfigService, TimelineRuntimeState],
+      inject: [
+        getConnectionToken(),
+        ConfigService,
+        TimelineRuntimeState,
+        DurableTimelineAuthority,
+      ],
     },
     MutationTimeline,
   ],

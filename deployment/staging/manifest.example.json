@@ -35,5 +35,16 @@
     "protocolRevision": 2,
     "capability": "timeline-aware-protocol-2"
   },
-  "externalTimelineControl": "REQUIRED_11B_C"
+  "externalTimelineControl": "DURABLE_POSTGRESQL_C1",
+  "authority": {
+    "type": "postgresql",
+    "mode": "DURABLE_REQUIRED",
+    "fileEffectFencing": "DURABLE_EFFECTS_V1",
+    "environmentIdentity": "language-coach-11b-local",
+    "storageIdentity": "language-coach-11b-local_authority-data",
+    "backupIdentity": "language-coach-11b-local-authority-independent",
+    "generation": 1,
+    "revision": 1,
+    "writeMode": "CLOSED"
+  }
 }

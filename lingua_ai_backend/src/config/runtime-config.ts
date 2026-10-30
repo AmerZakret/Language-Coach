@@ -6,6 +6,7 @@ import { isIP } from 'node:net';
 import type { ConfigService } from '@nestjs/config';
 import type { CorsOptions } from '@nestjs/common/interfaces/external/cors-options.interface';
 import { isTimelineId, WriteState } from '../operations/timeline-contract';
+import { authorityIdentity } from '../operations/durable-authority';
 
 export interface RuntimeConfig extends Record<string, unknown> {
   DATA_TIMELINE_ID: string;
@@ -189,6 +190,67 @@ export function validateEnvironment(
       'must be an explicit canonical lowercase UUID v4 (36 public characters)',
     );
   const writeMode = env.DATA_WRITE_MODE ?? (production ? '' : 'CLOSED');
+  const authorityMode =
+    env.TIMELINE_AUTHORITY_MODE === undefined
+      ? 'LEGACY_LOCAL'
+      : text(env, 'TIMELINE_AUTHORITY_MODE');
+  const authorityProfile =
+    env.DEPLOYMENT_PROFILE === undefined
+      ? 'LEGACY_LOCAL'
+      : text(env, 'DEPLOYMENT_PROFILE');
+  if (
+    !['LEGACY_LOCAL', 'DURABLE_REQUIRED'].includes(String(authorityMode)) ||
+    !['LEGACY_LOCAL', 'DURABLE_REQUIRED'].includes(String(authorityProfile)) ||
+    (authorityProfile === 'DURABLE_REQUIRED' &&
+      authorityMode !== 'DURABLE_REQUIRED')
+  )
+    invalid(
+      'TIMELINE_AUTHORITY_MODE',
+      'must satisfy the explicit deployment profile',
+    );
+  if (authorityMode === 'DURABLE_REQUIRED') {
+    if (
+      !authorityIdentity(env.TIMELINE_AUTHORITY_ENVIRONMENT) ||
+      !authorityIdentity(env.TIMELINE_AUTHORITY_STORAGE_ID, 96)
+    )
+      invalid(
+        'TIMELINE_AUTHORITY_ENVIRONMENT',
+        'requires explicit public environment/storage identities',
+      );
+    const rawGeneration = env.TIMELINE_AUTHORITY_GENERATION;
+    const generation =
+      typeof rawGeneration === 'number' || typeof rawGeneration === 'string'
+        ? String(rawGeneration)
+        : '';
+    if (
+      !/^[1-9][0-9]{0,15}$/.test(generation) ||
+      !Number.isSafeInteger(Number(generation))
+    )
+      invalid(
+        'TIMELINE_AUTHORITY_GENERATION',
+        'requires an explicit positive safe integer',
+      );
+    try {
+      const url = new URL(text(env, 'TIMELINE_AUTHORITY_URL'));
+      if (
+        url.protocol !== 'postgresql:' ||
+        !url.username ||
+        !url.password ||
+        !url.hostname ||
+        !url.pathname.slice(1) ||
+        url.hash ||
+        [...url.searchParams.keys()].some((k) => k !== 'sslmode') ||
+        (url.hostname !== 'authority' &&
+          url.searchParams.get('sslmode') !== 'verify-full')
+      )
+        throw new Error();
+    } catch {
+      invalid(
+        'TIMELINE_AUTHORITY_URL',
+        'requires explicit PostgreSQL credentials and verified TLS outside disposable authority DNS',
+      );
+    }
+  }
   if (writeMode !== 'OPEN' && writeMode !== 'CLOSED')
     invalid('DATA_WRITE_MODE', 'must explicitly be OPEN or CLOSED');
   const buildId =
@@ -363,6 +425,8 @@ export function validateEnvironment(
   };
   return {
     ...env,
+    TIMELINE_AUTHORITY_MODE: authorityMode,
+    DEPLOYMENT_PROFILE: authorityProfile,
     DATA_TIMELINE_ID: typeof timeline === 'string' ? timeline : '',
     DATA_WRITE_MODE: writeMode,
     CLIENT_PROTOCOL_POLICY:
@@ -437,6 +501,8 @@ export function validateEnvironment(
 export function safeConfigSummary(config: Pick<ConfigService, 'get'>) {
   return {
     environment: config.get('NODE_ENV'),
+    timelineAuthorityMode:
+      config.get<string>('TIMELINE_AUTHORITY_MODE') ?? 'LEGACY_LOCAL',
     timelineConfigured: isTimelineId(config.get('DATA_TIMELINE_ID')),
     dataWriteMode: config.get<WriteState>('DATA_WRITE_MODE'),
     clientProtocolPolicy: config.get<RuntimeConfig['CLIENT_PROTOCOL_POLICY']>(

@@ -7,6 +7,15 @@ const { CRITICAL_INDEXES, inspectIndexes } = require(path.join(backend, 'dist/sr
 function validateTarget(env) {
   if (env.STAGING_BOOTSTRAP !== 'I_ACKNOWLEDGE_DISPOSABLE_STAGING') throw new Error('Explicit disposable bootstrap acknowledgement required.');
   if (!isTimelineId(env.DATA_TIMELINE_ID)) throw new Error('Explicit synthetic timeline UUID required.');
+  if (env.TIMELINE_AUTHORITY_MODE !== 'DURABLE_REQUIRED' ||
+      env.STAGING_AUTHORITY_BOOTSTRAP !== 'I_ACKNOWLEDGE_NEW_EMPTY_ENVIRONMENT' ||
+      env.AUTHORITY_OPERATOR_INTENT !== 'I_ACKNOWLEDGE_DISPOSABLE_AUTHORITY')
+    throw new Error('Bootstrap requires explicit new empty authority environment and operator intent.');
+  let authority;
+  try { authority = new URL(env.AUTHORITY_OPERATOR_URL); } catch { throw new Error('Disposable operator target required.'); }
+  if (authority.protocol !== 'postgresql:' || authority.hostname !== 'authority' || authority.port !== '5432' ||
+      authority.pathname !== '/timeline_authority' || authority.username !== 'timeline_operator' ||
+      !authority.password || authority.search || authority.hash) throw new Error('Disposable operator target required.');
   let uri;
   try { uri = new URL(env.MONGODB_URI); } catch { throw new Error('Invalid disposable Mongo target.'); }
   if (uri.protocol !== 'mongodb:' || uri.hostname !== 'mongo' || uri.port !== '27017'
@@ -21,13 +30,25 @@ function validateTarget(env) {
 async function bootstrap(env = process.env) {
   const uri = validateTarget(env); // Complete target validation before any connection.
   const { createConnection } = require(path.join(backend, 'node_modules/mongoose'));
+  const { AuthorityOperator } = require(path.join(backend, 'dist/src/tooling/durable-control.js'));
+  const operator = new AuthorityOperator(env.AUTHORITY_OPERATOR_URL);
   const connection = createConnection(uri, { autoIndex: false, autoCreate: false, serverSelectionTimeoutMS: 5000 });
   try {
+    await operator.connect();
+    return await operator.exclusive(async () => {
+    const state = await operator.client.query('SELECT * FROM timeline_authority.current_state');
+    if (state.rows.length !== 0) throw new Error('Bootstrap is disabled for every initialized authority.');
+    const history = await operator.client.query('SELECT (SELECT count(*) FROM timeline_authority.issued)+(SELECT count(*) FROM timeline_authority.audit)+(SELECT count(*) FROM timeline_authority.file_effects) AS count');
+    if (String(history.rows[0].count) !== '0') throw new Error('Missing authority cannot be bootstrapped over retained history.');
     await connection.asPromise();
     const db = connection.db;
     if (connection.name !== 'lingua_staging') throw new Error('Unexpected database identity.');
     const hello = await db.admin().command({ hello: 1 });
     if (hello.setName !== 'staging-rs' || hello.isWritablePrimary !== true) throw new Error('Disposable replica-set primary required.');
+    for (const { name } of await db.listCollections({}, { nameOnly: true }).toArray()) {
+      if (!name.startsWith('system.') && await db.collection(name).findOne({}))
+        throw new Error('Bootstrap requires an empty new Mongo environment.');
+    }
     for (const expected of CRITICAL_INDEXES) {
       if (expected.collection === 'timelinecontrol') continue; // Existing operator CLI provisions strict control schema.
       const collection = db.collection(expected.collection);
@@ -45,8 +66,9 @@ async function bootstrap(env = process.env) {
       if (!(await db.listCollections({ name }).hasNext())) await db.createCollection(name);
     }
     console.log('Disposable correctness indexes verified. Timeline control remains CLOSED/absent until explicit operator CLI initialization.');
+    });
   } finally {
-    await connection.close();
+    await Promise.all([connection.close(), operator.close()]);
   }
 }
 

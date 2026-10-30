@@ -60,6 +60,8 @@ test('9E credential scanning reports categories without printing candidate value
   // Construct synthetic scanner samples at runtime; keep the existing HEAD
   // literal-secret gate intact, including its coverage of test fixtures.
   const syntheticMongo = ['mongodb://', 'fixture', ':fixture', '@db.example.invalid/db'].join('');
+  const syntheticPostgres = ['postgresql://', 'fixture', ':fixture', '@authority:5432/test'].join('');
+  assert.equal(secretCategory(syntheticPostgres), 'credentialed PostgreSQL URI');
   const syntheticPrivateKey = ['-----BEGIN ', 'PRIVATE KEY', '-----'].join('');
   for (const value of ['../build', 'x'.repeat(97), '', 'private\nvalue']) assert.throws(() => buildId(value));
   assert.equal(buildId(), 'development'); assert.equal(buildId('ci-123.2'), 'ci-123.2');

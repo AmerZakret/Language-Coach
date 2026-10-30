@@ -147,6 +147,36 @@ describe('Legacy progress audit and deterministic repair (disposable replica onl
     );
     expect(records.at(-1)).toMatchObject({ mode: 'dry-run', users: 1 });
   });
+  it.each(['TIMELINE_AUTHORITY_MODE', 'DEPLOYMENT_PROFILE'])(
+    'durable authority disables legacy repair and rollback through %s',
+    async (key) => {
+      const replacement = jest.replaceProperty(process, 'env', {
+        ...process.env,
+        [key]: 'DURABLE_REQUIRED',
+      });
+      try {
+        const before = await tool.users.findOne({ _id: a });
+        const report = await audit();
+        await expect(tool.apply(report, { apply: true })).rejects.toThrow(
+          'DURABLE_AUTHORITY_REPAIR_DISABLED',
+        );
+        await expect(
+          tool.rollback(new mongo.ObjectId().toHexString(), { apply: true }),
+        ).rejects.toThrow('DURABLE_AUTHORITY_REPAIR_DISABLED');
+        await expect(
+          tool.run({ limit: 100, batchSize: 100 }, async () => {}, true),
+        ).rejects.toThrow('DURABLE_AUTHORITY_REPAIR_DISABLED');
+        await expect(
+          main(['--apply', '--output', 'disabled-durable-repair.jsonl']),
+        ).rejects.toThrow('DURABLE_AUTHORITY_REPAIR_DISABLED');
+        expect(await tool.users.findOne({ _id: a })).toEqual(before);
+        expect(await tool.receipts.countDocuments()).toBe(0);
+      } finally {
+        replacement.restore();
+      }
+    },
+  );
+
   it('both repair primitives refuse mutation without explicit apply', async () => {
     await expect(tool.apply(await audit(), { apply: false })).rejects.toThrow(
       'explicit --apply',

@@ -26,7 +26,9 @@ import { SecurityModule } from './security/security.module';
       imports: [ConfigModule],
       useFactory: (configService: ConfigService) => ({
         uri: configService.get<string>('MONGODB_URI'),
-        ...(configService.get('NODE_ENV') === 'production'
+        ...(configService.get('NODE_ENV') === 'production' ||
+        configService.get('TIMELINE_AUTHORITY_MODE') === 'DURABLE_REQUIRED' ||
+        configService.get('DEPLOYMENT_PROFILE') === 'DURABLE_REQUIRED'
           ? {
               autoIndex: false,
               autoCreate: false,

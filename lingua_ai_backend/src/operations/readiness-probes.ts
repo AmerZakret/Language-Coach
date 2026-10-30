@@ -120,9 +120,14 @@ export async function verifyUploadRoot(
   createRoot: boolean,
   signal: AbortSignal,
   expectedRealRoot?: string,
+  readOnly = false,
+  fence: () => Promise<void> = () => Promise.resolve(),
 ): Promise<string> {
   signal.throwIfAborted();
-  if (createRoot) await fs.mkdir(root, { recursive: true });
+  if (createRoot) {
+    await fence();
+    await fs.mkdir(root, { recursive: true });
+  }
   const canonical = await fs.realpath(root);
   if (expectedRealRoot && expectedRealRoot !== canonical)
     throw new Error('UPLOAD_ROOT_CHANGED');
@@ -140,10 +145,17 @@ export async function verifyUploadRoot(
     if (error?.code !== 'ENOENT') throw error;
   }
   signal.throwIfAborted();
+  if (readOnly) {
+    await fs.access(canonical, fs.constants.R_OK | fs.constants.W_OK);
+    signal.throwIfAborted();
+    return canonical; // Permission/containment evidence only, never a write-probe claim.
+  }
   const probe = join(canonical, `.readiness-${randomUUID()}.probe`);
   let handle: Awaited<ReturnType<typeof fs.open>> | undefined;
   try {
+    await fence();
     handle = await fs.open(probe, 'wx', 0o600);
+    await fence();
     await handle.writeFile('readiness', { signal });
     await handle.sync();
   } finally {
@@ -211,12 +223,23 @@ export async function runReadinessProbes(
     })(),
     (async () => {
       try {
-        realRoot = await verifyUploadRoot(
-          root,
-          createRoot,
-          signal,
-          expectedRealRoot,
-        );
+        const probe = (fence: () => Promise<void> = () => Promise.resolve()) =>
+          verifyUploadRoot(
+            root,
+            createRoot,
+            signal,
+            expectedRealRoot,
+            false,
+            fence,
+          );
+        if (timelineGate?.durableRequired()) {
+          const control = await timelineGate.resolveControl();
+          realRoot = await timelineGate.fileEffect(
+            control.dataTimelineId,
+            'readiness-probe',
+            probe,
+          );
+        } else realRoot = await probe();
         checks.uploads = 'ok';
       } catch {
         checks.uploads = 'failed';

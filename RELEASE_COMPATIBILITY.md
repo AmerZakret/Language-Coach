@@ -1,5 +1,10 @@
 # Release identity and client compatibility
 
+Phase 11B-C1 adds [independent server authority](INDEPENDENT_TIMELINE_AUTHORITY.md)
+without changing HTTP v2, X-Data-Timeline, receipt provenance or client queue semantics.
+Required-mode failures advertise unavailable/closed discovery and preserve safe
+503/409/428 responses. LEGACY_LOCAL is not independent restore control.
+
 ## Identity and protocol ownership
 
 Protocol revision **2** is current for the backend and web. Flutter remains revision **1** until Phase 10D. The backend definition in

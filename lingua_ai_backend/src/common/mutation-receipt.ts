@@ -46,8 +46,12 @@ export class MutationReceipt extends Document {
   @Prop({ required: true }) requestHash: string;
   @Prop({ type: MongoSchema.Types.Mixed }) result: any;
 }
-export const MutationReceiptSchema = SchemaFactory.createForClass(MutationReceipt);
-MutationReceiptSchema.index({ userId: 1, operationType: 1, operationId: 1 }, { unique: true });
+export const MutationReceiptSchema =
+  SchemaFactory.createForClass(MutationReceipt);
+MutationReceiptSchema.index(
+  { userId: 1, operationType: 1, operationId: 1 },
+  { unique: true },
+);
 
 @Injectable()
 export class MutationReceipts implements OnModuleInit {
@@ -56,7 +60,13 @@ export class MutationReceipts implements OnModuleInit {
     private readonly receipts: Model<MutationReceipt>,
     private readonly timeline: MutationTimeline,
   ) {}
-  async onModuleInit() { await initializeDevelopmentIndexes(this.receipts); }
+  async onModuleInit() {
+    await initializeDevelopmentIndexes(this.receipts);
+  }
+  async scoped<T>(work: () => Promise<T>): Promise<T> {
+    const admission = await this.timeline.admission();
+    return this.timeline.run(admission, work);
+  }
   async execute<T>(
     userId: string,
     operationId: string | undefined,
@@ -74,7 +84,9 @@ export class MutationReceipts implements OnModuleInit {
         code: 'INVALID_OPERATION_ID',
         message: 'A valid X-Idempotency-Key is required',
       });
-    const requestHash = createHash('sha256').update(JSON.stringify(
+    const requestHash = createHash('sha256')
+      .update(
+        JSON.stringify(
           Object.fromEntries(
             Object.entries(input).sort(([a], [b]) =>
               a < b ? -1 : a > b ? 1 : 0,

@@ -11,7 +11,7 @@ function fail(code) {
 function runPreflight() {
   // Existing validator parses environment only; never loads .env or starts Nest.
   const { validateProduction } = require('./production-entry.cjs');
-  validateProduction();
+  const production = validateProduction(); // Includes required-profile/authority shape validation.
   const backend = resolve(__dirname, '..');
   const root = resolve(backend, '..');
   const manifest = JSON.parse(
@@ -50,6 +50,7 @@ function runPreflight() {
     criticalIndexGroups: CRITICAL_INDEXES.length,
     credentialRotationVerified: false,
     runtimeReadinessVerified: false,
+    independentAuthorityConfigured: production.summary.timelineAuthorityMode === 'DURABLE_REQUIRED',
     operatorVerificationRequired: [
       'credential_rotation_and_revocation',
       'database_topology_and_actual_indexes',

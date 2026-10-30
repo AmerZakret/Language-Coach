@@ -119,6 +119,7 @@ describe('Guest session isolation', () => {
         {
           provide: MutationReceipts,
           useValue: {
+            scoped: <T>(work: () => T): T => work(),
             execute: <T>(
               _user: unknown,
               _key: unknown,

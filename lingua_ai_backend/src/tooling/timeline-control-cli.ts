@@ -104,6 +104,11 @@ export async function main(args = process.argv.slice(2)) {
   // Pure validation before connecting. No generated/default timeline; no .env.
   const config = validateEnvironment(process.env);
   const parsed = parseControlArguments(args, config.NODE_ENV === 'production');
+  if (
+    config.TIMELINE_AUTHORITY_MODE === 'DURABLE_REQUIRED' &&
+    parsed.action !== 'inspect'
+  )
+    throw new Error('USE_DURABLE_AUTHORITY_COORDINATOR');
   const connection = createConnection(config.MONGODB_URI, {
     autoIndex: false,
     autoCreate: false,

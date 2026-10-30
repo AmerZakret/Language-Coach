@@ -1,6 +1,11 @@
 import { createWriteStream } from 'node:fs';
 import { mongo } from 'mongoose';
-import { AuditOptions, objectId, ProgressAuditTool } from './progress-audit';
+import {
+  AuditOptions,
+  objectId,
+  ProgressAuditTool,
+  assertLegacyProgressMutationAllowed,
+} from './progress-audit';
 
 export interface CliOptions extends AuditOptions {
   apply: boolean;
@@ -103,6 +108,7 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
     process.stdout.write(`${USAGE}\n`);
     return;
   }
+  if (options.apply) assertLegacyProgressMutationAllowed(); // Before files or database connections.
   const uri = process.env.MONGODB_URI;
   if (!uri) throw new Error('MONGODB_URI is required');
   const output = options.output
