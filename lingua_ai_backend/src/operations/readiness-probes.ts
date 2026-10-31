@@ -181,6 +181,7 @@ export async function runReadinessProbes(
   timeoutMS: number,
   expectedRealRoot?: string,
   timelineGate?: TimelineWriteGate,
+  sharedCheck?: () => Promise<void>,
 ): Promise<ProbeResult & { realRoot?: string }> {
   const checks = pendingChecks();
   const diagnostics: ProbeResult['diagnostics'] = [];
@@ -223,6 +224,11 @@ export async function runReadinessProbes(
     })(),
     (async () => {
       try {
+        if (sharedCheck) {
+          await sharedCheck();
+          checks.uploads = 'ok';
+          return;
+        }
         const probe = (fence: () => Promise<void> = () => Promise.resolve()) =>
           verifyUploadRoot(
             root,

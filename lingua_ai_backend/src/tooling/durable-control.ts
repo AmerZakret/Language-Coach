@@ -18,6 +18,8 @@ import {
 } from '../operations/readiness-probes';
 import { applyControlRequest } from './timeline-control';
 import { isTimelineId } from '../operations/timeline-contract';
+import { ConfigService } from '@nestjs/config';
+import { SharedCommunityStorage } from '../community/shared-community.storage';
 
 export interface AuthorityRequest {
   action:
@@ -222,6 +224,14 @@ export async function boundedCoreReadiness(
           (await verifyIndexes(mongo, abort.signal, timeout)).length
         )
           throw new Error('CORE_READINESS_REQUIRED');
+        if (process.env.UPLOAD_STORAGE_BACKEND === 'S3') {
+          await new SharedCommunityStorage(
+            new ConfigService(process.env),
+            undefined as never,
+            mongo,
+          ).checkAvailability();
+          return;
+        }
         await verifyUploadRoot(
           root,
           false,

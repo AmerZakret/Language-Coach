@@ -3,6 +3,7 @@ import type { ClientSession, Connection } from 'mongoose';
 import { ConnectionStates } from 'mongoose';
 import { isDeepStrictEqual } from 'node:util';
 import type { DurableTimelineAuthority } from './durable-authority';
+import type { DurableEffectContext } from './durable-authority';
 import {
   CONTROL_COLLECTION,
   CONTROL_ID,
@@ -82,7 +83,10 @@ export class TimelineWriteGate {
   async fileEffect<T>(
     expected: string,
     kind: 'upload-store' | 'upload-remove' | 'readiness-probe',
-    work: (check: () => Promise<void>) => Promise<T>,
+    work: (
+      check: () => Promise<void>,
+      context?: DurableEffectContext,
+    ) => Promise<T>,
   ): Promise<T> {
     if (!this.durableRequired()) return work(() => Promise.resolve());
     this.expectation(expected);

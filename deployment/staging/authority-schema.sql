@@ -270,3 +270,176 @@ GRANT EXECUTE ON FUNCTION timeline_authority.transition(jsonb) TO timeline_opera
 GRANT EXECUTE ON FUNCTION timeline_authority.begin_file_effect(text,text,uuid,bigint,uuid,text),
   timeline_authority.finish_file_effect(uuid) TO timeline_reader;
 -- Database owners/superusers can defeat triggers: protect this separate control plane and backups.
+
+-- C2 independent object history. No runtime bootstrap or migration is performed.
+CREATE TABLE timeline_authority.object_binding (
+  singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton),
+  environment text NOT NULL, namespace text NOT NULL, bucket text NOT NULL,
+  storage_identity text NOT NULL
+);
+CREATE TABLE timeline_authority.objects (
+  id uuid PRIMARY KEY, public_name text NOT NULL UNIQUE,
+  environment text NOT NULL, namespace text NOT NULL, bucket text NOT NULL,
+  storage_identity text NOT NULL, object_key text NOT NULL UNIQUE,
+  timeline_id uuid NOT NULL REFERENCES timeline_authority.issued(timeline_id),
+  generation bigint NOT NULL, verified_timeline uuid NOT NULL, verified_generation bigint NOT NULL,
+  owner_hash text NOT NULL CHECK(owner_hash ~ '^[a-f0-9]{64}$'),
+  sha256 text NOT NULL CHECK(sha256 ~ '^[a-f0-9]{64}$'),
+  bytes integer NOT NULL CHECK(bytes BETWEEN 1 AND 5242880),
+  content_type text NOT NULL CHECK(content_type IN ('image/png','image/jpeg','image/webp')),
+  version_id text CHECK(length(version_id) BETWEEN 1 AND 256),
+  status text NOT NULL CHECK(status IN ('PENDING','STORED','LINKED','DELETE_PENDING','DELETED')),
+  delete_operation uuid, create_effect uuid NOT NULL REFERENCES timeline_authority.file_effects(effect_id),
+  delete_effect uuid REFERENCES timeline_authority.file_effects(effect_id), created_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+CREATE TABLE timeline_authority.object_events (
+  sequence bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  object_id uuid NOT NULL REFERENCES timeline_authority.objects(id),
+  event text NOT NULL, timeline_id uuid NOT NULL, generation bigint NOT NULL,
+  actor text NOT NULL, reference text, recorded_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+CREATE TRIGGER object_events_immutable BEFORE UPDATE OR DELETE OR TRUNCATE ON timeline_authority.object_events
+FOR EACH STATEMENT EXECUTE FUNCTION timeline_authority.immutable();
+CREATE FUNCTION timeline_authority.bind_objects(env text, ns text, bucket_id text, storage text) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $$
+BEGIN
+  PERFORM pg_advisory_xact_lock(110013,1);
+  IF env !~ '^[a-z][a-z0-9._-]{0,63}$' OR ns !~ '^[a-z][a-z0-9-]{2,62}$' OR bucket_id !~ '^[a-z][a-z0-9-]{2,62}$' OR
+     storage !~ '^[a-z][a-z0-9._-]{0,95}$' OR EXISTS(SELECT 1 FROM timeline_authority.state) OR
+     EXISTS(SELECT 1 FROM timeline_authority.issued) OR EXISTS(SELECT 1 FROM timeline_authority.objects) THEN
+    RAISE EXCEPTION 'NEW_EMPTY_OBJECT_BINDING_REQUIRED';
+  END IF;
+  IF EXISTS(SELECT 1 FROM timeline_authority.object_binding WHERE environment<>env OR namespace<>ns OR bucket<>bucket_id OR storage_identity<>storage) THEN
+    RAISE EXCEPTION 'OBJECT_BINDING_MISMATCH';
+  END IF;
+  INSERT INTO timeline_authority.object_binding VALUES(true,env,ns,bucket_id,storage) ON CONFLICT DO NOTHING;
+END $$;
+CREATE FUNCTION timeline_authority.object_lookup(name text) RETURNS jsonb
+LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog AS $$
+  SELECT to_jsonb(o) FROM timeline_authority.objects o WHERE public_name=name AND length(name)<=64
+$$;
+CREATE FUNCTION timeline_authority.object_binding_matches(env text, ns text, bucket_id text, storage text) RETURNS boolean
+LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog AS $$
+  SELECT EXISTS(SELECT 1 FROM timeline_authority.object_binding WHERE environment=env AND namespace=ns AND bucket=bucket_id AND storage_identity=storage)
+$$;
+CREATE FUNCTION timeline_authority.object_begin(r jsonb, permit uuid) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $$
+DECLARE s timeline_authority.state%ROWTYPE; b timeline_authority.object_binding%ROWTYPE; id uuid;
+BEGIN
+  PERFORM pg_advisory_xact_lock(110013,1);
+  SELECT * INTO STRICT s FROM timeline_authority.state;
+  SELECT * INTO STRICT b FROM timeline_authority.object_binding;
+  id:=(r->>'id')::uuid;
+  IF s.mode<>'OPEN' OR b.environment<>s.environment OR b.environment<>r->>'environment' OR
+     b.namespace<>r->>'namespace' OR b.bucket<>r->>'bucket' OR b.storage_identity<>r->>'storageIdentity' OR
+     r->>'publicName' !~ '^[a-f0-9-]{36}\.(jpg|png|webp)$' OR split_part(r->>'publicName','.',1)<>id::text OR
+     r->>'key'<>b.namespace||'/'||s.environment||'/'||s.timeline_id::text||'/'||s.generation::text||'/'||(r->>'publicName') OR
+     NOT EXISTS(SELECT 1 FROM timeline_authority.file_effects e JOIN pg_stat_activity p ON p.pid=e.owner_pid AND p.backend_start=e.owner_start
+       WHERE e.effect_id=permit AND e.status='ACTIVE' AND e.owner_pid=pg_backend_pid() AND e.timeline_id=s.timeline_id AND e.generation=s.generation) THEN
+    RAISE EXCEPTION 'OBJECT_ADMISSION_DENIED';
+  END IF;
+  INSERT INTO timeline_authority.objects(id,public_name,environment,namespace,bucket,storage_identity,object_key,timeline_id,generation,
+    verified_timeline,verified_generation,owner_hash,sha256,bytes,content_type,status,create_effect)
+    VALUES(id,r->>'publicName',b.environment,b.namespace,b.bucket,b.storage_identity,r->>'key',s.timeline_id,s.generation,
+      s.timeline_id,s.generation,r->>'ownerHash',r->>'sha256',(r->>'bytes')::integer,r->>'contentType','PENDING',permit);
+  INSERT INTO timeline_authority.object_events(object_id,event,timeline_id,generation,actor) VALUES(id,'PENDING',s.timeline_id,s.generation,session_user);
+END $$;
+CREATE FUNCTION timeline_authority.object_record(id uuid, permit uuid, action text, version text DEFAULT NULL, operation uuid DEFAULT NULL, owner text DEFAULT NULL) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $$
+DECLARE o timeline_authority.objects%ROWTYPE; s timeline_authority.state%ROWTYPE; next_status text;
+BEGIN
+  SELECT * INTO STRICT o FROM timeline_authority.objects WHERE objects.id=object_record.id FOR UPDATE;
+  SELECT * INTO STRICT s FROM timeline_authority.state;
+  IF NOT EXISTS(SELECT 1 FROM timeline_authority.file_effects e JOIN pg_stat_activity p ON p.pid=e.owner_pid AND p.backend_start=e.owner_start
+      WHERE e.effect_id=permit AND e.status='ACTIVE' AND e.owner_pid=pg_backend_pid() AND e.timeline_id=o.verified_timeline AND e.generation=o.verified_generation) OR
+     s.timeline_id<>o.verified_timeline OR s.generation<>o.verified_generation THEN RAISE EXCEPTION 'STALE_OBJECT_EFFECT'; END IF;
+  IF action='STORED' AND o.status='PENDING' AND length(version) BETWEEN 1 AND 256 AND version ~ '^[A-Za-z0-9._~-]+$' AND version<>'null' THEN
+    UPDATE timeline_authority.objects SET version_id=version WHERE objects.id=o.id; next_status:='STORED';
+  ELSIF action='LINKED' AND o.status='STORED' THEN next_status:='LINKED';
+  ELSIF action='DELETE_PENDING' AND s.mode='OPEN' AND owner=o.owner_hash AND operation IS NOT NULL AND o.status IN ('LINKED','STORED') THEN
+    UPDATE timeline_authority.objects SET delete_operation=operation WHERE objects.id=o.id; next_status:='DELETE_PENDING';
+  ELSIF action='DELETE_PENDING' AND s.mode='OPEN' AND owner=o.owner_hash AND operation IS NOT NULL AND o.status='DELETE_PENDING' AND
+    NOT EXISTS(SELECT 1 FROM timeline_authority.file_effects WHERE effect_id=o.delete_effect AND status='ACTIVE') THEN
+    -- A failed Mongo transaction can leave a live reference and an earlier intent.
+    -- A new owner-authorized transaction may reauthorize it, never an active dispatch.
+    UPDATE timeline_authority.objects SET delete_operation=operation,delete_effect=NULL WHERE objects.id=o.id; next_status:='DELETE_PENDING';
+  ELSIF action='DELETE_PENDING' AND o.status IN ('DELETE_PENDING','DELETED') AND operation=o.delete_operation AND owner=o.owner_hash THEN RETURN;
+  ELSIF action='DELETED' AND o.status='DELETE_PENDING' AND o.delete_effect=permit THEN next_status:='DELETED';
+  ELSIF action='DELETED' AND o.status='DELETED' AND o.delete_effect=permit THEN RETURN;
+  ELSIF action='LINKED' AND o.status IN ('LINKED','DELETE_PENDING') THEN RETURN;
+  ELSE RAISE EXCEPTION 'ILLEGAL_OBJECT_TRANSITION'; END IF;
+  UPDATE timeline_authority.objects SET status=next_status WHERE objects.id=o.id;
+  INSERT INTO timeline_authority.object_events(object_id,event,timeline_id,generation,actor,reference)
+    VALUES(o.id,CASE WHEN action='DELETE_DISPATCHED' THEN action ELSE next_status END,s.timeline_id,s.generation,session_user,operation::text);
+END $$;
+CREATE FUNCTION timeline_authority.object_claim_delete(id uuid, permit uuid) RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $$
+DECLARE o timeline_authority.objects%ROWTYPE; s timeline_authority.state%ROWTYPE;
+BEGIN
+  SELECT * INTO STRICT o FROM timeline_authority.objects WHERE objects.id=object_claim_delete.id FOR UPDATE;
+  SELECT * INTO STRICT s FROM timeline_authority.state;
+  IF s.mode<>'OPEN' OR s.timeline_id<>o.verified_timeline OR s.generation<>o.verified_generation OR
+    NOT EXISTS(SELECT 1 FROM timeline_authority.file_effects e JOIN pg_stat_activity p ON p.pid=e.owner_pid AND p.backend_start=e.owner_start
+      WHERE e.effect_id=permit AND e.status='ACTIVE' AND e.owner_pid=pg_backend_pid() AND e.timeline_id=o.verified_timeline AND e.generation=o.verified_generation) THEN
+    RAISE EXCEPTION 'STALE_OBJECT_EFFECT';
+  END IF;
+  IF o.status='DELETED' THEN RETURN false; END IF;
+  IF o.status<>'DELETE_PENDING' OR o.delete_operation IS NULL THEN RAISE EXCEPTION 'ESTABLISHED_DELETE_INTENT_REQUIRED'; END IF;
+  IF o.delete_effect IS NOT NULL AND o.delete_effect<>permit AND
+    EXISTS(SELECT 1 FROM timeline_authority.file_effects WHERE effect_id=o.delete_effect AND status='ACTIVE') THEN RETURN false; END IF;
+  UPDATE timeline_authority.objects SET delete_effect=permit WHERE objects.id=o.id;
+  INSERT INTO timeline_authority.object_events(object_id,event,timeline_id,generation,actor,reference)
+    VALUES(o.id,'DELETE_DISPATCHED',s.timeline_id,s.generation,session_user,o.delete_operation::text);
+  RETURN true;
+END $$;
+CREATE FUNCTION timeline_authority.object_adopt(id uuid, expected_revision bigint, reference text) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $$
+DECLARE s timeline_authority.state%ROWTYPE;
+BEGIN
+  PERFORM pg_advisory_xact_lock(110013,1);
+  SELECT * INTO STRICT s FROM timeline_authority.state;
+  IF s.mode NOT IN ('CLOSED','MAINTENANCE') OR s.revision<>expected_revision OR reference !~ '^[A-Za-z0-9._:/-]{1,96}$' OR
+     EXISTS(SELECT 1 FROM timeline_authority.file_effects WHERE status='ACTIVE') THEN RAISE EXCEPTION 'OBJECT_RECONCILIATION_DENIED'; END IF;
+  -- Adoption verifies a live restored reference, never transfers an old deletion intent.
+  UPDATE timeline_authority.objects SET verified_timeline=s.timeline_id,verified_generation=s.generation,status='LINKED',delete_operation=NULL,delete_effect=NULL
+    WHERE objects.id=object_adopt.id AND version_id IS NOT NULL;
+  IF NOT FOUND THEN RAISE EXCEPTION 'OBJECT_VERSION_REQUIRED'; END IF;
+  INSERT INTO timeline_authority.object_events(object_id,event,timeline_id,generation,actor,reference)
+    VALUES(id,'VERIFIED_RESTORED_REFERENCE',s.timeline_id,s.generation,session_user,reference);
+END $$;
+REVOKE ALL ON timeline_authority.object_binding,timeline_authority.objects,timeline_authority.object_events FROM PUBLIC;
+REVOKE ALL ON FUNCTION timeline_authority.bind_objects(text,text,text,text),timeline_authority.object_lookup(text),
+  timeline_authority.object_begin(jsonb,uuid),timeline_authority.object_record(uuid,uuid,text,text,uuid,text),
+  timeline_authority.object_adopt(uuid,bigint,text),timeline_authority.object_claim_delete(uuid,uuid) FROM PUBLIC;
+GRANT SELECT ON timeline_authority.object_binding,timeline_authority.objects,timeline_authority.object_events TO timeline_operator;
+GRANT EXECUTE ON FUNCTION timeline_authority.bind_objects(text,text,text,text),timeline_authority.object_adopt(uuid,bigint,text) TO timeline_operator;
+GRANT EXECUTE ON FUNCTION timeline_authority.object_lookup(text),timeline_authority.object_begin(jsonb,uuid),
+  timeline_authority.object_record(uuid,uuid,text,text,uuid,text),timeline_authority.object_claim_delete(uuid,uuid) TO timeline_reader;
+REVOKE ALL ON FUNCTION timeline_authority.object_binding_matches(text,text,text,text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION timeline_authority.object_binding_matches(text,text,text,text) TO timeline_reader,timeline_operator;
+CREATE TABLE timeline_authority.object_reconciliations (
+  event_id uuid PRIMARY KEY, timeline_id uuid NOT NULL, generation bigint NOT NULL,
+  authority_revision bigint NOT NULL, reference_count integer NOT NULL CHECK(reference_count BETWEEN 0 AND 500),
+  inventory_sha256 text NOT NULL CHECK(inventory_sha256 ~ '^[a-f0-9]{64}$'),
+  reference text NOT NULL, actor text NOT NULL, recorded_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+CREATE TRIGGER object_reconciliations_immutable BEFORE UPDATE OR DELETE OR TRUNCATE ON timeline_authority.object_reconciliations
+FOR EACH STATEMENT EXECUTE FUNCTION timeline_authority.immutable();
+CREATE FUNCTION timeline_authority.object_reconciled() RETURNS boolean
+LANGUAGE sql SECURITY DEFINER SET search_path=pg_catalog AS $$
+ SELECT EXISTS(SELECT 1 FROM timeline_authority.state s JOIN timeline_authority.object_reconciliations r ON r.timeline_id=s.timeline_id AND r.generation=s.generation)
+$$;
+CREATE FUNCTION timeline_authority.object_reconcile_complete(event uuid, expected_revision bigint, count integer, inventory text, reference text) RETURNS void
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog AS $$
+DECLARE s timeline_authority.state%ROWTYPE;
+BEGIN
+ PERFORM pg_advisory_xact_lock(110013,1);SELECT * INTO STRICT s FROM timeline_authority.state;
+ IF s.mode NOT IN ('CLOSED','MAINTENANCE') OR s.revision<>expected_revision OR reference !~ '^[A-Za-z0-9._:/-]{1,96}$' OR
+   EXISTS(SELECT 1 FROM timeline_authority.file_effects WHERE status='ACTIVE') THEN RAISE EXCEPTION 'OBJECT_RECONCILIATION_DENIED'; END IF;
+ INSERT INTO timeline_authority.object_reconciliations VALUES(event,s.timeline_id,s.generation,s.revision,count,inventory,reference,session_user,clock_timestamp());
+END $$;
+REVOKE ALL ON timeline_authority.object_reconciliations FROM PUBLIC;
+REVOKE ALL ON FUNCTION timeline_authority.object_reconciled(),timeline_authority.object_reconcile_complete(uuid,bigint,integer,text,text) FROM PUBLIC;
+GRANT SELECT ON timeline_authority.object_reconciliations TO timeline_operator;
+GRANT EXECUTE ON FUNCTION timeline_authority.object_reconciled() TO timeline_reader,timeline_operator;
+GRANT EXECUTE ON FUNCTION timeline_authority.object_reconcile_complete(uuid,bigint,integer,text,text) TO timeline_operator;

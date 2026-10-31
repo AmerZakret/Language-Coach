@@ -23,6 +23,7 @@ import { UsersController } from '../users/users.controller';
 import { LessonsController } from '../lessons/lessons.controller';
 import { ProgressController } from '../progress/progress.controller';
 import { CommunityController } from '../community/community.controller';
+import { CommunityObjectController } from '../community/community-object.controller';
 import { AiCoachController } from '../ai-coach/ai-coach.controller';
 import { PronunciationController } from '../pronunciation/pronunciation.controller';
 import { HealthController } from '../operations/health.controller';
@@ -296,6 +297,7 @@ test('every current controller route has an explicit protocol classification', (
     ProgressController,
     FlashcardsController,
     CommunityController,
+    CommunityObjectController,
     AiCoachController,
     PronunciationController,
     HealthController,

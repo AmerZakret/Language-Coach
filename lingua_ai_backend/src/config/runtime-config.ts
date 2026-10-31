@@ -7,6 +7,7 @@ import type { ConfigService } from '@nestjs/config';
 import type { CorsOptions } from '@nestjs/common/interfaces/external/cors-options.interface';
 import { isTimelineId, WriteState } from '../operations/timeline-contract';
 import { authorityIdentity } from '../operations/durable-authority';
+import { objectConfig } from '../community/object-storage';
 
 export interface RuntimeConfig extends Record<string, unknown> {
   DATA_TIMELINE_ID: string;
@@ -385,6 +386,40 @@ export function validateEnvironment(
       })
     : [];
   const upload = text(env, 'UPLOAD_ROOT');
+  const uploadBackend = env.UPLOAD_STORAGE_BACKEND ?? 'FILESYSTEM';
+  if (
+    typeof uploadBackend !== 'string' ||
+    !['FILESYSTEM', 'S3'].includes(uploadBackend) ||
+    (authorityProfile === 'DURABLE_REQUIRED' && uploadBackend !== 'S3')
+  )
+    invalid(
+      'UPLOAD_STORAGE_BACKEND',
+      'production-like staging requires explicit shared S3 storage',
+    );
+  if (uploadBackend === 'S3') {
+    if (authorityMode !== 'DURABLE_REQUIRED')
+      invalid(
+        'UPLOAD_STORAGE_BACKEND',
+        'shared storage requires durable authority',
+      );
+    try {
+      objectConfig(env);
+    } catch {
+      invalid(
+        'OBJECT_STORAGE_CONFIGURATION',
+        'explicit private bucket, namespace, identity and runtime credentials required',
+      );
+    }
+    if (
+      !['NEW_EMPTY', 'VERIFIED_COPY'].includes(
+        String(env.UPLOAD_MIGRATION_STATE),
+      )
+    )
+      invalid(
+        'UPLOAD_MIGRATION_STATE',
+        'explicit new-empty or verified-copy decision required',
+      );
+  }
   if (production && (!upload || !isAbsolute(upload)))
     invalid(
       'UPLOAD_ROOT',
@@ -425,6 +460,7 @@ export function validateEnvironment(
   };
   return {
     ...env,
+    UPLOAD_STORAGE_BACKEND: uploadBackend,
     TIMELINE_AUTHORITY_MODE: authorityMode,
     DEPLOYMENT_PROFILE: authorityProfile,
     DATA_TIMELINE_ID: typeof timeline === 'string' ? timeline : '',

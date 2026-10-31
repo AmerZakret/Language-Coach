@@ -18,6 +18,7 @@ import { getUserProgressKey } from '../utils/userKey';
 import { communityQuery, communityCacheKey, readCommunityFeed, writeCommunityFeed, validCommunityFeed,
   invalidateCommunityFeed, communityNetworkFailure } from '../utils/communityFeedCache';
 import type { CommunityPost } from "../api/communityApi";
+import { CommunityImage } from "../components/CommunityImage";
 
 const LANGUAGES = ["All", "English", "German", "Spanish", "French", "Arabic"];
 
@@ -580,12 +581,7 @@ export function CommunityPage() {
 
                   {imageUrl && (
                     <div className="rounded-2xl overflow-hidden border max-h-[400px] w-full" style={{ borderColor: "var(--l-border-subtle)", background: "var(--l-surface2)" }}>
-                      <img
-                        src={imageUrl}
-                        alt="post content"
-                        className="w-full object-cover max-h-[400px] hover:scale-[1.01] transition-transform duration-300 cursor-zoom-in"
-                        style={{ display: "block" }}
-                      />
+                      <CommunityImage src={imageUrl} token={token} baseUrl={backendBaseUrl} />
                     </div>
                   )}
                 </div>

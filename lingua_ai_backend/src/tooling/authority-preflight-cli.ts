@@ -56,6 +56,23 @@ export async function main(args = process.argv.slice(2)) {
       c.READINESS_TIMEOUT_MS,
     );
   const first = await read();
+  const shared = c.UPLOAD_STORAGE_BACKEND === 'S3';
+  if (shared) {
+    const storage = (m as unknown as { objectStorage: Record<string, unknown> })
+      .objectStorage;
+    if (
+      !storage ||
+      storage.backend !== 'S3' ||
+      storage.bucketIdentity !== c.OBJECT_STORAGE_BUCKET ||
+      storage.namespace !== c.OBJECT_STORAGE_NAMESPACE ||
+      storage.storageIdentity !== c.OBJECT_STORAGE_IDENTITY ||
+      storage.timelineId !== first.timeline_id ||
+      storage.generation !== first.generation ||
+      storage.migrationState !== c.UPLOAD_MIGRATION_STATE ||
+      storage.reconciliationStatus !== 'VERIFIED'
+    )
+      throw Error('LIVE_OBJECT_MANIFEST_MISMATCH');
+  }
   if (
     first.timeline_id !== m.dataTimelineId ||
     first.timeline_id !== c.DATA_TIMELINE_ID ||
@@ -83,7 +100,7 @@ export async function main(args = process.argv.slice(2)) {
       row.writeState !== (first.mode === 'OPEN' ? 'OPEN' : 'CLOSED')
     )
       throw new Error('MONGO_AUTHORITY_DISAGREEMENT');
-    if (first.mode === 'OPEN')
+    if (first.mode === 'OPEN' && !shared)
       await authority.fileEffect(
         first.timeline_id,
         'readiness-probe',
@@ -113,7 +130,8 @@ export async function main(args = process.argv.slice(2)) {
         revision: last.revision,
         writeMode: last.mode,
         productionAuthorized: false,
-        uploadWriteProbeVerified: first.mode === 'OPEN',
+        uploadWriteProbeVerified: first.mode === 'OPEN' && !shared,
+        ...(shared ? { sharedObjectIdentityVerified: true } : {}),
       }),
     );
   } finally {

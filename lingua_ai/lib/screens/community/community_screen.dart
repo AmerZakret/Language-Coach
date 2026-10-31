@@ -2,6 +2,7 @@ import '../../services/data_timeline.dart';
 import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
+import '../../services/community_image_access.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/localization/language_service.dart';
@@ -953,6 +954,7 @@ class _CommunityScreenState extends State<CommunityScreen> {
               borderRadius: BorderRadius.circular(16),
               child: Image.network(
                 fullImageUrl,
+                headers: communityImageHeaders(fullImageUrl, auth.token),
                 fit: BoxFit.cover,
                 width: double.infinity,
                 errorBuilder: (context, error, stackTrace) {

@@ -22,6 +22,7 @@ WORKDIR /src
 COPY --from=build /src/lingua_ai_backend/dist /src/lingua_ai_backend/dist
 COPY --from=runtime-dependencies /app/node_modules /src/lingua_ai_backend/node_modules
 COPY deployment/staging/bootstrap-indexes.cjs /src/deployment/staging/bootstrap-indexes.cjs
+COPY deployment/staging/object-store-config.cjs /src/deployment/staging/object-store-config.cjs
 USER node
 CMD ["node", "deployment/staging/bootstrap-indexes.cjs"]
 

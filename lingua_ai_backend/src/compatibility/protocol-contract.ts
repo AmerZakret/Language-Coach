@@ -33,6 +33,7 @@ export const PROTOCOL_ROUTES = [
   ['DELETE', '/flashcards/:id', required],
   ['PUT', '/flashcards/:id/review', required],
   ['GET', '/community/posts', optional],
+  ['GET', '/uploads/community/:name', optional],
   ['POST', '/community/posts', required],
   ['PUT', '/community/posts/:id', required],
   ['DELETE', '/community/posts/:id', required],

@@ -197,6 +197,9 @@ export class ReadinessService
       this.timeout,
       this.realRoot,
       this.timelineGate,
+      this.images.shared?.()
+        ? () => this.images.checkSharedAvailability()
+        : undefined,
     )
       .then((result) => {
         if (

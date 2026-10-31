@@ -15,7 +15,7 @@ function snapshot() {
 }
 // Never pass inherited application credentials/configuration into quality checks.
 const safeEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) =>
-  !/^(TIMELINE_AUTHORITY_.*|AUTHORITY_.*|DEPLOYMENT_PROFILE|DATA_TIMELINE_ID|DATA_WRITE_MODE|CLIENT_PROTOCOL_POLICY|RELEASE_BUILD_ID|NODE_ENV|MONGODB_URI|JWT_SECRET|GEMINI_.*|AI_ENABLED|PRONUNCIATION_.*|WHISPER_.*|CORS_ORIGINS|UPLOAD_ROOT|VITE_.*|ALLOW_LOCAL_.*|TRUST_PROXY)$/.test(name)));
+  !/^(OBJECT_STORAGE_.*|UPLOAD_STORAGE_BACKEND|UPLOAD_MIGRATION_STATE|TIMELINE_AUTHORITY_.*|AUTHORITY_.*|DEPLOYMENT_PROFILE|DATA_TIMELINE_ID|DATA_WRITE_MODE|CLIENT_PROTOCOL_POLICY|RELEASE_BUILD_ID|NODE_ENV|MONGODB_URI|JWT_SECRET|GEMINI_.*|AI_ENABLED|PRONUNCIATION_.*|WHISPER_.*|CORS_ORIGINS|UPLOAD_ROOT|VITE_.*|ALLOW_LOCAL_.*|TRUST_PROXY)$/.test(name)));
 // Keep disposable Mongo binaries in the ignored test dependency cache, not in
 // a developer database directory. CI may download only this test server binary.
 safeEnv.MONGOMS_DOWNLOAD_DIR ||= join(root, 'lingua_ai_backend/node_modules/.cache/mongodb-memory-server');

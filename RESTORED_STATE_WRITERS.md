@@ -1,5 +1,11 @@
 # Restored-state write surfaces — C1-R2
 
+## C2 extension
+
+`SharedCommunityStorage` and `S3ObjectStorage` add immutable versioned PUT and logical DELETE. Both are inside the original admission and C1 nonexpiring permit. Independent `objects`/`object_events` persist preparation, intent, dispatch and completion across Mongo restoration; ambiguous remote acknowledgements preserve the permit. Owner-validated metadata callbacks establish deletion intent before commit. Cleanup cannot acquire authority from metadata absence or transfer A work into B.
+
+`object-bootstrap-cli` and the configuration initializer are explicit new-empty operator actions, not runtime startup. `object-reconcile-cli` verifies a bounded exact-reference/version inventory while CLOSED/MAINTENANCE, adopts references and records an independent receipt without deleting or reopening. `object-effects-cli` processes one established same-timeline delete under OPEN authority; no background worker exists. The host isolation verifier additionally checks C2 private object topology and requires store/proxy restart after ambiguous work before minting recovery evidence. See [the complete storage contract](COMMUNITY_OBJECT_STORAGE.md). Existing global writer/history limitations remain unchanged.
+
 This inventory covers repository entry points that can change Mongo domain/control data or retained uploads. The independent PostgreSQL authority, permit ledger and audits are outside Mongo restoration. Client caches, build artifacts and process-memory counters are listed separately. This is not an inventory of production deployments or historical credentials.
 
 FULLY FENCED means cooperating required-mode application code, the existing Mongo transaction boundary and the completed restore barrier. It does not mean an atomic transaction across PostgreSQL, Mongo and the filesystem or protection from a privileged host/storage administrator.

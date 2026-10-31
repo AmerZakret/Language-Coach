@@ -13,6 +13,16 @@ export interface AuthorityState {
   mode: 'CLOSED' | 'MAINTENANCE' | 'OPEN';
   last_event: string;
 }
+export interface DurableEffectContext {
+  client: Client;
+  effectId: string;
+}
+/** A remote mutation may still complete after a lost acknowledgement. */
+export class UncertainDurableEffect extends Error {
+  constructor() {
+    super('UNSETTLED_REMOTE_EFFECT');
+  }
+}
 export const authorityIdentity = (
   value: unknown,
   maximum = 64,
@@ -157,7 +167,10 @@ export class DurableTimelineAuthority implements OnModuleDestroy {
   async fileEffect<T>(
     timeline: string,
     kind: 'upload-store' | 'upload-remove' | 'readiness-probe',
-    work: (check: () => Promise<void>) => Promise<T>,
+    work: (
+      check: () => Promise<void>,
+      context?: DurableEffectContext,
+    ) => Promise<T>,
   ): Promise<T> {
     if (!this.required()) return work(() => Promise.resolve());
     if (this.effects.size >= 8 || this.shutdown.signal.aborted)
@@ -212,9 +225,10 @@ export class DurableTimelineAuthority implements OnModuleDestroy {
       );
       admitted = true;
       await check();
-      result = await work(check); // Never release while a native operation is pending.
+      result = await work(check, { client, effectId: id }); // Never release while a native operation is pending.
       await check();
-    } catch {
+    } catch (error) {
+      if (error instanceof UncertainDurableEffect) lost = true;
       failure = new TimelineControlError('TIMELINE_CONTROL_UNAVAILABLE');
     } finally {
       try {

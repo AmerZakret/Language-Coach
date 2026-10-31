@@ -110,7 +110,16 @@
         "TIMELINE_AUTHORITY_ENVIRONMENT": "language-coach-11b-local",
         "TIMELINE_AUTHORITY_STORAGE_ID": "language-coach-11b-local_authority-data",
         "TIMELINE_AUTHORITY_GENERATION": "${STAGING_AUTHORITY_GENERATION:-1}",
-        "TIMELINE_AUTHORITY_URL": "postgresql://timeline_reader:${STAGING_AUTHORITY_READER_PASSWORD:?supply a distinct synthetic authority reader password}@authority:5432/timeline_authority"
+        "TIMELINE_AUTHORITY_URL": "postgresql://timeline_reader:${STAGING_AUTHORITY_READER_PASSWORD:?supply a distinct synthetic authority reader password}@authority:5432/timeline_authority",
+        "UPLOAD_STORAGE_BACKEND": "S3",
+        "UPLOAD_MIGRATION_STATE": "NEW_EMPTY",
+        "OBJECT_STORAGE_ENDPOINT": "http://object-store:8333",
+        "OBJECT_STORAGE_BUCKET": "language-coach-c2-local",
+        "OBJECT_STORAGE_NAMESPACE": "community",
+        "OBJECT_STORAGE_IDENTITY": "language-coach-11b-local_object-data",
+        "OBJECT_STORAGE_ROLE": "c2-community-runtime",
+        "OBJECT_STORAGE_ACCESS_KEY": "${STAGING_OBJECT_APP_ACCESS_KEY:?supply a distinct synthetic object-store value}",
+        "OBJECT_STORAGE_SECRET_KEY": "${STAGING_OBJECT_APP_SECRET_KEY:?supply a distinct synthetic object-store value}"
       },
       "volumes": [
         "uploads:/srv/uploads"
@@ -123,7 +132,8 @@
         "frontend",
         "database",
         "inference",
-        "control"
+        "control",
+        "objects"
       ],
       "depends_on": {
         "mongo-init": {
@@ -131,6 +141,9 @@
         },
         "authority": {
           "condition": "service_healthy"
+        },
+        "object-store": {
+          "condition": "service_started"
         }
       },
       "deploy": {
@@ -229,11 +242,21 @@
         "TIMELINE_AUTHORITY_GENERATION": "${STAGING_AUTHORITY_GENERATION:-1}",
         "TIMELINE_AUTHORITY_URL": "postgresql://timeline_reader:${STAGING_AUTHORITY_READER_PASSWORD:?supply a distinct synthetic authority reader password}@authority:5432/timeline_authority",
         "AUTHORITY_OPERATOR_URL": "postgresql://timeline_operator:${STAGING_AUTHORITY_OPERATOR_PASSWORD:?supply a distinct synthetic authority operator password}@authority:5432/timeline_authority",
-        "AUTHORITY_OPERATOR_INTENT": "${STAGING_AUTHORITY_OPERATOR_INTENT:-disabled}"
+        "AUTHORITY_OPERATOR_INTENT": "${STAGING_AUTHORITY_OPERATOR_INTENT:-disabled}",
+        "UPLOAD_STORAGE_BACKEND": "S3",
+        "UPLOAD_MIGRATION_STATE": "NEW_EMPTY",
+        "OBJECT_STORAGE_ENDPOINT": "http://object-store:8333",
+        "OBJECT_STORAGE_BUCKET": "language-coach-c2-local",
+        "OBJECT_STORAGE_NAMESPACE": "community",
+        "OBJECT_STORAGE_IDENTITY": "language-coach-11b-local_object-data",
+        "OBJECT_STORAGE_ROLE": "c2-community-runtime",
+        "OBJECT_STORAGE_ACCESS_KEY": "${STAGING_OBJECT_APP_ACCESS_KEY:?supply a distinct synthetic object-store value}",
+        "OBJECT_STORAGE_SECRET_KEY": "${STAGING_OBJECT_APP_SECRET_KEY:?supply a distinct synthetic object-store value}"
       },
       "networks": [
         "database",
-        "control"
+        "control",
+        "objects"
       ],
       "depends_on": {
         "mongo-init": {
@@ -241,6 +264,9 @@
         },
         "authority": {
           "condition": "service_healthy"
+        },
+        "object-store": {
+          "condition": "service_started"
         }
       },
       "volumes": [
@@ -275,6 +301,154 @@
         "retries": 20
       },
       "stop_grace_period": "30s"
+    },
+    "object-config": {
+      "build": {
+        "context": "../..",
+        "dockerfile": "deployment/staging/Dockerfile.backend",
+        "target": "tooling"
+      },
+      "platform": "linux/amd64",
+      "user": "0:0",
+      "entrypoint": [
+        "node",
+        "deployment/staging/object-store-config.cjs"
+      ],
+      "environment": {
+        "STAGING_OBJECT_CONFIG_INIT": "${STAGING_OBJECT_CONFIG_INIT:-disabled}",
+        "STAGING_OBJECT_ADMIN_ACCESS_KEY": "${STAGING_OBJECT_ADMIN_ACCESS_KEY:?supply a distinct synthetic object-store value}",
+        "STAGING_OBJECT_ADMIN_SECRET_KEY": "${STAGING_OBJECT_ADMIN_SECRET_KEY:?supply a distinct synthetic object-store value}",
+        "STAGING_OBJECT_APP_ACCESS_KEY": "${STAGING_OBJECT_APP_ACCESS_KEY:?supply a distinct synthetic object-store value}",
+        "STAGING_OBJECT_APP_SECRET_KEY": "${STAGING_OBJECT_APP_SECRET_KEY:?supply a distinct synthetic object-store value}"
+      },
+      "volumes": [
+        "object-config:/object-config",
+        "object-data:/object-data"
+      ],
+      "networks": [
+        "object-control"
+      ],
+      "restart": "no"
+    },
+    "object-data": {
+      "image": "chrislusf/seaweedfs:4.51@sha256:f7a49e3f3972ebed5be2ed4befa4a0c68eb7bdddba6e692d42729ceb545134b8",
+      "platform": "linux/amd64",
+      "user": "10001:10001",
+      "command": [
+        "mini",
+        "-dir=/data",
+        "-ip=object-data",
+        "-ip.bind=0.0.0.0",
+        "-s3.config=/config/s3.json",
+        "-s3.iam=false",
+        "-s3.iam.selfServiceRequiresGrant=true",
+        "-admin.ui=false",
+        "-webdav=false",
+        "-s3.port.iceberg=0",
+        "-s3.port.lance=0",
+        "-master.telemetry=false",
+        "-filer.disableDirListing=true",
+        "-volume.fileSizeLimitMB=6",
+        "-volume.concurrentUploadLimitMB=64",
+        "-s3.readerCacheSizeMB=64"
+      ],
+      "volumes": [
+        "object-data:/data",
+        "object-config:/config:ro"
+      ],
+      "networks": [
+        "object-control"
+      ],
+      "depends_on": {
+        "object-config": {
+          "condition": "service_completed_successfully"
+        }
+      },
+      "healthcheck": {
+        "test": [
+          "CMD-SHELL",
+          "wget -q -O /dev/null http://127.0.0.1:9333/cluster/status"
+        ],
+        "interval": "5s",
+        "timeout": "3s",
+        "retries": 30
+      },
+      "stop_grace_period": "30s"
+    },
+    "object-store": {
+      "image": "caddy:2.11.6-alpine",
+      "platform": "linux/amd64",
+      "user": "10001:10001",
+      "command": [
+        "caddy",
+        "run",
+        "--config",
+        "/etc/caddy/Caddyfile"
+      ],
+      "volumes": [
+        "./Caddyfile.objects:/etc/caddy/Caddyfile:ro"
+      ],
+      "networks": [
+        "objects",
+        "object-control"
+      ],
+      "depends_on": {
+        "object-data": {
+          "condition": "service_healthy"
+        }
+      },
+      "read_only": true,
+      "tmpfs": [
+        "/tmp:size=16m,mode=1777"
+      ],
+      "environment": {
+        "XDG_CONFIG_HOME": "/tmp/config",
+        "XDG_DATA_HOME": "/tmp/data"
+      }
+    },
+    "object-bootstrap": {
+      "profiles": [
+        "tools"
+      ],
+      "build": {
+        "context": "../..",
+        "dockerfile": "deployment/staging/Dockerfile.backend",
+        "target": "tooling"
+      },
+      "platform": "linux/amd64",
+      "entrypoint": [
+        "node",
+        "lingua_ai_backend/dist/src/tooling/object-bootstrap-cli.js"
+      ],
+      "environment": {
+        "UPLOAD_STORAGE_BACKEND": "S3",
+        "UPLOAD_MIGRATION_STATE": "NEW_EMPTY",
+        "OBJECT_STORAGE_ENDPOINT": "http://object-store:8333",
+        "OBJECT_STORAGE_BUCKET": "language-coach-c2-local",
+        "OBJECT_STORAGE_NAMESPACE": "community",
+        "OBJECT_STORAGE_IDENTITY": "language-coach-11b-local_object-data",
+        "OBJECT_STORAGE_ROLE": "c2-community-runtime",
+        "OBJECT_STORAGE_ACCESS_KEY": "${STAGING_OBJECT_APP_ACCESS_KEY:?supply a distinct synthetic object-store value}",
+        "OBJECT_STORAGE_SECRET_KEY": "${STAGING_OBJECT_APP_SECRET_KEY:?supply a distinct synthetic object-store value}",
+        "TIMELINE_AUTHORITY_ENVIRONMENT": "language-coach-11b-local",
+        "AUTHORITY_OPERATOR_URL": "postgresql://timeline_operator:${STAGING_AUTHORITY_OPERATOR_PASSWORD:?supply a distinct synthetic authority operator password}@authority:5432/timeline_authority",
+        "AUTHORITY_OPERATOR_INTENT": "${STAGING_AUTHORITY_OPERATOR_INTENT:-disabled}",
+        "STAGING_OBJECT_BOOTSTRAP": "${STAGING_OBJECT_BOOTSTRAP:-disabled}",
+        "STAGING_OBJECT_ADMIN_ACCESS_KEY": "${STAGING_OBJECT_ADMIN_ACCESS_KEY:?supply a distinct synthetic object-store value}",
+        "STAGING_OBJECT_ADMIN_SECRET_KEY": "${STAGING_OBJECT_ADMIN_SECRET_KEY:?supply a distinct synthetic object-store value}"
+      },
+      "networks": [
+        "objects",
+        "control"
+      ],
+      "depends_on": {
+        "authority": {
+          "condition": "service_healthy"
+        },
+        "object-store": {
+          "condition": "service_started"
+        }
+      }
     }
   },
   "networks": {
@@ -296,12 +470,20 @@
     },
     "control": {
       "internal": true
+    },
+    "objects": {
+      "internal": true
+    },
+    "object-control": {
+      "internal": true
     }
   },
   "volumes": {
     "mongo-data": {},
     "uploads": {},
     "model-cache": {},
-    "authority-data": {}
+    "authority-data": {},
+    "object-data": {},
+    "object-config": {}
   }
 }

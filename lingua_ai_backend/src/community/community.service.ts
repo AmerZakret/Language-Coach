@@ -46,11 +46,12 @@ export class CommunityService {
       // Historical shared references also remain valid. Uncertain DB state is
       // preserved for manual reconciliation, never guessed to mean "unreferenced".
       if (await this.communityPostModel.exists({ imageUrl }).exec()) {
-        this.images.retain(imageUrl);
+        await this.images.retain(imageUrl);
         return;
       }
     } catch {
-      this.images.retain(imageUrl);
+      // Keep uncertain bytes; a failed ledger update never authorizes deletion.
+      if (!this.images.shared()) await this.images.retain(imageUrl);
       telemetry.emit(
         'upload.cleanup_failed',
         { domain: operation, failureCategory: 'reference_check_unavailable' },
@@ -108,7 +109,7 @@ export class CommunityService {
           },
           image
             ? async () => {
-                imageUrl = await this.images.store(image);
+                imageUrl = await this.images.store(image, userId);
               }
             : undefined,
         );
@@ -243,6 +244,8 @@ export class CommunityService {
                 message: 'Post changed. Refresh before editing.',
               });
             oldImageUrl = post.imageUrl;
+            if (newImageUrl || removeImage)
+              await this.images.prepareDelete(oldImageUrl, operationId, userId);
             const nextText = text === undefined ? post.text : text;
             if (!nextText && !image && (removeImage || !oldImageUrl))
               throw new BadRequestException('Post cannot be empty');
@@ -259,7 +262,7 @@ export class CommunityService {
                     code: 'STALE_RESOURCE_REVISION',
                     message: 'Post changed. Refresh before editing.',
                   });
-                newImageUrl = await this.images.store(image);
+                newImageUrl = await this.images.store(image, userId);
               }
             : undefined,
         );
@@ -299,6 +302,7 @@ export class CommunityService {
               message: 'Post changed. Refresh before deleting.',
             });
           imageUrl = post.imageUrl;
+          await this.images.prepareDelete(imageUrl, operationId, userId);
           await this.communityPostModel
             .deleteOne({ _id: id, userId }, { session })
             .exec();

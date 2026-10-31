@@ -1,5 +1,7 @@
 # Phase 11B-C1 independent timeline authority
 
+Phase 11B-C2 extends these permits to [remote community objects](COMMUNITY_OBJECT_STORAGE.md). Ambiguous remote acknowledgements retain the permit; host isolation must also terminate old server-side object work. Object history/reconciliation stays outside Mongo restoration. The conditional anti-rollback and global partial-isolation limitations remain unchanged.
+
 C1 implements independent control for disposable staging, not production authorization, shared uploads or unconditional multi-instance safety. The Phase 10 transactional Mongo fence, immutable receipt provenance, protocol v2 headers, client synchronization semantics and response codes remain in force.
 
 ## Trust boundaries and consistency

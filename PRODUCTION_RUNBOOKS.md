@@ -1,5 +1,7 @@
 # Production deployment and recovery runbooks
 
+Phase 11B-C2 adds [versioned private object storage and explicit object/Mongo reconciliation](COMMUNITY_OBJECT_STORAGE.md). For S3 deployments, use that coordinated object inventory/version boundary and C1 independent history, rather than assuming a restored Mongo snapshot matches current uploads. Historical local filesystem procedures remain applicable to compatibility deployments.
+
 For Phase 11B-C1 required-mode deployments, the
 [independent-authority procedure](INDEPENDENT_TIMELINE_AUTHORITY.md) extends the
 Phase 10 Mongo fence with separate PostgreSQL control, ledger and crash recovery.

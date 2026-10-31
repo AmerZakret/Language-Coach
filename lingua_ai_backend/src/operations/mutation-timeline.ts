@@ -12,7 +12,10 @@ import {
 } from '../compatibility/protocol-validation';
 import type { ProtocolPolicy } from '../compatibility/protocol-contract';
 import { telemetry } from './telemetry';
-import { DurableTimelineAuthority } from './durable-authority';
+import {
+  DurableTimelineAuthority,
+  DurableEffectContext,
+} from './durable-authority';
 
 export interface MutationAdmission {
   readonly dataTimelineId: string;
@@ -119,13 +122,18 @@ export class MutationTimeline {
   }
   async fileEffect<T>(
     kind: 'upload-store' | 'upload-remove',
-    work: (check: () => Promise<void>) => Promise<T>,
+    work: (
+      check: () => Promise<void>,
+      context?: DurableEffectContext,
+    ) => Promise<T>,
     admitted?: MutationAdmission,
   ): Promise<T> {
     const scope = await this.fresh(admitted);
     try {
-      return await this.gate.fileEffect(scope.dataTimelineId, kind, (check) =>
-        this.run(scope, () => work(check)),
+      return await this.gate.fileEffect(
+        scope.dataTimelineId,
+        kind,
+        (check, context) => this.run(scope, () => work(check, context)),
       );
     } catch (error) {
       if (error instanceof TimelineControlError)

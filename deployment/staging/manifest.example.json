@@ -46,5 +46,26 @@
     "generation": 1,
     "revision": 1,
     "writeMode": "CLOSED"
+  },
+  "objectStorage": {
+    "backend": "S3",
+    "bucketIdentity": "language-coach-c2-local",
+    "namespace": "community",
+    "environmentIdentity": "language-coach-11b-local",
+    "storageIdentity": "language-coach-11b-local_object-data",
+    "durabilityClass": "SINGLE_NODE_VERSIONED",
+    "artifactIdentity": "chrislusf/seaweedfs:4.51@sha256:f7a49e3f3972ebed5be2ed4befa4a0c68eb7bdddba6e692d42729ceb545134b8",
+    "applicationRoleIdentity": "c2-community-runtime",
+    "migrationState": "NEW_EMPTY",
+    "reconciliationStatus": "PENDING",
+    "readinessEvidence": {
+      "identity": "PENDING",
+      "privateAccess": "PENDING",
+      "crossProcess": "PENDING",
+      "reconciliation": "PENDING"
+    },
+    "verificationReference": "PENDING",
+    "timelineId": "44444444-4444-4444-8444-444444444444",
+    "generation": 1
   }
 }

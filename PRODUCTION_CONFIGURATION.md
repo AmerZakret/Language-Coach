@@ -1,5 +1,7 @@
 # Phase 8A production configuration contract
 
+Phase 11B-C2 production-like staging requires explicit shared S3 uploads with no filesystem fallback. See [the storage contract, credentials and recovery limits](COMMUNITY_OBJECT_STORAGE.md). Filesystem instructions below remain explicit legacy/local compatibility; no real migration or deployment is performed.
+
 Phase 11B-C1 adds an independent PostgreSQL authority in explicit DURABLE_REQUIRED
 mode. See [its configuration and limits](INDEPENDENT_TIMELINE_AUTHORITY.md).
 The disposable staging profile requires it; LEGACY_LOCAL injected configuration

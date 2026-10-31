@@ -27,6 +27,7 @@ import {
 } from 'node:path';
 import sharp from 'sharp';
 import { telemetry } from '../operations/telemetry';
+import { SharedCommunityStorage } from './shared-community.storage';
 
 export const COMMUNITY_IMAGE_LIMIT = 5 * 1024 * 1024;
 export const COMMUNITY_PIXEL_LIMIT = 16_000_000;
@@ -76,9 +77,47 @@ function detectedFormat(buffer: Buffer): RasterFormat | undefined {
 
 @Injectable()
 export class CommunityImageStorage {
-  constructor(@Optional() private readonly timeline?: MutationTimeline) {}
+  constructor(
+    @Optional() private readonly timeline?: MutationTimeline,
+    @Optional() private readonly sharedStorage?: SharedCommunityStorage,
+  ) {}
+  shared() {
+    return (
+      this.sharedStorage?.enabled() === true ||
+      process.env.UPLOAD_STORAGE_BACKEND === 'S3'
+    );
+  }
+  async checkSharedAvailability() {
+    if (!this.sharedStorage) throw new ServiceUnavailableException();
+    await this.sharedStorage.checkAvailability();
+  }
+  async readShared(url: string) {
+    if (!this.sharedStorage) throw new ServiceUnavailableException();
+    const result = await this.sharedStorage.read(url);
+    // Revalidate bytes before serving; metadata alone is not a raster proof.
+    await this.normalize({
+      buffer: result.buffer,
+      originalname: url.split('/').pop(),
+      mimetype: result.contentType,
+    } as Express.Multer.File);
+    return result;
+  }
+  async prepareDelete(
+    url: string | undefined,
+    operation: string | undefined,
+    owner: string,
+  ) {
+    if (!url || !this.shared()) return;
+    if (!operation || !this.sharedStorage)
+      throw new ServiceUnavailableException();
+    await this.sharedStorage.prepareDelete(url, operation, owner);
+  }
   private readonly staged = new Map<string, string>();
-  retain(imageUrl: string) {
+  async retain(imageUrl: string) {
+    if (this.shared()) {
+      if (!this.sharedStorage) throw new ServiceUnavailableException();
+      return this.sharedStorage.retain(imageUrl);
+    }
     this.staged.delete(imageUrl);
   }
   private async admitFileWrite() {
@@ -170,8 +209,13 @@ export class CommunityImageStorage {
       throw new Error('Image directory outside upload root');
   }
 
-  async store(file: Express.Multer.File): Promise<string> {
+  async store(file: Express.Multer.File, owner?: string): Promise<string> {
     const image = await this.normalize(file);
+    if (this.shared()) {
+      if (!this.sharedStorage || !owner)
+        throw new ServiceUnavailableException();
+      return this.sharedStorage.create(image, owner);
+    }
     return this.fileEffect('upload-store', async (check) => {
       await this.admitFileWrite();
       await check();
@@ -211,6 +255,10 @@ export class CommunityImageStorage {
   }
 
   async remove(imageUrl: string): Promise<void> {
+    if (this.shared()) {
+      if (!this.sharedStorage) throw new ServiceUnavailableException();
+      return this.sharedStorage.remove(imageUrl);
+    }
     if (this.timeline?.durableRequired())
       return this.fileEffect('upload-remove', (check) =>
         this.removeFile(imageUrl, check),

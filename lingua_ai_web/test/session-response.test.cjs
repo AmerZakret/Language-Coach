@@ -102,7 +102,7 @@ function harness(initial = {}) {
     policy: 'utils/syncRetryPolicy.ts', guard: 'utils/useSessionGuard.ts', auth: 'context/AuthContext.tsx',
     storage: 'utils/progressStorage.ts', types: 'types/progress.ts',
     progress: 'context/ProgressContext.tsx', target: 'context/TargetLanguageContext.tsx',
-    cards: 'pages/FlashcardsPage.tsx', queue: 'utils/offlineQueue.ts', authPage: 'components/auth/AuthPage.tsx',
+    cards: 'pages/FlashcardsPage.tsx', queue: 'utils/offlineQueue.ts', authPage: 'components/auth/AuthPage.tsx', communityImage: 'components/CommunityImage.tsx',
     profile: 'pages/ProfilePage.tsx', writing: 'pages/WritingPracticePage.tsx', pronunciation: 'pages/PronunciationPracticePage.tsx', language: 'utils/targetLanguage.ts', mutation: 'utils/flashcardMutation.ts', communityCache: 'utils/communityFeedCache.ts', community: 'pages/CommunityPage.tsx', coach: 'pages/AiCoachPage.tsx' };
   const exposed = {
     cards: 'fetchCards, handleSaveCard, handleDeleteCard, handleStudyScore, handleOpenAdd, handleOpenEdit, setFormData, allCards, dueCards, loading, error, successMsg, modal, studyResults, startStudy, studyFinished, currentStudyIndex',
@@ -180,6 +180,7 @@ function harness(initial = {}) {
         if (path.endsWith('/TargetLanguageContext')) return { useTargetLanguage: () => ({ targetLanguage: h.language }) };
         if (path.endsWith('/NetworkContext')) return { useNetwork: () => ({ isOffline: h.isOffline }) };
         if (path.endsWith('/ThemeContext')) return { useTheme: () => ({ isDark: false }) };
+        if (path.endsWith('/CommunityImage')) return load('communityImage');
         if (path.endsWith('/LanguageContext')) return { useLanguage: () => ({ t: translate, language: 'en' }) };
         if (path.endsWith('/SoundContext')) return { useSound: () => ({}) };
         if (path.endsWith('/levelUtils')) return { getLevelFromXp: () => 'Beginner' };

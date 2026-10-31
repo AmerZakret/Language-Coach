@@ -13,7 +13,7 @@ test('11B-B static staging topology agrees and remains explicitly unprovisioned'
     externalTimelineControl: 'DURABLE_POSTGRESQL_C1', artifactDigestsPending: true,
     liveInfrastructureVerified: false,
   });
-  assert.throws(() => validate(true), /actual artifact digests/);
+  assert.throws(() => validate(true), /object storage readiness evidence/);
   assert.deepEqual(validate(false, path.join(base, 'manifest.example.json'), 'phase11b-local'), validate());
   assert.throws(() => validate(false, path.join(base, 'manifest.example.json'), 'different-build'), /build identity/);
   assert.throws(() => validate(false, path.join(base, 'manifest.example.json'), 'phase11b-local', '11111111-1111-4111-8111-111111111111'), /timeline does not match/);
@@ -30,6 +30,17 @@ test('C1 rejects missing authority, shared Mongo volume, public control port and
   assert.throws(()=>validateCompose(legacy,manifest()), /durable backend/);
   const leaked=manifest();leaked.note=['postgresql://','synthetic',':synthetic','@authority:5432/test'].join('');
   assert.throws(()=>validateManifest(leaked), /credentialed authority URI/);
+});
+
+test('C2 rejects wrong identity, namespace, fallback, public ports, broad credentials and missing evidence',()=>{
+  for(const change of [{backend:'FILESYSTEM'},{namespace:'other'},{environmentIdentity:'other'},{storageIdentity:'wrong-store'},{migrationState:'AUTO_COPY'},{timelineId:'11111111-1111-4111-8111-111111111111'},{generation:99}]){
+    const m=manifest();Object.assign(m.objectStorage,change);assert.throws(()=>validateManifest(m),/object storage manifest/);
+  }
+  const missing=manifest();delete missing.objectStorage.readinessEvidence;assert.throws(()=>validateManifest(missing,true),/readiness evidence/);
+  for(const service of ['object-store','object-data','object-bootstrap','object-config']){const c=compose();c.services[service].ports=['8333:8333'];assert.throws(()=>validateCompose(c,manifest()),/must remain private/);}
+  const c=compose();c.services.backend.networks.push('object-control');assert.throws(()=>validateCompose(c,manifest()),/management network isolation/);
+  const admin=compose();admin.services.backend.environment.STAGING_OBJECT_ADMIN_SECRET_KEY='not-a-runtime-capability';assert.throws(()=>validateCompose(admin,manifest()),/restricted object runtime/);
+  const secret=manifest();secret.objectStorage.accessKey='not-public';assert.throws(()=>validateManifest(secret),/secret\/config field/);
 });
 
 test('manifest rejects production identity, invalid timeline, secret fields and public local endpoints', () => {
@@ -95,4 +106,19 @@ test('R2 requires durable effect fencing and verifiable stopped writers before i
   const attached=structuredClone(networks);attached[0].Containers.unknown={};
   assert.throws(()=>validateInventory(project,[mongo,authority,backend],attached), /UNISOLATED/);
   assert.throws(()=>validateInventory('production',[mongo,authority],networks), /DISPOSABLE/);
+});
+
+test('C2 isolation detects S3 under the default staging project and requires all object networks',()=>{
+  const {validateInventory}=require('../deployment/staging/verify-file-isolation.cjs');
+  const project='language-coach-11b-local';
+  const store=(service,id,image,mounts=[])=>({Id:id,Config:{Image:image,Labels:{'com.docker.compose.project':project,'com.docker.compose.service':service}},State:{Running:true},HostConfig:{PortBindings:{},RestartPolicy:{Name:'no'}},Mounts:mounts.map(([Destination,volume])=>({Destination,Name:project+'_'+volume}))});
+  const m=store('mongo','m','mongo:7.0.45-jammy',[['/data/db','mongo-data']]),p=store('authority','p','postgres:17.9-bookworm',[['/var/lib/postgresql/data','authority-data']]);
+  const data=store('object-data','d',compose().services['object-data'].image,[['/data','object-data']]),s3=store('object-store','s','caddy:2.11.6-alpine');
+  const networks=[['control',['p']],['database',['m']],['objects',['s']],['object-control',['s','d']]].map(([name,ids])=>({Name:project+'_'+name,Internal:true,Containers:Object.fromEntries(ids.map(id=>[id,{}]))}));
+  assert.equal(validateInventory(project,[m,p,data,s3],networks)['object-data'].Id,'d');
+  assert.throws(()=>validateInventory(project,[m,p,data,s3],networks.slice(0,2)),/BOTH_PRIVATE_NETWORKS/);
+  const unknown=structuredClone(networks);unknown[3].Containers.unaccounted={};
+  assert.throws(()=>validateInventory(project,[m,p,data,s3],unknown),/UNISOLATED/);
+  const backend={Config:{Env:['UPLOAD_STORAGE_BACKEND=S3'],Labels:{'com.docker.compose.project':project,'com.docker.compose.service':'backend'}},State:{Running:false},HostConfig:{RestartPolicy:{Name:'no'}}};
+  assert.throws(()=>validateInventory(project,[m,p,backend],networks.slice(0,2)),/PRIVATE_OBJECT_STORES/);
 });

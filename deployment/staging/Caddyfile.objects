@@ -1,0 +1,10 @@
+{
+  admin off
+  auto_https off
+}
+:8333 {
+  request_body {
+    max_size 6MB
+  }
+  reverse_proxy object-data:8333
+}

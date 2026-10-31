@@ -21,7 +21,7 @@ function rejectSecretFields(value) {
   if (Array.isArray(value)) return value.forEach(rejectSecretFields);
   if (!value || typeof value !== 'object') return;
   for (const [key, child] of Object.entries(value)) {
-    if (/(?:secret|token|password|credential|private.?key|api.?key|uri)/i.test(key)) fail('secret/config field does not belong in public manifest');
+    if (/(?:secret|token|password|credential|access.?key|private.?key|api.?key|uri)/i.test(key)) fail('secret/config field does not belong in public manifest');
     rejectSecretFields(child);
   }
 }
@@ -40,6 +40,16 @@ function validateManifest(m, strict = false) {
   if (m.backendInstances !== 1 || m.externalTimelineControl !== 'DURABLE_POSTGRESQL_C1') fail('one backend and explicit durable authority required');
   const a = m.authority;
   const project = m.composeProjectIdentity || 'language-coach-11b-local';
+  const o=m.objectStorage;
+  if(!o||o.backend!=='S3'||o.bucketIdentity!=='language-coach-c2-local'||o.namespace!=='community'||
+     o.environmentIdentity!=='language-coach-11b-local'||o.storageIdentity!==`${project}_object-data`||
+     o.durabilityClass!=='SINGLE_NODE_VERSIONED'||o.applicationRoleIdentity!=='c2-community-runtime'||
+     o.artifactIdentity!=='chrislusf/seaweedfs:4.51@sha256:f7a49e3f3972ebed5be2ed4befa4a0c68eb7bdddba6e692d42729ceb545134b8'||
+     !['NEW_EMPTY','VERIFIED_COPY'].includes(o.migrationState)||!['PENDING','VERIFIED'].includes(o.reconciliationStatus)||
+     o.timelineId!==m.dataTimelineId||(a&&o.generation!==a.generation))fail('shared object storage manifest contract mismatch');
+  if(strict&&(o.reconciliationStatus!=='VERIFIED'||!o.readinessEvidence||
+     ['identity','privateAccess','crossProcess','reconciliation'].some(k=>o.readinessEvidence[k]!=='VERIFIED')||
+     !publicId.test(o.verificationReference||'')))fail('verified object storage readiness evidence required');
   if (!/^language-coach-[a-z0-9-]+$/.test(project)) fail('invalid disposable compose project identity');
   if (!a || a.type !== 'postgresql' || a.mode !== 'DURABLE_REQUIRED' || a.fileEffectFencing !== 'DURABLE_EFFECTS_V1' ||
       a.environmentIdentity !== 'language-coach-11b-local' ||
@@ -55,7 +65,7 @@ function validateManifest(m, strict = false) {
   endpoint(m.pronunciation?.internalUrl, 'private');
   const web = endpoint(m.ingress?.webUrl, 'public');
   const api = endpoint(m.ingress?.apiUrl, 'public');
-  if (web.hostname !== 'app.staging.test' || api.hostname !== 'api.staging.test' || web.port !== '8443' || api.port !== '8443' || !/^172\.30\.(50|51|52)\.10$/.test(m.ingress?.trustedProxyIp || '')) fail('local ingress identity mismatch');
+  if (web.hostname !== 'app.staging.test' || api.hostname !== 'api.staging.test' || web.port !== '8443' || api.port !== '8443' || !/^172\.30\.(50|51|52|53)\.10$/.test(m.ingress?.trustedProxyIp || '')) fail('local ingress identity mismatch');
   for (const key of ['backendSha256', 'webSha256', 'pronunciationSha256']) {
     const value = safeText(m.artifacts?.[key]);
     if (value !== 'PENDING_BUILD' && !sha.test(value)) fail('artifact digest shape invalid');
@@ -69,7 +79,7 @@ function validateManifest(m, strict = false) {
 function serviceNetworks(service) { return Array.isArray(service.networks) ? service.networks : Object.keys(service.networks || {}); }
 function validateCompose(c, m) {
   const s = c.services || {};
-  const allowedServices = ['authority','backend','backend-tools','ingress','mongo','mongo-init','pronunciation','web'];
+  const allowedServices = ['authority','backend','backend-tools','ingress','mongo','mongo-init','object-bootstrap','object-config','object-data','object-store','pronunciation','web'];
   if (c.name !== (m.composeProjectIdentity || 'language-coach-11b-local') || JSON.stringify(Object.keys(s).sort()) !== JSON.stringify(allowedServices)) fail('compose service inventory mismatch');
   if (Object.values(s).some(service => service.network_mode === 'host' || service.privileged === true)) fail('host networking/privileged service forbidden');
   if (s.backend.deploy?.replicas !== 1 || s.backend.ports || s.web.ports || s.mongo.ports || s.pronunciation.ports || s['mongo-init'].ports) fail('only ingress may publish a port; backend scale fixed at one');
@@ -93,6 +103,26 @@ function validateCompose(c, m) {
   }
   if (s.backend.environment.AUTHORITY_OPERATOR_URL || s.backend.environment.AUTHORITY_OPERATOR_INTENT)
     fail('operator authority must be absent from application runtime');
+  for(const name of ['object-data','object-store','object-config','object-bootstrap'])if(s[name].ports)fail('object store must remain private');
+  if(s['object-data'].image!==m.objectStorage.artifactIdentity||s['object-data'].user!=='10001:10001'||
+     JSON.stringify(s['object-data'].networks)!==JSON.stringify(['object-control'])||
+     !s['object-data'].volumes.includes('object-data:/data')||!s['object-data'].volumes.includes('object-config:/config:ro')||
+     !s['object-data'].command.includes('-s3.iam=false')||!s['object-data'].command.includes('-admin.ui=false')||
+     !s['object-data'].command.includes('-webdav=false')||!s['object-data'].command.includes('-master.telemetry=false')||
+     !c.networks.objects?.internal||!c.networks['object-control']?.internal||!c.volumes['object-data']||!c.volumes['object-config'])fail('isolated pinned object-store contract mismatch');
+  if(JSON.stringify(serviceNetworks(s['object-store']))!==JSON.stringify(['objects','object-control'])||
+     serviceNetworks(s.backend).includes('object-control')||serviceNetworks(s['backend-tools']).includes('object-control')||
+     serviceNetworks(s.ingress).includes('objects')||serviceNetworks(s.web).includes('objects'))fail('object management network isolation required');
+  for(const name of ['backend','backend-tools']){
+    const e=s[name].environment;
+    if(e.UPLOAD_STORAGE_BACKEND!=='S3'||e.UPLOAD_MIGRATION_STATE!==m.objectStorage.migrationState||
+       e.OBJECT_STORAGE_ENDPOINT!=='http://object-store:8333'||e.OBJECT_STORAGE_BUCKET!==m.objectStorage.bucketIdentity||
+       e.OBJECT_STORAGE_NAMESPACE!==m.objectStorage.namespace||e.OBJECT_STORAGE_IDENTITY!==m.objectStorage.storageIdentity||
+       e.OBJECT_STORAGE_ROLE!==m.objectStorage.applicationRoleIdentity||!serviceNetworks(s[name]).includes('objects')||
+       !e.OBJECT_STORAGE_ACCESS_KEY?.startsWith('${STAGING_OBJECT_APP_ACCESS_KEY:?')||
+       !e.OBJECT_STORAGE_SECRET_KEY?.startsWith('${STAGING_OBJECT_APP_SECRET_KEY:?')||
+       Object.keys(e).some(k=>/^STAGING_OBJECT_ADMIN/.test(k)))fail('restricted object runtime configuration required');
+  }
   if (s.mongo.image !== 'mongo:7.0.45-jammy' || s['mongo-init'].image !== s.mongo.image || !s.mongo.command.includes('--replSet') || !s.mongo.command.includes('staging-rs')) fail('pinned replica-set Mongo required');
   const disposableUri = `mongodb://${m.mongo.host}/${m.mongo.database}?replicaSet=${m.mongo.replicaSet}`;
   if (s.backend.environment?.MONGODB_URI !== disposableUri || s['backend-tools'].environment?.MONGODB_URI !== disposableUri) fail('Mongo target must be fixed to disposable Compose replica set');
@@ -125,6 +155,8 @@ function validateFiles() {
   const ignore = fs.readFileSync(path.join(root, '.dockerignore'), 'utf8');
   for (const pattern of ['.git','**/node_modules','**/.env.*','**/uploads','**/model-cache','**/*.map']) if (!ignore.includes(pattern)) fail('unsafe Docker build context exclusion');
   const template = read('.env.staging.example');
+  const objects=read('Caddyfile.objects');
+  if(!objects.includes('admin off')||!objects.includes('reverse_proxy object-data:8333')||/reverse_proxy.*(?:8888|9333|9340)/.test(objects))fail('S3-only object proxy required');
   if (!template.includes(`STAGING_TIMELINE_ID=${load('manifest.example.json').dataTimelineId}`) || !template.includes('STAGING_DATA_WRITE_MODE=CLOSED') || /^STAGING_MONGODB_URI=/m.test(template)) fail('staging configuration template drift');
   for (const name of ['Dockerfile.backend','Dockerfile.web','Dockerfile.pronunciation','Caddyfile.ingress','Caddyfile.web','compose.json','manifest.example.json']) safeText(read(name));
 }

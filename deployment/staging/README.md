@@ -1,5 +1,13 @@
 # 11B-B disposable staging topology
 
+Phase 11B-C2 now selects private, versioned S3-compatible community storage. See [the C2 contract](../../COMMUNITY_OBJECT_STORAGE.md); older filesystem/control setup below is historical compatibility material, not the current bootstrap procedure.
+
+For a **new empty disposable C2 environment only**, generate four distinct synthetic 64-character hex object credentials in the ignored env file. Explicitly set `STAGING_OBJECT_CONFIG_INIT=I_ACKNOWLEDGE_DISPOSABLE_OBJECT_STORE` before starting object services. This one-shot initializer preserves retained configuration/data and refuses implicit credential changes. No host object-store/console port is published; the S3-only proxy is on an internal network and the underlying management APIs are on another internal network inaccessible to backend/tools.
+
+After PostgreSQL/Mongo/private object services are available, set `STAGING_OBJECT_BOOTSTRAP=I_ACKNOWLEDGE_NEW_EMPTY_OBJECT_STORAGE` and the existing authority operator intent, then explicitly run the tools-profile `object-bootstrap` service. Provision empty Mongo indexes with `backend-tools`, and explicitly initialize the authority CLOSED. Run `object-reconcile-cli --plan /plans/reconcile.json` with the observed revision/timeline/generation and public isolation/history/recovery references. Only then use the existing durable coordinator's explicit OPEN procedure. Both normal and live preflight remain separate from bootstrap; no backend silently creates a bucket or regenerates history.
+
+If a remote effect is interrupted, keep CLOSED, stop all writers and disable restart paths. Restart only the isolated C2 object-data/proxy after that effect while retaining volumes, inspect exact version/checksum and Mongo/ledger evidence, then use the host isolation gate and existing admin receipt plus operator resolution. A same-timeline established delete may be retried explicitly with `object-effects-cli`; A intents never become B work. For restore, install fresh B CLOSED, verify/adopt current exact references using `object-reconcile-cli`, retain absent/orphan objects, then separately reconcile/open. Do not run these new-empty tools as production migration or reset commands.
+
 This Compose stack is a **local simulation**, not an externally provisioned staging or production deployment. It fixes the backend at one instance and uses a single-node MongoDB 7.0.45 replica set for transaction and index-contract exercises. It cannot prove failover, capacity, shared uploads across replicas, external timeline control, public TLS ownership, or model quality.
 
 ## Prerequisites and configuration
