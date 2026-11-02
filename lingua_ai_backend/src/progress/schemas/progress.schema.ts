@@ -17,6 +17,13 @@ export class Progress extends Document {
 
   @Prop({ required: true })
   targetLanguage: string;
+
+  // Future awards only: no defaults or backfill for historical completions.
+  @Prop({ type: Number, min: 0, validate: Number.isSafeInteger })
+  awardedXp?: number;
+
+  @Prop({ type: Number, min: 0, validate: Number.isSafeInteger })
+  progressEpoch?: number;
 }
 
 export const ProgressSchema = SchemaFactory.createForClass(Progress);

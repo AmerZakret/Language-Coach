@@ -1,33 +1,41 @@
-import React, { useState } from 'react';
+import { dataTimeline } from '../../utils/dataTimeline';
+import { targetLanguageCode } from '../../utils/targetLanguage';
+import React, { useRef, useState } from 'react';
 import { useAuth } from '../../context/AuthContext';
 import { useLanguage } from '../../context/LanguageContext';
 import { useTargetLanguage } from '../../context/TargetLanguageContext';
 import { Button } from '../common/Button';
 import { Plus, Brain } from 'lucide-react';
 import apiClient from '../../api/apiClient';
+import { createFlashcardOperationId } from '../../utils/flashcardMutation';
+import { getSessionRequestConfig } from '../../utils/queueSession';
 import './QuickAddFlashcard.css';
 
 export const QuickAddFlashcard: React.FC = () => {
   const { user } = useAuth();
+  const timeline = dataTimeline.context();
   const { t } = useLanguage();
   const { targetLanguage } = useTargetLanguage();
   const [word, setWord] = useState('');
   const [translation, setTranslation] = useState('');
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
+  const pending = useRef<{ key: string; id: string; dataTimelineId: string } | null>(null);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!word || !translation || !user) return;
+    if (!word || !translation || !user || !dataTimeline.isContext(timeline)) return;
+    const key = JSON.stringify([user.id, targetLanguage, word, translation]);
+    if (pending.current?.key !== key) pending.current = { key, id: createFlashcardOperationId(), ...dataTimeline.capture() };
 
     setLoading(true);
     try {
       await apiClient.post('/flashcards', {
-        userId: user.id || user.email,
         targetWord: word,
         turkishTranslation: translation,
-        targetLanguage
-      });
+        targetLanguage: targetLanguageCode(targetLanguage)
+      }, { ...getSessionRequestConfig(), dataTimelineId: pending.current.dataTimelineId, headers: { 'X-Idempotency-Key': pending.current.id } });
+      pending.current = null;
       setSuccess(true);
       setWord('');
       setTranslation('');

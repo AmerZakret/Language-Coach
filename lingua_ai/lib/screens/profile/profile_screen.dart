@@ -11,12 +11,14 @@ import '../../core/localization/target_language_service.dart';
 import '../../widgets/target_language_modal.dart';
 import '../../core/routes/app_routes.dart';
 import '../../services/user_api_service.dart';
+import '../../services/api_response.dart';
 
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
 
   void _showEditNameDialog(BuildContext context, AuthService auth, LanguageService lang) {
     if (auth.isGuest) return;
+    final session = auth.captureSession();
 
     final controller = TextEditingController(text: auth.currentUserName);
 
@@ -51,16 +53,21 @@ class ProfileScreen extends StatelessWidget {
             ),
             TextButton(
               onPressed: () async {
+                if (!session.isDataCurrent || !context.mounted) return;
                 final newName = controller.text.trim();
                 if (newName.isNotEmpty && newName != auth.currentUserName) {
                   try {
                     await UserApiService().updateProfile(name: newName);
+                    if (!session.isDataCurrent || !context.mounted) return;
                     auth.updateName(newName);
                   } catch (e) {
-                    debugPrint('Failed to update name: $e');
+                    if (context.mounted && canHandleApiError(session, e)) {
+                      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.toString())));
+                    }
+                    return;
                   }
                 }
-                if (context.mounted) {
+                if (context.mounted && session.isDataCurrent) {
                   Navigator.pop(context);
                 }
               },

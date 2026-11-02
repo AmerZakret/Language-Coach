@@ -1,35 +1,22 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { backendReachability } from '../utils/backendReachability';
+import type { ReachabilityState } from '../utils/backendReachability';
 
-interface NetworkContextType {
-  isOffline: boolean;
-}
-
-const NetworkContext = createContext<NetworkContextType>({ isOffline: false });
-
+interface NetworkContextType extends ReachabilityState { isOffline: boolean }
+const NetworkContext = createContext<NetworkContextType>({
+  isOffline: true, networkAvailable: true, backendReachable: false, backendState: 'unknown',
+});
 export const NetworkProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [isOffline, setIsOffline] = useState<boolean>(!navigator.onLine);
-
+  const [state, setState] = useState(backendReachability.snapshot);
   useEffect(() => {
-    const handleOnline = () => setIsOffline(false);
-    const handleOffline = () => setIsOffline(true);
-
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-
-    // Initial check
-    setIsOffline(!navigator.onLine);
-
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-    };
+    const unsubscribe = backendReachability.subscribe(() => setState(backendReachability.snapshot()));
+    backendReachability.start();
+    return () => { unsubscribe(); backendReachability.stop(); };
   }, []);
-
   return (
-    <NetworkContext.Provider value={{ isOffline }}>
+    <NetworkContext.Provider value={{ ...state, isOffline: !state.networkAvailable || !state.backendReachable }}>
       {children}
     </NetworkContext.Provider>
   );
 };
-
 export const useNetwork = () => useContext(NetworkContext);

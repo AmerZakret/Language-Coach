@@ -1,127 +1,455 @@
+import { readTimelineCache } from './timelineCache';
+import { dataTimeline, isDataTimelineId, TimelineRecoveryRequired } from './dataTimeline';
+import { CLIENT_PROTOCOL_REVISION } from './clientProtocol';
+import { releaseCompatibility } from './releaseCompatibility';
+import { targetLanguageCode, tryTargetLanguageCode } from './targetLanguage';
+import { classifySyncFailure, retryDelay, withReplayTimeout, REPLAY_TIMEOUT_MS, InvalidQueuedPayload } from './syncRetryPolicy';
+import type { RetryState } from './syncRetryPolicy';
+import { acknowledgeCompletion, acknowledgeProgressEpoch, getOwnerProgressEpoch, validProgressEpoch, resetOwnerProgress, saveProgress, loadProgress, parseProgress } from './progressStorage';
+import type { ProgressState } from '../types/progress';
+import type { TargetLanguage } from '../types/language';
 import apiClient from '../api/apiClient';
+import type { AxiosRequestConfig } from 'axios';
+import { getOfflineQueueSession, isOfflineQueueSessionActive, invalidateCurrentSession } from './queueSession';
+import type { QueueSession } from './queueSession';
+import { withBrowserLock, withOwnerStorage, coordinationAvailable, ownerLockName } from './browserCoordination';
+import { isSessionCurrent } from './queueSession';
+import { serializeFlashcardMutation } from './flashcardMutation';
 
-export interface OfflineAction {
-  id: string;
-  type: 'complete-lesson' | 'create-flashcard' | 'update-flashcard' | 'delete-flashcard' | 'review-flashcard';
-  payload: any;
+export interface OfflineAction extends RetryState {
+  readonly dataTimelineId?: string;
+  readonly clientProtocolRevision?: number;
+  readonly id: string;
+  readonly type: 'reset-progress' | 'complete-lesson' | 'create-flashcard' | 'update-flashcard' | 'delete-flashcard' | 'review-flashcard';
+  readonly ownerNamespace: string;
+  readonly payload: any;
+  readonly createdAt: string;
+  readonly schemaVersion: 1 | 2;
+}
+interface QueueState {
+  schemaVersion: 3;
+  ownerNamespace: string;
+  actions: OfflineAction[];
+  tempIds: Record<string, string>;
+  tempIdTimelines?: Record<string, string>;
+  // Dispatched creates stay dependency-backed after restart/ambiguous failure;
+  // only creates never dispatched may be edited in place or cancelled.
+  startedCreates: string[];
+  progressRevision?: string;
+  failedActions?: OfflineAction[];
+}
+const QUEUE_STORAGE_KEY = 'linguaai_offline_queue';
+const QUARANTINE_STORAGE_KEY = `${QUEUE_STORAGE_KEY}_legacy_unowned`;
+const ownerStorageKey = (owner: string) => `${QUEUE_STORAGE_KEY}_${encodeURIComponent(owner)}`;
+const drainingOwners = new Set<string>();
+const queueListeners = new Set<(external?: boolean) => void>();
+export const subscribeOfflineQueue = (listener: (external?: boolean) => void): (() => void) => {
+  queueListeners.add(listener); return () => { queueListeners.delete(listener); };
+};
+const drainWaiters = new Map<string, Promise<void>>();
+if (typeof window !== 'undefined' && window.addEventListener) window.addEventListener('storage', event => {
+  const owner = getOfflineQueueSession().ownerNamespace;
+  if ((event.key === null || event.key === ownerStorageKey(owner) || event.key === `progress_epoch_${owner}`
+    || event.key?.startsWith(`progress_${owner}_`))
+    && (!event.storageArea || event.storageArea === localStorage)) {
+    for (const listener of queueListeners) listener(true);
+  }
+});
+function assertOwner(owner: string, session: QueueSession): void {
+  if (session.ownerNamespace !== owner || !isSessionCurrent(session)) throw new Error('Queue owner/session changed');
+}
+async function mutateOwner<T>(owner: string, session: QueueSession, work: (state: QueueState) => T): Promise<T> {
+  assertOwner(owner, session);
+  if (localStorage.getItem(QUEUE_STORAGE_KEY) !== null) {
+    await withBrowserLock('linguaai:queue:legacy', () => { assertOwner(owner, session); quarantineLegacyQueue(); });
+  }
+  return withOwnerStorage(owner, () => {
+    assertOwner(owner, session);
+    return work(readState(owner));
+  });
 }
 
-const QUEUE_STORAGE_KEY = 'linguaai_offline_queue';
-
-export const getOfflineQueue = (): OfflineAction[] => {
-  const data = localStorage.getItem(QUEUE_STORAGE_KEY);
-  if (!data) return [];
-  try {
-    return JSON.parse(data);
-  } catch {
-    return [];
-  }
-};
-
-export const saveOfflineQueue = (queue: OfflineAction[]): void => {
-  localStorage.setItem(QUEUE_STORAGE_KEY, JSON.stringify(queue));
-};
-
-export const pushToOfflineQueue = (type: OfflineAction['type'], payload: any): void => {
-  const queue = getOfflineQueue();
-  const action: OfflineAction = {
-    id: `action_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
-    type,
-    payload,
-  };
-  queue.push(action);
-  saveOfflineQueue(queue);
-};
-
-export const clearOfflineQueue = (): void => {
-  localStorage.removeItem(QUEUE_STORAGE_KEY);
-};
-
-export const processOfflineQueue = async (userId: string): Promise<boolean> => {
-  const queue = getOfflineQueue();
-  if (queue.length === 0) return true;
-
-  console.log(`Processing offline queue containing ${queue.length} actions...`);
-  
-  const idMap = new Map<string, string>(); // Maps temporary local_... IDs to server-generated MongoDB _ids
-  const remainingActions: OfflineAction[] = [];
-  let success = true;
-
-  for (const action of queue) {
+function quarantineLegacyQueue(): void {
+  const legacy = localStorage.getItem(QUEUE_STORAGE_KEY);
+  if (legacy === null) return;
+  // Preserve raw ownerless data. No inferred ownership or temp-ID recovery.
+  const saved = localStorage.getItem(QUARANTINE_STORAGE_KEY);
+  let snapshots: string[] = [];
+  if (saved !== null) {
     try {
-      // 1. Rewrite payload if it references a temporary card ID that was resolved earlier in this run
-      let payload = { ...action.payload };
-
-      if (action.type === 'update-flashcard' || action.type === 'delete-flashcard' || action.type === 'review-flashcard') {
-        const cardId = payload.cardId || payload.id;
-        if (cardId && idMap.has(cardId)) {
-          const newId = idMap.get(cardId)!;
-          if (payload.cardId) payload.cardId = newId;
-          if (payload.id) payload.id = newId;
-        }
-      }
-
-      // 2. Process action by calling the appropriate endpoint
-      switch (action.type) {
-        case 'complete-lesson':
-          await apiClient.post(`/progress/${userId}/complete-lesson`, {
-            lessonId: payload.lessonId,
-            score: payload.score || 100,
-          });
-          break;
-
-        case 'create-flashcard': {
-          const response = await apiClient.post('/flashcards', {
-            userId: payload.userId,
-            targetWord: payload.targetWord,
-            turkishTranslation: payload.turkishTranslation,
-            targetLanguage: payload.targetLanguage,
-            nativeLanguage: payload.nativeLanguage,
-            nativeTranslation: payload.nativeTranslation,
-            exampleSentence: payload.exampleSentence,
-            note: payload.note,
-          });
-          // Map the temporary local ID to the new server ID
-          if (payload.tempId && response.data?._id) {
-            idMap.set(payload.tempId, response.data._id);
-          }
-          break;
-        }
-
-        case 'update-flashcard': {
-          const cardId = payload.cardId || payload.id;
-          await apiClient.put(`/flashcards/${cardId}`, {
-            targetWord: payload.targetWord,
-            turkishTranslation: payload.turkishTranslation,
-            targetLanguage: payload.targetLanguage,
-            exampleSentence: payload.exampleSentence,
-            note: payload.note,
-          });
-          break;
-        }
-
-        case 'delete-flashcard': {
-          const cardId = payload.cardId || payload.id;
-          await apiClient.delete(`/flashcards/${cardId}`);
-          break;
-        }
-
-        case 'review-flashcard': {
-          const cardId = payload.cardId || payload.id;
-          await apiClient.put(`/flashcards/${cardId}/review`, {
-            score: payload.score,
-          });
-          break;
-        }
-      }
-    } catch (error) {
-      console.error(`Offline queue action failed: ${action.type}`, error);
-      // Keep failed action in the queue for a retry later
-      remainingActions.push(action);
-      success = false;
-    }
+      const parsed = JSON.parse(saved);
+      snapshots = Array.isArray(parsed) && parsed.every(item => typeof item === 'string') ? parsed : [saved];
+    } catch { snapshots = [saved]; }
   }
+  if (!snapshots.includes(legacy)) snapshots.push(legacy);
+  localStorage.setItem(QUARANTINE_STORAGE_KEY, JSON.stringify(snapshots));
+  if (localStorage.getItem(QUEUE_STORAGE_KEY) === legacy) localStorage.removeItem(QUEUE_STORAGE_KEY);
+}
 
-  saveOfflineQueue(remainingActions);
-  return success;
+function readState(owner: string): QueueState {
+  const raw = localStorage.getItem(ownerStorageKey(owner));
+  if (!raw) return { schemaVersion: 3, ownerNamespace: owner, actions: [], tempIds: {}, startedCreates: [] };
+  const parsed = JSON.parse(raw);
+  // Phase 4A actions migrate without changing IDs, owners, payloads, or order.
+  const state: QueueState = Array.isArray(parsed)
+    ? { schemaVersion: 3, ownerNamespace: owner, actions: parsed, tempIds: {}, startedCreates: [] } : parsed;
+  if (!state || ![2, 3].includes(state.schemaVersion) || state.ownerNamespace !== owner
+    || !state.tempIds || typeof state.tempIds !== 'object' || Array.isArray(state.tempIds)
+    || Object.values(state.tempIds).some(id => typeof id !== 'string' || !id || id.startsWith('local_'))
+    || (state.tempIdTimelines !== undefined && (!state.tempIdTimelines || typeof state.tempIdTimelines !== 'object' || Object.values(state.tempIdTimelines).some(id => !isDataTimelineId(id))))
+    || !Array.isArray(state.startedCreates) || state.startedCreates.some(id => typeof id !== 'string')
+    || !Array.isArray(state.actions) || state.actions.some(action => !action
+      || ![1, 2].includes(action.schemaVersion)
+      || (action.dataTimelineId !== undefined && !isDataTimelineId(action.dataTimelineId))
+      || (action.schemaVersion === 2 && !isDataTimelineId(action.dataTimelineId)) || typeof action.ownerNamespace !== 'string' || !action.ownerNamespace
+      || (action.clientProtocolRevision !== undefined && (!Number.isInteger(action.clientProtocolRevision) || action.clientProtocolRevision < 0 || action.clientProtocolRevision > 999999))
+      || typeof action.createdAt !== 'string' || !Number.isFinite(Date.parse(action.createdAt)))) throw new Error('Offline queue has no supported ownership schema');
+  state.schemaVersion = 3;
+  state.failedActions ??= [];
+  if (!Array.isArray(state.failedActions) || state.failedActions.some(a => a.ownerNamespace !== owner || (a.dataTimelineId !== undefined && !isDataTimelineId(a.dataTimelineId)))) throw new Error('Failed queue owner mismatch');
+  return state;
+}
+
+// Called only inside the owner storage lock. Each mutation reloads this record.
+function writeState(state: QueueState): void {
+  if (state.actions.some(a => a.ownerNamespace !== state.ownerNamespace)) throw new Error('Queue owner mismatch');
+  if (state.failedActions?.some(a => a.ownerNamespace !== state.ownerNamespace)) throw new Error('Failed queue owner mismatch');
+  localStorage.setItem(ownerStorageKey(state.ownerNamespace), JSON.stringify(state));
+  for (const listener of queueListeners) listener();
+}
+const dependent = (type: string) => ['update-flashcard', 'delete-flashcard', 'review-flashcard'].includes(type);
+const cardId = (payload: any): string | undefined => payload.cardId ?? payload.id;
+function resolvePayload(state: QueueState, type: string, payload: OfflineAction['payload'], timeline?: string): OfflineAction['payload'] {
+  const value = { ...payload };
+  const id = cardId(value);
+  const mapped = id && Object.hasOwn(state.tempIds, id) ? state.tempIds[id] : undefined;
+  if (dependent(type) && mapped && timeline !== undefined && state.tempIdTimelines?.[id!] === timeline) {
+    if ('cardId' in value) value.cardId = mapped;
+    if ('id' in value) value.id = mapped;
+  }
+  return value;
+}
+
+// Enrich existing owned completion actions only from recorded lesson metadata
+// or a uniquely attributable owner cache. Never invent a score or an owner.
+export async function preparePendingProgress(owner: string, legacyOwner?: string): Promise<void> {
+  const session = getOfflineQueueSession();
+  await mutateOwner(owner, session, state => {
+    if (legacyOwner) for (const language of ['English', 'German', 'Spanish', 'French', 'Arabic']) loadProgress(owner, language, legacyOwner);
+    let changed = false;
+    state.actions = state.actions.map(action => {
+      if (dataTimeline.provenance(action) !== 'CURRENT' || action.ownerNamespace !== owner || action.type !== 'complete-lesson' || action.payload._lessonLanguageBound === true) return action;
+      const matches: { language: TargetLanguage; reward?: number }[] = [];
+      for (const language of ['English', 'German', 'Spanish', 'French', 'Arabic'] as TargetLanguage[]) {
+        let catalog: any[] = [];
+        try { catalog = JSON.parse(readTimelineCache(`linguaai_lessons_${language}`) || '[]'); } catch { /* Unusable catalog stays untouched. */ }
+        const lesson = Array.isArray(catalog) ? catalog.find(row => row && row.id === action.payload.lessonId &&
+          (row.targetLanguage === undefined || tryTargetLanguageCode(row.targetLanguage) === targetLanguageCode(language))) : undefined;
+        if (lesson || loadProgress(owner, language).completedLessonIds.includes(action.payload.lessonId)) {
+          matches.push({ language, reward: lesson?.xpReward });
+        }
+      }
+      if (matches.length !== 1) return action; // Unknown/ambiguous context remains retained.
+      const fields = { targetLanguage: targetLanguageCode(matches[0].language),
+        _lessonLanguageBound: true,
+        ...(validProgressEpoch(matches[0].reward) ? { xpReward: matches[0].reward } : {}) };
+      if (Object.entries(fields).every(([key, value]) => action.payload[key] === value)) return action;
+      changed = true;
+      return { ...action, payload: { ...action.payload, ...fields } };
+    });
+    if (changed) { state.progressRevision = `migration_${Date.now()}_${Math.random()}`; writeState(state); }
+  });
+}
+
+export const getProgressQueueRevision = (owner: string): string => readState(owner).progressRevision || '';
+export const saveServerProgress = async (owner: string, language: TargetLanguage, revision: string, progress: ProgressState): Promise<boolean> => {
+  const session = getOfflineQueueSession();
+  return mutateOwner(owner, session, () => {
+    if (progress.dataTimelineId !== dataTimeline.snapshot().lastConfirmed || dataTimeline.snapshot().status !== 'CURRENT' || getProgressQueueRevision(owner) !== revision) return false;
+    const valid = parseProgress(progress);
+    if (!valid || !acknowledgeProgressEpoch(owner, valid.progressEpoch)) return false;
+    saveProgress(owner, language, valid); return true;
+  });
 };
+export const getFailedOfflineActions = (): OfflineAction[] => readState(getOfflineQueueSession().ownerNamespace).failedActions || [];
+export const getProgressQueueActions = (): OfflineAction[] => getOfflineQueue();
+export function epochForNewProgress(owner: string, forReset = false): number {
+  const state = readState(owner);
+  const epoch = getOwnerProgressEpoch(owner);
+  if (!forReset && state.actions.some(a => a.type === 'reset-progress' && dataTimeline.provenance(a) === 'CURRENT'))
+    throw new Error('Wait for progress reset acknowledgement before submitting new progress');
+  if (epoch === undefined) throw new Error('Connect to acknowledge server progress before submitting progress');
+  return epoch;
+}
+export const getOfflineQueue = (): OfflineAction[] => readState(getOfflineQueueSession().ownerNamespace).actions;
+
+// Quarantine stays diagnostic. Only a durable receipt can reconcile a failed
+// reset; this utility never resends a reset or reactivates a failed completion.
+export async function reconcileFailedReset(actionId: string): Promise<boolean> {
+  const session = getOfflineQueueSession();
+  if (!isOfflineQueueSessionActive(session)) return false;
+  const state = readState(session.ownerNamespace);
+  const action = state.failedActions?.find(a => a.id === actionId);
+  if (!action || action.ownerNamespace !== session.ownerNamespace || action.type !== 'reset-progress'
+    || !validProgressEpoch(action.payload.expectedEpoch) || action.payload.expectedEpoch >= Number.MAX_SAFE_INTEGER) return false;
+  dataTimeline.assertDispatch(action);
+  const identity = JSON.stringify(action);
+  try {
+    const result = (await withReplayTimeout(signal => apiClient.get(
+      `/progress/${session.userId}/reset-receipts/${encodeURIComponent(action.id)}`,
+      { dataTimelineId: action.dataTimelineId, params: { expectedEpoch: action.payload.expectedEpoch }, offlineQueueSession: session, signal, timeout: REPLAY_TIMEOUT_MS } as AxiosRequestConfig))).data;
+    if (!isOfflineQueueSessionActive(session) || result?.userId !== session.userId || result?.operationId !== action.id
+      || result?.expectedEpoch !== action.payload.expectedEpoch || result?.progressEpoch !== action.payload.expectedEpoch + 1) return false;
+    return await mutateOwner(session.ownerNamespace, session, latest => {
+      const current = latest.failedActions?.find(a => a.id === action.id);
+      if (!current || JSON.stringify(current) !== identity) return false;
+      // Older or repeated receipts never clear newer cache or lower the epoch.
+      acknowledgeProgressEpoch(session.ownerNamespace, result.progressEpoch);
+      latest.failedActions = latest.failedActions!.map(a => a.id === action.id ? { ...a,
+        reconciledAt: new Date().toISOString(), acknowledgedEpoch: result.progressEpoch } : a);
+      latest.progressRevision = `receipt_${action.id}`;
+      writeState(latest);
+      return true;
+    });
+  } catch { return false; } // Missing receipt is not authorization to run a reset.
+}
+export const isPendingBackendCard = (id: string, owner: string): boolean => {
+  if (owner === 'local_guest') return false;
+  const state = readState(owner);
+  return Object.hasOwn(state.tempIds, id)
+    || [...state.actions, ...(state.failedActions || [])].some(a => a.type === 'create-flashcard' && a.payload.tempId === id);
+};
+export const pushToOfflineQueue = async (type: OfflineAction['type'], payload: any, ownerNamespace: string, newProgress = false): Promise<void> => {
+  releaseCompatibility.assertMutationAllowed();
+  const session = getOfflineQueueSession();
+  const operation = dataTimeline.capture();
+  // Preserve intent before waiting: never relabel an old completion to a newer epoch.
+  const intent = JSON.parse(JSON.stringify(payload));
+  await mutateOwner(ownerNamespace, session, state => {
+    dataTimeline.capture();
+    if (dataTimeline.provenance(operation) !== 'CURRENT') throw new TimelineRecoveryRequired();
+    payload = intent;
+    if (newProgress && (getOwnerProgressEpoch(ownerNamespace) !== (type === 'reset-progress' ? payload.expectedEpoch : payload.progressEpoch)
+      || (type === 'complete-lesson' && state.actions.some(a => a.type === 'reset-progress' && dataTimeline.provenance(a) === 'CURRENT')))) throw new Error('Progress changed while waiting; refresh before submitting');
+    if (type === 'reset-progress') {
+      state.actions = state.actions.filter(a => a.dataTimelineId !== operation.dataTimelineId || (a.type !== 'complete-lesson' && a.type !== 'reset-progress'));
+      // A durable reset barrier is visible before the cache is cleared. An old
+      // in-flight completion is cancelled locally; the barrier runs after HTTP.
+    }
+    const id = cardId(payload);
+    if (type === 'delete-flashcard' && state.failedActions?.some(a => a.dataTimelineId === operation.dataTimelineId && a.type === 'create-flashcard' && a.payload.tempId === id)) {
+      state.failedActions = state.failedActions.filter(a => a.dataTimelineId !== operation.dataTimelineId || (!(a.type === 'create-flashcard' && a.payload.tempId === id) && !(dependent(a.type) && cardId(a.payload) === id)));
+      state.actions = state.actions.filter(a => a.dataTimelineId !== operation.dataTimelineId || !(dependent(a.type) && cardId(a.payload) === id));
+      writeState(state); return;
+    }
+    const create = id && state.actions.find(a => a.dataTimelineId === operation.dataTimelineId && a.type === 'create-flashcard' && a.payload.tempId === id);
+    if (dependent(type) && create && !state.startedCreates.includes(create.id)) {
+      if (type === 'delete-flashcard') {
+        state.actions = state.actions.filter(a => a.dataTimelineId !== operation.dataTimelineId || (a.id !== create.id && !(dependent(a.type) && cardId(a.payload) === id)));
+        writeState(state); return;
+      }
+      if (type === 'update-flashcard') {
+        // Carry forward separate edits from migrated Phase 4A queues before
+        // applying the latest fields and replacing those edits with one create.
+        const fields: Record<string, unknown> = {};
+        for (const action of state.actions) {
+          if (action.dataTimelineId === operation.dataTimelineId && action.type === 'update-flashcard' && cardId(action.payload) === id) Object.assign(fields, action.payload);
+        }
+        Object.assign(fields, payload);
+        delete fields.cardId; delete fields.id; delete fields.tempId; delete fields.userId;
+        state.actions = state.actions.filter(a => a.dataTimelineId !== operation.dataTimelineId || !(a.type === 'update-flashcard' && cardId(a.payload) === id))
+          .map(a => a.id === create.id ? { ...a, payload: { ...a.payload, ...fields } } : a);
+        writeState(state); return;
+      }
+    }
+    state.actions.push({ ...operation, clientProtocolRevision: CLIENT_PROTOCOL_REVISION, id: `action_${Date.now()}_${Math.random().toString(36).slice(2)}`, type,
+      ownerNamespace, payload: resolvePayload(state, type, payload, operation.dataTimelineId), createdAt: new Date().toISOString(), schemaVersion: 2 });
+    if (type === 'complete-lesson' || type === 'reset-progress') state.progressRevision = state.actions.at(-1)!.id;
+    writeState(state);
+  });
+};
+export const clearOfflineQueue = async (): Promise<void> => {
+  const session = getOfflineQueueSession();
+  await mutateOwner(session.ownerNamespace, session, state => {
+    state.actions = []; state.startedCreates = [];
+    writeState(state); // Keep mappings for cached local IDs.
+  });
+};
+
+export const processOfflineQueue = async (userId: string, waitForActive = false): Promise<boolean> => {
+  try { releaseCompatibility.assertMutationAllowed(); } catch { return false; }
+  const session = getOfflineQueueSession();
+  const owner = session.ownerNamespace;
+  if (waitForActive && drainWaiters.has(owner)) {
+    await drainWaiters.get(owner);
+    if (!isOfflineQueueSessionActive(session)) return false;
+    return processOfflineQueue(userId, true);
+  }
+  if (!coordinationAvailable()) return false;
+  if (userId !== session.userId || !isOfflineQueueSessionActive(session)
+    || drainingOwners.has(owner)) return false;
+  drainingOwners.add(owner);
+  let release!: () => void;
+  drainWaiters.set(owner, new Promise<void>(resolve => { release = resolve; }));
+  let hadFailure = false;
+  try {
+    return await navigator.locks.request(ownerLockName(owner, 'drain'), { mode: 'exclusive', ifAvailable: !waitForActive }, async lock => {
+      if (!lock || !isOfflineQueueSessionActive(session)) return false;
+      await dataTimeline.refresh();
+      try { dataTimeline.assertDispatch({ dataTimelineId: dataTimeline.snapshot().lastConfirmed }); } catch { return false; }
+      const initial = await mutateOwner(owner, session, state => state.actions.some(a => a.ownerNamespace !== owner) ? null : state.actions);
+      if (!initial) return false;
+      // New appends remain for the next drain; acknowledgements use the latest
+      // stored state, never replace it with this starting snapshot.
+      for (const scheduled of initial) {
+        if (dataTimeline.provenance(scheduled) !== 'CURRENT' || scheduled.clientProtocolRevision !== CLIENT_PROTOCOL_REVISION || ['timeline', 'provenance'].includes(scheduled.lastErrorCategory || '')) { hadFailure = true; continue; }
+        if (!isOfflineQueueSessionActive(session)) return false;
+        const action = await mutateOwner(owner, session, state => {
+          const stored = state.actions.find(a => a.id === scheduled.id);
+          if (!stored) return null;
+          dataTimeline.assertDispatch(stored);
+          if (stored.ownerNamespace !== owner) throw new Error('Queue owner mismatch');
+          if (stored.nextAttemptAt && Date.parse(stored.nextAttemptAt) > Date.now()) return undefined;
+          const action = { ...stored, attemptCount: (stored.attemptCount || 0) + 1,
+            lastAttemptAt: new Date().toISOString(), payload: resolvePayload(state, stored.type, stored.payload, stored.dataTimelineId) };
+          // Preserve the wire shape of previously dispatched legacy updates.
+          if (action.type === 'update-flashcard' && !stored.attemptCount) {
+            action.payload = { ...action.payload, _mutationContract: 2 };
+          }
+          if (['create-flashcard', 'update-flashcard'].includes(action.type) && !stored.attemptCount) {
+            action.payload = { ...action.payload, _languageContract: 1 };
+          }
+          if (action.type === 'create-flashcard' && action.payload.tempId && !state.startedCreates.includes(action.id)) state.startedCreates.push(action.id);
+          state.actions = state.actions.map(a => a.id === action.id ? action : a);
+          writeState(state);
+          return action;
+        });
+        if (action === null) continue;
+        if (!action || !isOfflineQueueSessionActive(session)) return false;
+        const config: AxiosRequestConfig & { offlineQueueSession: QueueSession; clientProtocolRevision: number | null; dataTimelineId?: string } = {
+          dataTimelineId: action.dataTimelineId,
+          clientProtocolRevision: action.clientProtocolRevision ?? null,
+          offlineQueueSession: session,
+          timeout: REPLAY_TIMEOUT_MS,
+          headers: { 'X-Idempotency-Key': action.id },
+        };
+        let serverId: string | undefined;
+        let completion: any;
+        let resetResult: any;
+        try {
+          const payload = action.payload;
+          const id = cardId(payload);
+          if (dependent(action.type) && (!id || id.startsWith('local_'))) throw new InvalidQueuedPayload('Pending card has no durable server mapping');
+          await withReplayTimeout(async signal => {
+            config.signal = signal;
+            switch (action.type) {
+              case 'reset-progress':
+                if (!validProgressEpoch(payload.expectedEpoch) || payload.expectedEpoch >= Number.MAX_SAFE_INTEGER)
+                  throw new InvalidQueuedPayload('Reset has no acknowledged epoch', payload.expectedEpoch === undefined ? 'MISSING_PROGRESS_EPOCH' : 'INVALID_PROGRESS_EPOCH');
+                resetResult = (await apiClient.delete(`/progress/${session.userId}`, { ...config, data: { expectedEpoch: payload.expectedEpoch } })).data;
+                if (resetResult?.progressEpoch !== payload.expectedEpoch + 1) throw new InvalidQueuedPayload('Invalid reset acknowledgement');
+                break;
+              case 'complete-lesson':
+                if (!Number.isInteger(payload.score)) throw new InvalidQueuedPayload('Completion has no recorded score');
+                if (!validProgressEpoch(payload.progressEpoch)) throw new InvalidQueuedPayload('Completion has no acknowledged epoch', payload.progressEpoch === undefined ? 'MISSING_PROGRESS_EPOCH' : 'INVALID_PROGRESS_EPOCH');
+                completion = (await apiClient.post(`/progress/${session.userId}/complete-lesson`, { lessonId: payload.lessonId, score: payload.score, progressEpoch: payload.progressEpoch }, config)).data?.data;
+                if (completion?.progressEpoch !== payload.progressEpoch) throw new InvalidQueuedPayload('Invalid completion acknowledgement');
+                break;
+              case 'create-flashcard': {
+                const response = await apiClient.post('/flashcards', {
+                  targetWord: payload.targetWord, turkishTranslation: payload.turkishTranslation,
+                  targetLanguage: payload._languageContract === 1 ? targetLanguageCode(payload.targetLanguage) : payload.targetLanguage, nativeLanguage: payload.nativeLanguage,
+                  nativeTranslation: payload.nativeTranslation, exampleSentence: payload.exampleSentence, note: payload.note,
+                }, config);
+                serverId = response.data?._id || response.data?.id;
+                if (payload.tempId && (typeof serverId !== 'string' || !serverId || serverId.startsWith('local_'))) throw new Error('Create response has no server card ID');
+                break;
+              }
+              case 'update-flashcard':
+                await apiClient.put(`/flashcards/${id}`, serializeFlashcardMutation({ ...payload,
+                  ...(payload._mutationContract !== 2 ? { nativeLanguage: undefined, nativeTranslation: undefined } : {}),
+                }, payload._languageContract === 1), config); break;
+              case 'delete-flashcard': await apiClient.delete(`/flashcards/${id}`, config); break;
+              case 'review-flashcard': await apiClient.put(`/flashcards/${id}/review`, { score: payload.score }, config); break;
+              default: throw new InvalidQueuedPayload('Unsupported queued action');
+            }
+          });
+        } catch (error) {
+          if (!isOfflineQueueSessionActive(session)) return false;
+          const failure = classifySyncFailure(error);
+          if (['timeline', 'provenance'].includes(failure.category)) {
+            await mutateOwner(owner, session, latest => {
+              latest.actions = latest.actions.map(current => current.id === action.id ? { ...current,
+                lastErrorCategory: failure.category, lastErrorCode: failure.code, lastErrorStatus: failure.status } : current);
+              writeState(latest);
+            });
+            return false;
+          }
+          if (failure.category === 'compatibility') { releaseCompatibility.reject(); return false; }
+          const retained = await mutateOwner(owner, session, latest => {
+            const current = latest.actions.find(a => a.id === action.id);
+            if (!current) return false; // Reset/cancellation won while HTTP awaited.
+            const failed = { ...current, lastErrorCategory: failure.category, lastErrorCode: failure.code, lastErrorStatus: failure.status,
+              ...(failure.terminal ? { failedAt: new Date().toISOString(), nextAttemptAt: undefined }
+                : { nextAttemptAt: new Date(Date.now() + retryDelay(action.attemptCount)).toISOString() }) };
+            if (failure.terminal) {
+              const blocked = (a: OfflineAction) => a.id === action.id
+                || (action.type === 'create-flashcard' && action.payload.tempId && dependent(a.type) && cardId(a.payload) === action.payload.tempId);
+              latest.failedActions = [...(latest.failedActions || []), ...latest.actions.filter(blocked).map(a => a.id === action.id ? failed
+                : { ...a, lastErrorCategory: 'dependency', failedAt: new Date().toISOString() })];
+              latest.actions = latest.actions.filter(a => !blocked(a));
+              if (action.type === 'complete-lesson' || action.type === 'reset-progress') latest.progressRevision = `failed_${action.id}`;
+            } else latest.actions = latest.actions.map(a => a.id === action.id ? failed : a);
+            writeState(latest);
+            return true;
+          });
+          if (!retained) continue;
+          if (failure.category === 'authentication') await invalidateCurrentSession(session);
+          hadFailure = true;
+          if (!failure.terminal) return false; // FIFO also protects reset/review dependencies.
+          continue; // Unrelated later work can proceed after durable quarantine.
+        }
+        if (!isOfflineQueueSessionActive(session)) return false;
+        dataTimeline.assertDispatch(action);
+        await mutateOwner(owner, session, latest => {
+          dataTimeline.assertDispatch(action);
+          if (latest.actions.some(a => a.id === action.id) && action.type === 'complete-lesson') {
+            acknowledgeCompletion(owner, action.payload, completion);
+            latest.progressRevision = `ack_${action.id}`;
+          }
+          if (action.type === 'reset-progress') {
+            acknowledgeProgressEpoch(owner, resetResult.progressEpoch);
+            if (action.payload.legacyOwnerNamespace) resetOwnerProgress(action.payload.legacyOwnerNamespace);
+            latest.progressRevision = `ack_${action.id}`;
+          }
+          if (action.type === 'create-flashcard' && action.payload.tempId) {
+            latest.tempIds[action.payload.tempId] = serverId!;
+            latest.tempIdTimelines ??= {};
+            latest.tempIdTimelines[action.payload.tempId] = action.dataTimelineId!;
+          }
+          latest.actions = latest.actions.filter(a => a.id !== action.id)
+            .map(a => ({ ...a, payload: resolvePayload(latest, a.type, a.payload, a.dataTimelineId) }));
+          latest.startedCreates = latest.startedCreates.filter(id => id !== action.id);
+          // Mapping, dependent rewrites, and acknowledgement commit in one write.
+          writeState(latest);
+        });
+      }
+      return !hadFailure && isOfflineQueueSessionActive(session);
+    });
+  } catch (error) {
+    if (!isOfflineQueueSessionActive(session)) return false;
+    throw error;
+  } finally { drainingOwners.delete(owner); drainWaiters.delete(owner); release(); }
+};
+
+// Selected evidence only; callers obtain explicit user confirmation in the recovery notice.
+export async function discardOfflineAction(id: string): Promise<void> {
+  const session = getOfflineQueueSession();
+  await mutateOwner(session.ownerNamespace, session, state => {
+    const selected = [...state.actions, ...(state.failedActions || [])].find(action => action.id === id);
+    if (!selected || (dataTimeline.provenance(selected) === 'CURRENT' && !['timeline', 'provenance'].includes(selected.lastErrorCategory || ''))) throw new TimelineRecoveryRequired();
+    state.actions = state.actions.filter(action => action.id !== id);
+    state.failedActions = state.failedActions?.filter(action => action.id !== id);
+    writeState(state);
+  });
+}

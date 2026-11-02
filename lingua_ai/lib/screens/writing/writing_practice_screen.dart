@@ -5,7 +5,8 @@ import '../../core/localization/language_service.dart';
 import '../../core/localization/target_language_service.dart';
 import '../../widgets/bottom_nav_bar.dart';
 import '../../services/writing_api_service.dart';
-import '../../services/progress_service.dart';
+import '../../services/auth_service.dart';
+import '../../services/api_response.dart';
 import '../../services/theme_service.dart';
 import '../../services/connectivity_service.dart';
 
@@ -24,7 +25,6 @@ class _WritingPracticeScreenState extends State<WritingPracticeScreen> {
   String? _currentTopic;
   bool _isLoading = false;
   WritingFeedback? _feedback;
-  bool _xpAwarded = false;
 
   // predefined topics per target language in English
   static const Map<String, List<String>> _topicsEn = {
@@ -107,7 +107,6 @@ class _WritingPracticeScreenState extends State<WritingPracticeScreen> {
     setState(() {
       _currentTopic = list[_random.nextInt(list.length)];
       _feedback = null;
-      _xpAwarded = false;
     });
   }
 
@@ -144,27 +143,27 @@ class _WritingPracticeScreenState extends State<WritingPracticeScreen> {
       _feedback = null;
     });
 
+    final session = AuthService().captureSession();
+    final targetLanguage = TargetLanguageService().currentLanguage;
     try {
       final feedback = await _apiService.checkWriting(
         topic: _currentTopic!,
         userText: text,
-        targetLanguage: TargetLanguageService().currentLanguage,
+        targetLanguage: targetLanguage,
       );
-      if (mounted) {
+      if (mounted && session.isDataCurrent && targetLanguage == TargetLanguageService().currentLanguage) {
         setState(() {
           _feedback = feedback;
           _isLoading = false;
         });
-        if (!_xpAwarded) {
-          ProgressService().addXp(10);
-          _xpAwarded = true;
-        }
       }
     } catch (e) {
-      if (mounted) {
+      if (mounted && canHandleApiError(session, e) && targetLanguage == TargetLanguageService().currentLanguage) {
         setState(() => _isLoading = false);
         _showError(e.toString().replaceAll('Exception: ', ''));
       }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
@@ -278,24 +277,6 @@ class _WritingPracticeScreenState extends State<WritingPracticeScreen> {
 
                   if (_feedback != null) ...[
                     const SizedBox(height: 32),
-                    if (_xpAwarded)
-                      Container(
-                        margin: const EdgeInsets.only(bottom: 24),
-                        padding: const EdgeInsets.symmetric(vertical: 12),
-                        decoration: BoxDecoration(
-                          color: Colors.amber.shade50,
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(color: Colors.amber.shade200),
-                        ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            const Icon(Icons.bolt_rounded, color: Colors.amber, size: 20),
-                            const SizedBox(width: 8),
-                            Text(lang.getString('xp_earned_badge_plus'), style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w800, color: Colors.amber)),
-                          ],
-                        ),
-                      ),
                     _buildScoreCards(lang),
                     const SizedBox(height: 20),
                     _buildCorrectedVersion(lang),
@@ -419,7 +400,7 @@ class _WritingPracticeScreenState extends State<WritingPracticeScreen> {
     );
   }
 
-  Widget _buildScorePill(String label, int score, Color color) {
+  Widget _buildScorePill(String label, double score, Color color) {
     return Container(
       width: 100,
       padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 8),
@@ -436,7 +417,7 @@ class _WritingPracticeScreenState extends State<WritingPracticeScreen> {
       child: Column(
         children: [
           Text(
-            '$score',
+            score.toString().replaceFirst(RegExp(r'\.0$'), ''),
             style: TextStyle(fontSize: 22, fontWeight: FontWeight.w900, color: color),
           ),
           const SizedBox(height: 4),

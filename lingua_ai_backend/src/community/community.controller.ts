@@ -1,3 +1,7 @@
+import { tryTargetLanguage } from '../common/target-language';
+import { ReactionDto } from './dto/reaction.dto';
+import { AbusePolicy } from '../security/abuse-policy';
+
 import {
   Controller,
   Get,
@@ -11,6 +15,7 @@ import {
   Req,
   UseInterceptors,
   UploadedFile,
+  Headers,
   BadRequestException,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -18,35 +23,24 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CommunityService } from './community.service';
 import { CreateCommunityPostDto } from './dto/create-community-post.dto';
 import { UpdateCommunityPostDto } from './dto/update-community-post.dto';
-import { diskStorage } from 'multer';
-import { extname } from 'path';
-import * as fs from 'fs';
+import { memoryStorage } from 'multer';
+import { COMMUNITY_IMAGE_LIMIT } from './community-image.storage';
 
-const uploadDir = './uploads/community';
-
+// Bounded in-memory staging: guards and DTO pipes run before any permanent
+// image is created. Content validation and compensation belong to the service.
 export const communityMulterOptions = {
-  storage: diskStorage({
-    destination: (req, file, cb) => {
-      if (!fs.existsSync(uploadDir)) {
-        fs.mkdirSync(uploadDir, { recursive: true });
-      }
-      cb(null, uploadDir);
-    },
-    filename: (req, file, cb) => {
-      const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-      cb(null, `post-${uniqueSuffix}${extname(file.originalname)}`);
-    },
-  }),
-  fileFilter: (req: any, file: any, cb: any) => {
-    const allowedMimes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
-    if (allowedMimes.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new BadRequestException('Only images of type jpg, jpeg, png, or webp are allowed'), false);
-    }
-  },
+  storage: memoryStorage(),
+  // Both upload DTOs use flat fields. Opt into Multer's parser bounds before
+  // append-field can allocate nested objects or sparse arrays.
   limits: {
-    fileSize: 5 * 1024 * 1024, // 5MB
+    fileSize: COMMUNITY_IMAGE_LIMIT,
+    files: 1,
+    fields: 10,
+    fieldSize: 16 * 1024,
+    parts: 11,
+    fieldNameSize: 100,
+    fieldNestingDepth: 0,
+    fieldArrayIndexLimit: 0,
   },
 };
 
@@ -62,43 +56,45 @@ export class CommunityController {
     @Query('language') language: string,
     @Req() req: any,
   ) {
-    const pageNum = parseInt(page, 10) || 1;
-    const limitNum = parseInt(limit, 10) || 10;
+    const pageNum = page === undefined ? 1 : Number(page);
+    const limitNum = limit === undefined ? 10 : Number(limit);
+    if (!Number.isInteger(pageNum) || pageNum < 1 || pageNum > 10000 ||
+      !Number.isInteger(limitNum) || limitNum < 1 || limitNum > 50)
+      throw new BadRequestException('Invalid pagination.');
     const userId = req.user.id;
     return this.communityService.findAll(userId, pageNum, limitNum, language);
   }
 
   @Post()
+  @AbusePolicy('community-write')
   @UseInterceptors(FileInterceptor('image', communityMulterOptions))
   async createPost(
     @Body() dto: CreateCommunityPostDto,
     @Req() req: any,
+    @Headers('x-idempotency-key') operationId?: string,
     @UploadedFile() file?: Express.Multer.File,
   ) {
     const userId = req.user.id;
     const userName = req.user.name || 'Guest User';
     
-    let imageUrl: string | undefined;
-    if (file) {
-      // Store relative path `/uploads/community/filename.png`
-      imageUrl = `/uploads/community/${file.filename}`;
-    }
-
     return this.communityService.create(
       userId,
       userName,
       dto.learningLanguage,
       dto.text,
-      imageUrl,
+      file,
+      operationId,
     );
   }
 
   @Put(':id')
+  @AbusePolicy('community-write')
   @UseInterceptors(FileInterceptor('image', communityMulterOptions))
   async updatePost(
     @Param('id') id: string,
     @Body() dto: UpdateCommunityPostDto,
     @Req() req: any,
+    @Headers('x-idempotency-key') operationId?: string,
     @UploadedFile() file?: Express.Multer.File,
   ) {
     const userId = req.user.id;
@@ -106,29 +102,29 @@ export class CommunityController {
     // Parse removeImage as boolean
     const removeImageVal = dto.removeImage === 'true' || dto.removeImage === true;
 
-    let imageUrl: string | undefined;
-    if (file) {
-      imageUrl = `/uploads/community/${file.filename}`;
-    }
-
-    return this.communityService.update(
+    const post = await this.communityService.update(
       id,
       userId,
       dto.text,
       removeImageVal,
-      imageUrl,
+      file,
+      operationId,
+      dto.expectedRevision,
     );
+    return { ...post, learningLanguage: tryTargetLanguage(post.learningLanguage) ?? post.learningLanguage };
   }
 
   @Delete(':id')
-  async deletePost(@Param('id') id: string, @Req() req: any) {
+  @AbusePolicy('community-write')
+  async deletePost(@Param('id') id: string, @Req() req: any, @Headers('x-idempotency-key') operationId: string, @Headers('x-resource-revision') revision: string) {
     const userId = req.user.id;
-    return this.communityService.delete(id, userId);
+    return this.communityService.delete(id, userId, operationId, revision === undefined ? undefined : Number(revision));
   }
 
   @Post(':id/like')
-  async toggleLike(@Param('id') id: string, @Req() req: any) {
+  @AbusePolicy('reaction')
+  async setLike(@Param('id') id: string, @Req() req: any, @Body() dto: ReactionDto, @Headers('x-idempotency-key') operationId: string) {
     const userId = req.user.id;
-    return this.communityService.toggleLike(id, userId);
+    return this.communityService.setLike(id, userId, dto.liked, operationId);
   }
 }

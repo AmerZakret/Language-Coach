@@ -6,3 +6,4 @@ export type TargetLanguage =
   | 'Arabic';
 
 export type InterfaceLanguage = 'en' | 'tr';
+export type TargetLanguageCode = 'en' | 'de' | 'es' | 'fr' | 'ar';

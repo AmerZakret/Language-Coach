@@ -35,6 +35,8 @@ class Question {
 }
 
 class Lesson {
+  // Lesson API values are codes; display names belong to the language UI.
+  static const languageCodes = {'en', 'de', 'es', 'fr', 'ar'};
   final String id;
   final String targetLanguage;
   final String title;
@@ -60,9 +62,15 @@ class Lesson {
   });
 
   factory Lesson.fromJson(Map<String, dynamic> json) {
+    if (json.containsKey('error') ||
+        json['id'] is! String || (json['id'] as String).isEmpty ||
+        json['title'] is! String || (json['title'] as String).isEmpty ||
+        !languageCodes.contains(json['targetLanguage'])) {
+      throw const FormatException('Invalid lesson response');
+    }
     return Lesson(
       id: json['id']?.toString() ?? '',
-      targetLanguage: json['targetLanguage'] ?? 'en',
+      targetLanguage: json['targetLanguage'] as String,
       title: json['title'] ?? '',
       description: json['description'] ?? '',
       category: json['category'] ?? json['type'] ?? 'Vocabulary', // Fallback for 'type'

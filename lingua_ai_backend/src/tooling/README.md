@@ -1,0 +1,143 @@
+# Legacy progress audit
+
+This standalone developer tool is not registered with Nest or exposed through
+HTTP. It reads raw MongoDB records without schema defaults, seeding, or hooks.
+It does not load `.env`: supply `MONGODB_URI` explicitly through the environment.
+No production audit or repair is part of the tests or development workflow.
+
+Build the backend, then run `node dist/src/tooling/progress-audit-cli.js --help`.
+The default run is read-only and limited to 100 users:
+
+```text
+node dist/src/tooling/progress-audit-cli.js --user <MongoDB-ID> --output <new-report.jsonl>
+node dist/src/tooling/progress-audit-cli.js --limit 100 --batch-size 50 --output <new-report.jsonl>
+node dist/src/tooling/progress-audit-cli.js --all --batch-size 100 --output <new-report.jsonl>
+```
+
+`--after <MongoDB-ID>` resumes the ordered owner scan. `--all` additionally scans
+all progress references for orphan/malformed ownership; limited owner scans
+explicitly report that the global orphan scan was not run. A targeted `--user`
+scan also checks references to that owner, even if the owner no longer exists.
+Reports stream as JSON Lines (MongoDB Extended JSON for exact BSON values).
+Counters go to stderr. Each user is isolated on failure; any failed user makes
+the CLI exit unsuccessfully. Files use exclusive creation and are not overwritten.
+
+## Evidence and classifications
+
+Findings have independent categories and one of `DETERMINISTIC_REPAIR`,
+`AMBIGUOUS_REVIEW`, `DANGEROUS_OWNERSHIP`, `SAFE_COMPATIBILITY`, or `INFORMATIONAL`.
+Per-user reports include level/XP summaries, epochs, provenance counts, exact
+known row award sums, reconstruction eligibility, category/classification
+counters, bounded finding samples, and derived-field repair proposals.
+At most 200 finding details are retained per user; counters retain all findings.
+Cursor batches are bounded to 1-500 documents. No entire collection is loaded
+into application memory. Oversized server aggregations fail that user rather
+than silently returning incomplete evidence.
+
+Missing/invalid awards, duplicate rows, bad ownership/status/epoch, or absent
+language metadata disqualify the applicable complete reconstruction. Explicit
+award sums include available durable row values and are never asserted to be
+authoritative aggregates when evidence is incomplete. No current lesson reward
+is used as historical proof. Even complete row evidence cannot prove that older
+non-lesson awards or deleted rows never existed: XP mismatches remain review-only.
+
+Known English/Turkish aliases use the same additive read as runtime code. They
+are never consolidated or deleted. Coexisting alias buckets are ambiguous and
+block automatic language-level repair for that language. Unknown lesson IDs,
+score/status issues, ownership, and completion rows are never rewritten.
+Reports exclude emails, names, credentials, and password hashes from user data.
+Full-record hashes detect concurrent edits without exposing those fields.
+
+## Optional apply and rollback
+
+Mutation requires **explicit operator authorization**, `--apply`, and a new
+`--output` file. It requires transaction-capable MongoDB. It is limited to
+`level` and `levelPerLanguage.<canonical-code>`, derived from valid stored XP.
+It never changes XP, awards, epochs/revisions, ownership, alias buckets, scores,
+lesson IDs, or completion rows. Dangerous ownership or invalid owner epochs
+block all proposals for that user.
+
+Each user is re-read, compared with the audit fingerprint, and re-audited inside
+its own snapshot transaction. Proposals supplied by a caller are not trusted.
+A conflict/retry after a concurrent edit refuses the stale repair. Repair and
+durable evidence in `progressauditrepairs` commit together; no new receipt index
+or migration is required. Records include exact original/new fields, timestamps,
+owner ID, epoch/write revision, and before/after full-state fingerprints.
+
+```text
+node dist/src/tooling/progress-audit-cli.js --user <MongoDB-ID> --apply --output <new-apply.jsonl>
+node dist/src/tooling/progress-audit-cli.js --rollback <receipt-ID> --apply --output <new-rollback.jsonl>
+```
+
+Rollback restores only the recorded derived fields and their original absence,
+including a newly introduced parent map. It refuses if any user field changed
+since repair, validates restored state, and records completion transactionally.
+There is no blind rollback or override. Retain both reports and database receipts;
+if a receipt is unavailable or the user has changed, manual review is required.
+
+Prefer read-only database credentials for production dry-runs and review the
+bounded report before separately authorizing any apply. These commands are
+examples only; no production connection or mutation is performed by tests.
+
+## Packaging boundary
+
+Run this tool from the reviewed release checkout after `npm run build`; its
+compiled CLI is intentionally excluded from the minimal backend runtime artifact.
+It is never a startup hook. See [Release packaging](../../../RELEASE_PACKAGING.md)
+for the OPERATOR_TOOL classification and separate runtime allowlist.
+
+
+## Timeline control (Phase 10A)
+
+`timeline-control.ts` and `timeline-control-cli.ts` are OPERATOR_TOOL, excluded from
+the backend runtime artifact. They are never imported by Nest controllers, startup,
+readiness, deployment preflight or quality commands. Build the reviewed checkout,
+then run `node dist/src/tooling/timeline-control-cli.js --help`. Commands are
+inspect, initialize, close, install-timeline and open. All mutations require explicit
+target/event/operator/database confirmation; transitions require expected current
+timeline/state/controlVersion; production additionally requires maintenance and
+production confirmations. There is no repair action or implicit ID generation.
+
+Full instructions, external latch ordering, initialization, safe retry, hard restore
+isolation and audit limitations are in
+[the production runbook](../../../PRODUCTION_RUNBOOKS.md#phase-10a-timeline-control-procedure).
+Mongo audit rolls back with Mongo. Keep independent external audit and issued-ID
+history; this tool cannot guarantee external retention or discover unannounced
+restores. The fence API is a foundation for 10B, not current domain/client fencing.
+
+
+## Phase 10B operator domain-write boundary
+
+Progress audit --apply/rollback and catalog replacement/provisioning require hard
+maintenance isolation: ingress closed, application/background processes drained,
+matching expected timeline and both external and Mongo write controls CLOSED.
+Retain independent operator evidence and backup boundaries. These tools use
+separate operator authority, not public client headers, and must never be run
+against OPEN application traffic. Normal startup no longer seeds a lesson catalog.
+
+For restore reopening use ENFORCE_MUTATIONS with a proven v2-capable client cohort;
+ALLOW_LEGACY is not restore-safe. The timeline CLI additionally refuses to open
+known restored metadata while the production policy permits legacy clients.
+
+## Phase 10E read-only restore consistency evidence
+
+`restore-consistency.ts` is an OPERATOR_TOOL library exercised only with the
+disposable restore drill. It accepts an already selected connection and upload
+root; it has no URI/config loader, CLI, startup registration, repair or open action.
+`captureRestoreManifest` fingerprints the selected domain/receipt/barrier
+collections and upload bytes. Retain the trusted coordinated manifest outside
+the Mongo restore boundary. It contains digests, not profile/provider payloads.
+
+`auditRestoreConsistency` checks closed external/Mongo controls, matching expected
+timeline, unchanged control across inspection, manifest completeness, expected
+indexes, collection fingerprints, upload fingerprints, orphans and missing
+references. Any mismatch/incomplete check requires reconciliation; a matching
+snapshot is evidence only and never opens writes. Tests monitor actual Mongo
+commands to verify this audit emits no writes. Capture must be coordinated under
+hard isolation; this helper is not a transactional filesystem/DB backup system,
+an exhaustive semantic reconstruction tool, or a witnessed production restore.
+
+Run the focused disposable scenario with the existing test dependency cache:
+`node node_modules/jest/bin/jest.js --runInBand --runTestsByPath src/operations/restore-drill.spec.ts`
+from the backend directory. The root quality harness selects the cached Mongo
+binary automatically. See [the drill evidence](../../../PHASE_10E_RESTORE_DRILL.md).

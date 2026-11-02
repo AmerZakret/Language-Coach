@@ -1,0 +1,23 @@
+FROM python:3.12.4-slim-bookworm AS dependencies
+WORKDIR /build
+COPY lingua_ai_pronunciation_service/requirements.txt lingua_ai_pronunciation_service/requirements-installer.txt ./
+RUN python -m venv /opt/venv \
+    && /opt/venv/bin/python -m pip install --require-hashes --only-binary=:all: --no-deps -r requirements-installer.txt \
+    && /opt/venv/bin/python -m pip install --require-hashes --only-binary=:all: -r requirements.txt \
+    && /opt/venv/bin/python -m pip check
+
+FROM python:3.12.4-slim-bookworm AS runtime
+ENV NODE_ENV=production \
+    PATH=/opt/venv/bin:$PATH \
+    PYTHONDONTWRITEBYTECODE=1 \
+    WHISPER_ALLOW_DOWNLOAD=false \
+    TMPDIR=/tmp
+WORKDIR /app
+RUN useradd --system --uid 10001 --home-dir /nonexistent pronunciation \
+    && mkdir -p /models
+COPY --from=dependencies /opt/venv /opt/venv
+COPY --chown=pronunciation:pronunciation lingua_ai_pronunciation_service/main.py lingua_ai_pronunciation_service/config.py lingua_ai_pronunciation_service/audio.py ./
+USER pronunciation
+EXPOSE 8001
+HEALTHCHECK --interval=15s --timeout=3s --start-period=150s --retries=3 CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health/ready', timeout=2)" || exit 1
+CMD ["python", "-B", "main.py"]

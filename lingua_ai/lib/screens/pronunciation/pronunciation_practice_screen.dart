@@ -1,3 +1,4 @@
+import '../../core/localization/target_language.dart';
 import 'dart:io';
 import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
@@ -7,8 +8,6 @@ import 'package:permission_handler/permission_handler.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/localization/language_service.dart';
 import '../../core/localization/target_language_service.dart';
-import '../../services/auth_service.dart';
-import '../../services/progress_service.dart';
 import '../../services/flashcard_service.dart';
 import '../../services/pronunciation_service.dart';
 import '../../services/theme_service.dart';
@@ -43,25 +42,6 @@ class _PronunciationPracticeScreenState extends State<PronunciationPracticeScree
   bool _isAssessing = false;
   PronunciationAssessmentResult? _result;
   String? _errorMessage;
-
-  // Language Maps
-  final Map<String, String> _languageCodes = {
-    'English': 'en',
-    'German': 'de',
-    'Spanish': 'es',
-    'French': 'fr',
-    'Arabic': 'ar',
-    'Turkish': 'tr',
-  };
-
-  final Map<String, String> _languageTtsCodes = {
-    'en': 'en-US',
-    'de': 'de-DE',
-    'es': 'es-ES',
-    'fr': 'fr-FR',
-    'ar': 'ar-SA',
-    'tr': 'tr-TR',
-  };
 
   @override
   void initState() {
@@ -108,8 +88,7 @@ class _PronunciationPracticeScreenState extends State<PronunciationPracticeScree
   Future<void> _speak() async {
     if (_targetText.trim().isEmpty) return;
     final targetLang = TargetLanguageService().currentLanguage;
-    final langCode = _languageCodes[targetLang] ?? 'en';
-    final ttsCode = _languageTtsCodes[langCode] ?? 'en-US';
+    final ttsCode = TargetLanguage.ttsLocale(targetLang);
 
     await _flutterTts.setLanguage(ttsCode);
     await _flutterTts.setSpeechRate(0.45); // Slower speech rate for clarity
@@ -191,31 +170,23 @@ class _PronunciationPracticeScreenState extends State<PronunciationPracticeScree
       _errorMessage = null;
     });
 
-    final auth = AuthService();
     final targetLang = TargetLanguageService().currentLanguage;
-    final langCode = _languageCodes[targetLang] ?? 'en';
+    final langCode = TargetLanguage.code(targetLang);
 
     try {
       final assessment = await _pronunciationService.assessPronunciation(
         audioPath: _recordPath!,
-        userId: auth.isLoggedIn ? auth.currentUserEmail : 'guest',
         targetText: _targetText,
         targetLanguage: langCode,
         nativeTranslation: _nativeTranslation.isNotEmpty ? _nativeTranslation : null,
         nativeLanguage: 'tr',
         sourceType: _sourceType,
-        sourceId: null,
       );
 
       setState(() {
         _result = assessment;
         _isAssessing = false;
       });
-
-      // Award XP on success
-      if (assessment.pronunciationScore >= 70) {
-        ProgressService().addXp(10);
-      }
     } catch (e) {
       setState(() {
         _errorMessage = e.toString().replaceAll('Exception: ', '');
@@ -808,35 +779,6 @@ class _PronunciationPracticeScreenState extends State<PronunciationPracticeScree
               ],
             ),
           ),
-
-          if (_result!.pronunciationScore >= 70) ...[
-            const SizedBox(height: 20),
-            Container(
-              padding: const EdgeInsets.symmetric(vertical: 12),
-              decoration: BoxDecoration(
-                color: ThemeService().isDarkMode ? Colors.amber.shade900.withValues(alpha: 0.2) : Colors.amber.shade50,
-                borderRadius: BorderRadius.circular(16),
-                border: Border.all(
-                  color: ThemeService().isDarkMode ? Colors.amber.shade700.withValues(alpha: 0.4) : Colors.amber.shade200,
-                ),
-              ),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  const Icon(Icons.bolt_rounded, color: Colors.amber, size: 20),
-                  const SizedBox(width: 6),
-                  Text(
-                    'Earned +10 Learning XP!',
-                    style: TextStyle(
-                      color: ThemeService().isDarkMode ? Colors.amber.shade200 : Colors.amber.shade900,
-                      fontWeight: FontWeight.w900,
-                      fontSize: 13,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
         ],
       ),
     );

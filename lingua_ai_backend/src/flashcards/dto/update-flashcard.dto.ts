@@ -1,34 +1,41 @@
-import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsTargetLanguage } from '../../common/target-language';
+import { IsNotEmpty, IsString, MaxLength, ValidateIf } from 'class-validator';
 
 export class UpdateFlashcardDto {
+  @ValidateIf((_object, value) => value !== undefined)
   @IsNotEmpty()
   @IsString()
   @MaxLength(100)
-  targetWord: string;
+  targetWord?: string;
 
+  @ValidateIf((_object, value) => value !== undefined)
   @IsNotEmpty()
   @IsString()
   @MaxLength(200)
-  turkishTranslation: string;
+  turkishTranslation?: string;
 
-  @IsOptional()
+  @ValidateIf((_object, value) => value !== undefined)
+  @IsNotEmpty()
   @IsString()
+  @IsTargetLanguage()
   targetLanguage?: string;
 
-  @IsOptional()
+  @ValidateIf((_object, value) => value !== undefined)
   @IsString()
+  @MaxLength(64)
   nativeLanguage?: string;
 
-  @IsOptional()
+  @ValidateIf((_object, value) => value !== undefined)
   @IsString()
+  @MaxLength(200)
   nativeTranslation?: string;
 
-  @IsOptional()
+  @ValidateIf((_object, value) => value !== undefined)
   @IsString()
   @MaxLength(500)
   exampleSentence?: string;
 
-  @IsOptional()
+  @ValidateIf((_object, value) => value !== undefined)
   @IsString()
   @MaxLength(500)
   note?: string;

@@ -1,7 +1,11 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import { dataTimeline } from '../utils/dataTimeline';
+import { targetLanguageName, tryTargetLanguageCode } from '../utils/targetLanguage';
+import React, { createContext, useContext, useState, useEffect, useRef } from 'react';
 import type { TargetLanguage } from '../types/language';
 import { useAuth } from './AuthContext';
 import { updateProfile } from '../api/authApi';
+import { getUserProgressKey } from '../utils/userKey';
+import { useSessionGuard } from '../utils/useSessionGuard';
 
 interface TargetLanguageContextType {
   targetLanguage: TargetLanguage;
@@ -11,28 +15,43 @@ interface TargetLanguageContextType {
 const TargetLanguageContext = createContext<TargetLanguageContextType | undefined>(undefined);
 
 export const TargetLanguageProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const { user, token, isGuest, login } = useAuth();
+  const { user, token, isGuest, updateUser } = useAuth();
+  const captureSession = useSessionGuard(getUserProgressKey(user, isGuest, token));
+  const languageRequest = useRef(0);
 
   const [targetLanguage, setTargetLanguageState] = useState<TargetLanguage>(() => {
-    return (localStorage.getItem('linguaai_target_language') as TargetLanguage) || 'English';
+    const saved = localStorage.getItem('linguaai_target_language');
+    if (saved == null) return 'English'; // Explicit first-use default only.
+    return targetLanguageName(saved);
   });
 
   // Sync state if backend user's targetLanguage changes (e.g. at login/startup)
   useEffect(() => {
     if (user && !isGuest && user.targetLanguage && user.targetLanguage !== targetLanguage) {
-      setTargetLanguageState(user.targetLanguage as TargetLanguage);
-      localStorage.setItem('linguaai_target_language', user.targetLanguage);
+      if (!tryTargetLanguageCode(user.targetLanguage)) {
+        console.error('Unsupported profile target language', user.targetLanguage);
+        return;
+      }
+      setTargetLanguageState(targetLanguageName(user.targetLanguage));
+      localStorage.setItem('linguaai_target_language', targetLanguageName(user.targetLanguage));
     }
   }, [user, isGuest]);
 
   const setTargetLanguage = async (lang: TargetLanguage) => {
+    const isCurrent = captureSession();
+    const request = ++languageRequest.current;
+    if (!isCurrent()) return;
+    let operation: Readonly<{ dataTimelineId: string }> | undefined;
+    try { if (user && !isGuest && token) operation = dataTimeline.capture(); }
+    catch { console.error('Profile change paused until server data is confirmed.'); return; }
     setTargetLanguageState(lang);
     localStorage.setItem('linguaai_target_language', lang);
 
     if (user && !isGuest && token) {
       try {
-        const updatedUser = await updateProfile({ targetLanguage: lang });
-        login({ ...updatedUser, isGuest: false }, token);
+        const updatedUser = await updateProfile({ targetLanguage: lang }, operation);
+        if (!isCurrent() || request !== languageRequest.current) return;
+        await updateUser({ ...updatedUser, isGuest: false });
       } catch (e) {
         console.error('Failed to sync target language to backend', e);
       }

@@ -1,3 +1,4 @@
+import '../core/localization/target_language.dart';
 class FlashcardHistory {
   final DateTime date;
   final int score;
@@ -87,7 +88,9 @@ class Flashcard {
       userId: json['userId']?.toString() ?? '',
       targetWord: json['targetWord'] ?? '',
       turkishTranslation: json['turkishTranslation'] ?? json['translation'] ?? '',
-      targetLanguage: json['targetLanguage'] ?? 'English',
+      // Historical cards without metadata were English-only. Unknown explicit
+      // values remain visible as unknown and are never coerced to English.
+      targetLanguage: TargetLanguage.tryCode(json['targetLanguage'] as String?) ?? (json['targetLanguage'] as String? ?? 'en'),
       nativeLanguage: json['nativeLanguage'] ?? 'Turkish',
       nativeTranslation: json['nativeTranslation'] ?? json['turkishTranslation'] ?? json['translation'] ?? '',
       exampleSentence: json['exampleSentence'],

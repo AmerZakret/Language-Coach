@@ -1,3 +1,5 @@
+import '../../services/data_timeline.dart';
+import '../../services/auth_service.dart';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_tts/flutter_tts.dart';
@@ -24,10 +26,27 @@ class _FlashcardsScreenState extends State<FlashcardsScreen> {
   @override
   void initState() {
     super.initState();
+    DataTimeline().addListener(_onTimelineChanged);
     _refreshCards();
   }
 
+  int _timelineRevision = DataTimeline().revision;
+  void _onTimelineChanged() {
+    if (_timelineRevision == DataTimeline().revision) return;
+    _timelineRevision = DataTimeline().revision;
+    if (mounted) _refreshCards();
+  }
+  @override
+  void dispose() {
+    DataTimeline().removeListener(_onTimelineChanged);
+    super.dispose();
+  }
+
   Future<void> _refreshCards() async {
+    final session = AuthService().captureSession();
+    final languageVersion = TargetLanguageService().languageVersion;
+    bool isCurrent() => mounted && session.isDataCurrent &&
+        languageVersion == TargetLanguageService().languageVersion;
     setState(() {
       _loading = true;
       _errorMessage = null;
@@ -35,17 +54,22 @@ class _FlashcardsScreenState extends State<FlashcardsScreen> {
     try {
       await _service.reloadFlashcards();
     } catch (e) {
+      if (!isCurrent()) return;
       setState(() {
         _errorMessage = 'Failed to load flashcards: $e';
       });
     } finally {
-      setState(() {
-        _loading = false;
-      });
+      if (isCurrent()) {
+        setState(() { _loading = false; });
+      }
     }
   }
 
   void _showAddEditDialog({Flashcard? card}) {
+    final session = AuthService().captureSession();
+    final languageVersion = TargetLanguageService().languageVersion;
+    bool isCurrent() => mounted && session.isDataCurrent &&
+        languageVersion == TargetLanguageService().languageVersion;
     final isEdit = card != null;
     final wordController = TextEditingController(text: card?.targetWord ?? '');
     final translationController = TextEditingController(text: card?.turkishTranslation ?? '');
@@ -108,6 +132,7 @@ class _FlashcardsScreenState extends State<FlashcardsScreen> {
             ),
             ElevatedButton(
               onPressed: () async {
+                if (!isCurrent()) return;
                 final word = wordController.text.trim();
                 final translation = translationController.text.trim();
                 if (word.isEmpty || translation.isEmpty) {
@@ -129,6 +154,7 @@ class _FlashcardsScreenState extends State<FlashcardsScreen> {
                       exampleSentence: exampleController.text.trim(),
                       note: noteController.text.trim(),
                     );
+                    if (!isCurrent()) return;
                     _showSuccessSnackBar(lang.getString('flashcard_updated_success'));
                   } else {
                     await _service.createFlashcard(
@@ -137,13 +163,15 @@ class _FlashcardsScreenState extends State<FlashcardsScreen> {
                       exampleSentence: exampleController.text.trim(),
                       note: noteController.text.trim(),
                     );
+                    if (!isCurrent()) return;
                     _showSuccessSnackBar(lang.getString('flashcard_added_success'));
                   }
                   _refreshCards();
                 } catch (e) {
+                  if (!isCurrent()) return;
                   setState(() => _errorMessage = '${lang.getString('failed_save_card')}: $e');
                 } finally {
-                  setState(() => _loading = false);
+                  if (isCurrent()) setState(() => _loading = false);
                 }
               },
               child: Text(lang.getString('save'), style: const TextStyle(fontWeight: FontWeight.bold)),
@@ -155,6 +183,10 @@ class _FlashcardsScreenState extends State<FlashcardsScreen> {
   }
 
   void _showDeleteConfirmation(String cardId) {
+    final session = AuthService().captureSession();
+    final languageVersion = TargetLanguageService().languageVersion;
+    bool isCurrent() => mounted && session.isDataCurrent &&
+        languageVersion == TargetLanguageService().languageVersion;
     final lang = LanguageService();
     showDialog(
       context: context,
@@ -171,16 +203,19 @@ class _FlashcardsScreenState extends State<FlashcardsScreen> {
             ElevatedButton(
               style: ElevatedButton.styleFrom(backgroundColor: AppTheme.errorColor, foregroundColor: Colors.white),
               onPressed: () async {
+                if (!isCurrent()) return;
                 Navigator.pop(context);
                 setState(() => _loading = true);
                 try {
                   await _service.deleteFlashcard(cardId);
+                  if (!isCurrent()) return;
                   _showSuccessSnackBar(lang.getString('flashcard_deleted_success'));
                   _refreshCards();
                 } catch (e) {
+                  if (!isCurrent()) return;
                   setState(() => _errorMessage = '${lang.getString('failed_delete_card')}: $e');
                 } finally {
-                  setState(() => _loading = false);
+                  if (isCurrent()) setState(() => _loading = false);
                 }
               },
               child: Text(lang.getString('delete'), style: const TextStyle(fontWeight: FontWeight.bold)),

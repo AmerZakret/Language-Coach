@@ -1,3 +1,6 @@
+import '../../core/localization/target_language_service.dart';
+import '../../services/data_timeline.dart';
+import '../../services/auth_service.dart';
 import 'package:flutter/material.dart';
 import '../../core/theme/app_theme.dart';
 import '../../core/routes/app_routes.dart';
@@ -16,18 +19,43 @@ class LessonScreen extends StatefulWidget {
 }
 
 class _LessonScreenState extends State<LessonScreen> {
+  final _session = AuthService().captureSession();
+  final _languageVersion = TargetLanguageService().languageVersion;
+  bool get _contextCurrent => _session.isDataCurrent &&
+      _languageVersion == TargetLanguageService().languageVersion;
+  void _onContextChanged() {
+    if (_contextCurrent || !mounted) return;
+    setState(() {});
+  }
   int currentQuestionIndex = 0;
   int score = 0;
   String? selectedAnswer;
   bool isChecked = false;
   Lesson? lesson;
   bool _isLoading = false;
+  bool _loadFailed = false;
   final LessonApiService _apiService = LessonApiService();
   final SoundService _soundService = SoundService();
 
   @override
+  void initState() {
+    super.initState();
+    DataTimeline().addListener(_onContextChanged);
+    AuthService().addListener(_onContextChanged);
+    TargetLanguageService().addListener(_onContextChanged);
+  }
+  @override
+  void dispose() {
+    DataTimeline().removeListener(_onContextChanged);
+    AuthService().removeListener(_onContextChanged);
+    TargetLanguageService().removeListener(_onContextChanged);
+    super.dispose();
+  }
+
+  @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    if (!_contextCurrent) return;
     if (lesson == null) {
       final args = ModalRoute.of(context)?.settings.arguments;
       if (args is Lesson) {
@@ -44,21 +72,25 @@ class _LessonScreenState extends State<LessonScreen> {
     setState(() => _isLoading = true);
     try {
       final fullLesson = await _apiService.fetchLessonById(lesson!.id);
-      if (mounted) {
+      if (mounted && _contextCurrent) {
         setState(() {
           lesson = fullLesson;
           _isLoading = false;
         });
       }
     } catch (e) {
-      if (mounted) {
-        setState(() => _isLoading = false);
+      if (mounted && _contextCurrent) {
+        setState(() {
+          _isLoading = false;
+          _loadFailed = true;
+        });
       }
     }
   }
 
   void _checkAnswer() {
-    if (lesson == null || selectedAnswer == null) return;
+    if (!_contextCurrent) return;
+    if (lesson == null || lesson!.questions.isEmpty || selectedAnswer == null) return;
 
     final currentQuestion = lesson!.questions[currentQuestionIndex];
     final isCorrect = selectedAnswer == currentQuestion.correctAnswer;
@@ -76,7 +108,8 @@ class _LessonScreenState extends State<LessonScreen> {
   }
 
   void _nextQuestion() {
-    if (lesson == null) return;
+    if (!_contextCurrent) return;
+    if (lesson == null || lesson!.questions.isEmpty) return;
 
     setState(() {
       if (currentQuestionIndex < lesson!.questions.length - 1) {
@@ -85,6 +118,7 @@ class _LessonScreenState extends State<LessonScreen> {
         isChecked = false;
       } else {
         ProgressService().completeLesson(lesson!.id, lesson!.xpReward,
+            lessonLanguage: lesson!.targetLanguage,
             score: ((score / lesson!.questions.length) * 100).round());
         Navigator.pushReplacementNamed(
           context, 
@@ -101,6 +135,12 @@ class _LessonScreenState extends State<LessonScreen> {
 
   @override
   Widget build(BuildContext context) {
+    if (!_contextCurrent) {
+      return Scaffold(appBar: AppBar(title: const Text('Refresh required')),
+        body: const Center(child: Padding(padding: EdgeInsets.all(24), child: Text(
+          'The account, language or server history changed. Return and refresh before starting a new session.'))));
+    }
+
     return ListenableBuilder(
       listenable: Listenable.merge([LanguageService(), ThemeService()]),
       builder: (context, child) {
@@ -109,6 +149,13 @@ class _LessonScreenState extends State<LessonScreen> {
         if (_isLoading || lesson == null) {
           return const Scaffold(
             body: Center(child: CircularProgressIndicator(color: AppTheme.primaryColor)),
+          );
+        }
+
+        if (_loadFailed || lesson!.questions.isEmpty) {
+          return Scaffold(
+            appBar: AppBar(title: Text(lang.getString('error_loading'))),
+            body: Center(child: Text(lang.getString('no_questions'))),
           );
         }
 

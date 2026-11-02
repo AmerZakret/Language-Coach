@@ -36,6 +36,7 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _handleLogin() async {
     final lang = LanguageService();
     final auth = AuthService();
+    var session = auth.captureSession();
 
     final email = _emailController.text.trim();
     final password = _passwordController.text.trim();
@@ -51,29 +52,33 @@ class _LoginScreenState extends State<LoginScreen> {
 
     try {
       final response = await _apiService.login(email, password);
+      if (!mounted || !session.isDataCurrent) return;
       
-      final userData = response['user'] ?? {};
+      final userData = response['user'] as Map<String, dynamic>;
       // Update session with backend data
-      auth.setBackendSession(
-        name: userData['name'] ?? email.split('@')[0].toUpperCase(),
-        email: userData['email'] ?? email,
-        token: response['access_token'] ?? '',
-        id: userData['id'] ?? '',
+      final save = auth.setBackendSession(
+        name: userData['name'] as String,
+        email: userData['email'] as String,
+        token: response['access_token'] as String,
+        id: userData['id'] as String,
         targetLanguage: userData['targetLanguage'],
       );
+      session = auth.captureSession();
+      await save;
+      if (!mounted || !session.isDataCurrent) return;
 
       // Sync progress from backend
       await ProgressService().syncWithBackend();
 
-      if (mounted) {
+      if (mounted && session.isDataCurrent) {
         Navigator.pushNamedAndRemoveUntil(context, AppRoutes.home, (route) => false);
       }
     } catch (e) {
-      if (mounted) {
+      if (mounted && session.isDataCurrent) {
         _showError(e.toString().replaceAll('Exception: ', ''));
       }
     } finally {
-      if (mounted) {
+      if (mounted && session.isDataCurrent) {
         setState(() => _isLoading = false);
       }
     }
@@ -82,21 +87,30 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _handleGuestLogin() async {
     setState(() => _isLoading = true);
     final auth = AuthService();
+    var session = auth.captureSession();
 
     try {
       final response = await _apiService.loginGuest();
-      final userData = response['user'] ?? {};
-      auth.setGuestSession(
-        token: response['access_token'] ?? '',
-        id: userData['id'] ?? 'guest',
+      if (!mounted || !session.isDataCurrent) return;
+      final userData = response['user'] as Map<String, dynamic>;
+      final save = auth.setGuestSession(
+        token: response['access_token'] as String,
+        id: userData['id'] as String,
+        email: userData['email'] as String,
+        name: userData['name'] as String,
       );
+      session = auth.captureSession();
+      await save;
     } catch (e) {
+      if (!mounted || !session.isDataCurrent) return;
       // Server unreachable — fall back to local guest mode
       debugPrint('Guest login backend failed, falling back to local: $e');
-      auth.loginAsGuest();
+      final save = auth.loginAsGuest();
+      session = auth.captureSession();
+      await save;
     }
 
-    if (mounted) {
+    if (mounted && session.isDataCurrent) {
       setState(() => _isLoading = false);
       Navigator.pushNamedAndRemoveUntil(context, AppRoutes.home, (route) => false);
     }

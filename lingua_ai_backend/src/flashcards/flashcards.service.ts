@@ -1,25 +1,15 @@
+import { MutationTimeline } from '../operations/mutation-timeline';
+import { targetLanguageCode, targetLanguageQuery, tryTargetLanguage, languageResponse } from '../common/target-language';
 import { Injectable, NotFoundException, ForbiddenException, OnModuleInit } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
+import type { ClientSession } from 'mongoose';
 import { Flashcard } from './schemas/flashcard.schema';
 import { User } from '../users/schemas/user.schema';
 import { SrsCalculatorService } from './services/srs-calculator.service';
 import { AiContextService } from './services/ai-context.service';
-
-const shortToFull: Record<string, string> = {
-  en: 'English',
-  de: 'German',
-  es: 'Spanish',
-  fr: 'French',
-  ar: 'Arabic',
-  tr: 'Turkish',
-  English: 'English',
-  German: 'German',
-  Spanish: 'Spanish',
-  French: 'French',
-  Arabic: 'Arabic',
-  Turkish: 'Turkish',
-};
+import { developmentSchemaChangesAllowed } from '../operations/schema-startup';
+import { telemetry } from '../operations/telemetry';
 
 @Injectable()
 export class FlashcardsService implements OnModuleInit {
@@ -28,58 +18,37 @@ export class FlashcardsService implements OnModuleInit {
     @InjectModel(User.name) private userModel: Model<User>,
     private srsCalculator: SrsCalculatorService,
     private aiContext: AiContextService,
+    private readonly timeline: MutationTimeline,
   ) {}
 
   /**
    * NestJS Lifecycle Hook:
-   * 1. Drops legacy unique index userId_1_targetWord_1 to prevent Mongoose schema errors on launch.
-   * 2. Migrates older flashcard schema documents.
+   * Development/test compatibility only: drop the obsolete pre-language index.
+   * Production verifies indexes and leaves migration to the operator.
+   * Language compatibility is handled on reads without backfilling documents.
    */
   async onModuleInit() {
+    if (!developmentSchemaChangesAllowed()) return;
     try {
       // Drop the old index if it exists to avoid conflicts when creating the new index
       await this.flashcardModel.collection.dropIndex('userId_1_targetWord_1');
-      console.log('Successfully dropped old flashcard unique index.');
+      telemetry.emit('index.legacy_removed', { domain: 'flashcard' });
     } catch (e) {
-      // Index might not exist, which is fine
-    }
-    await this.migrateLegacyFlashcards();
-  }
-
-  /**
-   * Schema Migration Helper:
-   * Maps older flashcard documents missing standard fields like targetLanguage or nativeTranslation values.
-   */
-  private async migrateLegacyFlashcards() {
-    try {
-      const legacyCards = await this.flashcardModel.find({ targetLanguage: { $exists: false } }).exec();
-      if (legacyCards.length === 0) return;
-
-      for (const card of legacyCards) {
-        const user = await this.userModel.findById(card.userId).exec();
-        card.targetLanguage = user?.targetLanguage ? (shortToFull[user.targetLanguage] || user.targetLanguage) : 'English';
-        card.nativeLanguage = 'Turkish';
-        card.nativeTranslation = card.turkishTranslation;
-        await card.save();
-      }
-      console.log(`Migrated ${legacyCards.length} legacy flashcards.`);
-    } catch (e) {
-      console.error('Failed to migrate legacy flashcards', e);
+      if (e?.code !== 26 && e?.code !== 27) throw new Error('Development schema initialization failed for flashcards');
     }
   }
 
   /**
-   * Helper function to find a user profile in MongoDB by email or ObjectId.
+   * Resolve only the MongoDB identity supplied by an authenticated controller.
    */
-  private async findUser(userId: string): Promise<User | null> {
-    const queryEmail = userId === 'guest' ? 'guest@lingua.ai' : userId;
-    const isObjectId = Types.ObjectId.isValid(userId);
-    return this.userModel.findOne({
-      $or: [
-        { email: queryEmail },
-        ...(isObjectId ? [{ _id: new Types.ObjectId(userId) }] : []),
-      ],
-    }).exec();
+  private async findUser(userId: string, session?: ClientSession): Promise<User> {
+    if (!Types.ObjectId.isValid(userId)) {
+      throw new NotFoundException('Authenticated user not found');
+    }
+    const query = this.userModel.findById(userId);
+    const user = await (session ? query.session(session) : query).exec();
+    if (!user) throw new NotFoundException('Authenticated user not found');
+    return user;
   }
 
   /**
@@ -98,45 +67,55 @@ export class FlashcardsService implements OnModuleInit {
     nativeTranslation?: string,
     exampleSentence?: string,
     note?: string,
-  ) {
-    let user = await this.findUser(userId);
-    if (!user) {
-      user = await this.userModel.create({
-        name: userId.split('@')[0].toUpperCase(),
-        email: userId,
-        passwordHash: 'placeholder-hash',
-        totalXp: 0,
-        streak: 0,
-        level: 'Beginner',
-      });
-    }
+    session?: ClientSession,
+  ): Promise<Flashcard> {
+    if (!session)
+      return this.timeline.transaction('flashcard-create', (current) =>
+        this.create(
+          userId,
+          targetWord,
+          turkishTranslation,
+          targetLanguage,
+          nativeLanguage,
+          nativeTranslation,
+          exampleSentence,
+          note,
+          current,
+        ),
+      );
+    this.timeline.assertTransaction(session);
+    const user = await this.findUser(userId, session);
 
-    const mappedTargetLanguage = shortToFull[targetLanguage] || targetLanguage || 'English';
+    const mappedTargetLanguage = targetLanguageCode(targetLanguage);
     const finalNativeLanguage = nativeLanguage || 'Turkish';
     const finalNativeTranslation = nativeTranslation || turkishTranslation || '';
     const finalTurkishTranslation = turkishTranslation || nativeTranslation || '';
 
     // Check if flashcard already exists for this user, word, and target language
-    const existing = await this.flashcardModel.findOne({
+    const existingQuery = this.flashcardModel.findOne({
       userId: user._id.toString(),
-      targetLanguage: mappedTargetLanguage,
+      $or: [{ targetLanguage: targetLanguageQuery(mappedTargetLanguage) },
+        ...(tryTargetLanguage(user.targetLanguage ?? 'en') === mappedTargetLanguage
+          ? [{ targetLanguage: { $exists: false } }] : [])],
       targetWord,
-    }).exec();
+    });
+    const existing = await (session ? existingQuery.session(session) : existingQuery).exec();
 
     // If it exists, update the details and trigger AI Context regeneration
     if (existing) {
       existing.turkishTranslation = finalTurkishTranslation;
       existing.nativeTranslation = finalNativeTranslation;
       existing.nativeLanguage = finalNativeLanguage;
-      if (exampleSentence !== undefined) existing.exampleSentence = exampleSentence;
+      if (exampleSentence !== undefined)
+        existing.exampleSentence = exampleSentence;
       if (note !== undefined) existing.note = note;
       existing.nextReviewDate = new Date();
-      existing.aiContext = await this.aiContext.generateContext(targetWord, finalTurkishTranslation);
-      return existing.save();
+      existing.aiContext = await this.aiContext.generateContext(targetWord, finalTurkishTranslation, mappedTargetLanguage);
+      return existing.save({ session });
     }
 
     // Call Gemini helper to fetch definition context and study tips
-    const aiContext = await this.aiContext.generateContext(targetWord, finalTurkishTranslation);
+    const aiContext = await this.aiContext.generateContext(targetWord, finalTurkishTranslation, mappedTargetLanguage);
 
     const flashcard = new this.flashcardModel({
       userId: user._id.toString(),
@@ -151,7 +130,7 @@ export class FlashcardsService implements OnModuleInit {
       nextReviewDate: new Date(), // Set next review date to immediately so it appears in study deck
     });
 
-    return flashcard.save();
+    return flashcard.save({ session });
   }
 
   /**
@@ -162,57 +141,93 @@ export class FlashcardsService implements OnModuleInit {
    */
   async update(
     cardId: string,
-    targetWord: string,
-    turkishTranslation: string,
+    targetWord?: string,
+    turkishTranslation?: string,
     targetLanguage?: string,
     nativeLanguage?: string,
     nativeTranslation?: string,
     exampleSentence?: string,
     note?: string,
     authenticatedUserId?: string,
-  ) {
-    const card = await this.flashcardModel.findById(cardId);
+    session?: ClientSession,
+  ): Promise<Flashcard> {
+    if (!session)
+      return this.timeline.transaction('flashcard-update', (current) =>
+        this.update(
+          cardId,
+          targetWord,
+          turkishTranslation,
+          targetLanguage,
+          nativeLanguage,
+          nativeTranslation,
+          exampleSentence,
+          note,
+          authenticatedUserId,
+          current,
+        ),
+      );
+    this.timeline.assertTransaction(session);
+    const query = this.flashcardModel.findById(cardId);
+    const card = await (session ? query.session(session) : query);
     if (!card) throw new NotFoundException('Flashcard not found');
 
     // Access control validation guard
     if (authenticatedUserId && card.userId.toString() !== authenticatedUserId) {
-      throw new ForbiddenException('Access denied: Cannot edit another user\'s flashcards');
+      throw new ForbiddenException(
+        "Access denied: Cannot edit another user's flashcards",
+      );
     }
 
-    const finalNativeTranslation = nativeTranslation || turkishTranslation || '';
-    const finalTurkishTranslation = turkishTranslation || nativeTranslation || '';
-
-    card.targetWord = targetWord;
-    card.turkishTranslation = finalTurkishTranslation;
-    card.nativeTranslation = finalNativeTranslation;
-    if (targetLanguage) {
-      card.targetLanguage = shortToFull[targetLanguage] || targetLanguage;
+    if (targetWord !== undefined) card.targetWord = targetWord;
+    if (turkishTranslation !== undefined)
+      card.turkishTranslation = turkishTranslation;
+    if (nativeTranslation !== undefined)
+      card.nativeTranslation = nativeTranslation;
+    if (targetLanguage !== undefined) {
+      const language = targetLanguageCode(targetLanguage);
+      // Preserve same-language historical index keys until an explicit migration
+      // can reconcile full-name/code duplicates. New language values use codes.
+      if (tryTargetLanguage(card.targetLanguage) !== language)
+        card.targetLanguage = language;
     }
-    if (nativeLanguage) {
+    if (nativeLanguage !== undefined) {
       card.nativeLanguage = nativeLanguage;
     }
-    card.exampleSentence = exampleSentence;
-    card.note = note;
+    if (exampleSentence !== undefined) card.exampleSentence = exampleSentence;
+    if (note !== undefined) card.note = note;
 
-    card.aiContext = await this.aiContext.generateContext(targetWord, finalTurkishTranslation);
+    const language = card.targetLanguage ?? (await this.findUser(card.userId.toString(), session)).targetLanguage ?? 'en';
+    card.aiContext = await this.aiContext.generateContext(card.targetWord, card.turkishTranslation, targetLanguageCode(language));
 
-    return card.save();
+    return card.save({ session });
   }
 
   /**
    * Delete Flashcard:
    * Validates target document existence and confirms ownership before deleting.
    */
-  async delete(cardId: string, authenticatedUserId: string) {
-    const card = await this.flashcardModel.findById(cardId);
+  async delete(
+    cardId: string,
+    authenticatedUserId: string,
+    session?: ClientSession,
+  ): Promise<{ message: string }> {
+    if (!session)
+      return this.timeline.transaction('flashcard-delete', (current) =>
+        this.delete(cardId, authenticatedUserId, current),
+      );
+    this.timeline.assertTransaction(session);
+    const query = this.flashcardModel.findById(cardId);
+    const card = await (session ? query.session(session) : query);
     if (!card) throw new NotFoundException('Flashcard not found');
 
     // Ownership guard
     if (card.userId.toString() !== authenticatedUserId) {
-      throw new ForbiddenException('Access denied: Cannot delete another user\'s flashcards');
+      throw new ForbiddenException(
+        "Access denied: Cannot delete another user's flashcards",
+      );
     }
 
-    await this.flashcardModel.deleteOne({ _id: card._id }).exec();
+    await this.flashcardModel.deleteOne({ _id: card._id, userId: authenticatedUserId }, { session }).exec();
     return { message: 'Flashcard deleted successfully' };
   }
 
@@ -221,19 +236,22 @@ export class FlashcardsService implements OnModuleInit {
    * Fetches flashcards where nextReviewDate <= current time, ordered by priority.
    */
   async getDueCards(userId: string, targetLanguage?: string) {
-    let user = await this.findUser(userId);
-    if (!user) return [];
+    const user = await this.findUser(userId);
 
-    const query: any = {
+    const query: Record<string, unknown> = {
       userId: user._id.toString(),
       nextReviewDate: { $lte: new Date() }, // due date has arrived or passed
     };
 
-    if (targetLanguage) {
-      query.targetLanguage = shortToFull[targetLanguage] || targetLanguage;
+    if (targetLanguage !== undefined) {
+      const language = targetLanguageCode(targetLanguage);
+      const match = targetLanguageQuery(language);
+      query.$or = [{ targetLanguage: match },
+        ...(tryTargetLanguage(user.targetLanguage ?? 'en') === language ? [{ targetLanguage: { $exists: false } }] : [])];
     }
 
-    return this.flashcardModel.find(query).sort({ nextReviewDate: 1 }).exec();
+    const cards = await this.flashcardModel.find(query).sort({ nextReviewDate: 1 }).exec();
+    return cards.map(card => languageResponse({ ...card.toObject(), targetLanguage: card.targetLanguage ?? user.targetLanguage ?? 'en' }));
   }
 
   /**
@@ -242,13 +260,26 @@ export class FlashcardsService implements OnModuleInit {
    * 2. Passes previous Easiness Factor and interval statistics to the SRS Calculator service.
    * 3. Updates card intervals, schedules the new review date, and appends rating scores history.
    */
-  async review(cardId: string, score: number, authenticatedUserId: string) {
-    const card = await this.flashcardModel.findById(cardId);
+  async review(
+    cardId: string,
+    score: number,
+    authenticatedUserId: string,
+    session?: ClientSession,
+  ): Promise<Flashcard> {
+    if (!session)
+      return this.timeline.transaction('flashcard-review', (current) =>
+        this.review(cardId, score, authenticatedUserId, current),
+      );
+    this.timeline.assertTransaction(session);
+    const query = this.flashcardModel.findById(cardId);
+    const card = await (session ? query.session(session) : query);
     if (!card) throw new NotFoundException('Flashcard not found');
 
     // Ownership guard
     if (card.userId.toString() !== authenticatedUserId) {
-      throw new ForbiddenException('Access denied: Cannot review another user\'s flashcards');
+      throw new ForbiddenException(
+        "Access denied: Cannot review another user's flashcards",
+      );
     }
 
     // Call local SM-2 calculation algorithm
@@ -264,7 +295,7 @@ export class FlashcardsService implements OnModuleInit {
     card.reviewCount = (card.reviewCount || 0) + 1;
     card.history.push({ date: new Date(), score });
 
-    return card.save();
+    return card.save({ session });
   }
 
   /**
@@ -272,14 +303,17 @@ export class FlashcardsService implements OnModuleInit {
    * Returns list of all cards owned by the target user.
    */
   async getAll(userId: string, targetLanguage?: string) {
-    let user = await this.findUser(userId);
-    if (!user) return [];
+    const user = await this.findUser(userId);
 
-    const query: any = { userId: user._id.toString() };
-    if (targetLanguage) {
-      query.targetLanguage = shortToFull[targetLanguage] || targetLanguage;
+    const query: Record<string, unknown> = { userId: user._id.toString() };
+    if (targetLanguage !== undefined) {
+      const language = targetLanguageCode(targetLanguage);
+      const match = targetLanguageQuery(language);
+      query.$or = [{ targetLanguage: match },
+        ...(tryTargetLanguage(user.targetLanguage ?? 'en') === language ? [{ targetLanguage: { $exists: false } }] : [])];
     }
 
-    return this.flashcardModel.find(query).exec();
+    const cards = await this.flashcardModel.find(query).exec();
+    return cards.map(card => languageResponse({ ...card.toObject(), targetLanguage: card.targetLanguage ?? user.targetLanguage ?? 'en' }));
   }
 }

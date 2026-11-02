@@ -1,0 +1,74 @@
+# 11B-B disposable staging topology
+
+Phase 11B-C2 now selects private, versioned S3-compatible community storage. See [the C2 contract](../../COMMUNITY_OBJECT_STORAGE.md); older filesystem/control setup below is historical compatibility material, not the current bootstrap procedure.
+
+For a **new empty disposable C2 environment only**, generate four distinct synthetic 64-character hex object credentials in the ignored env file. Explicitly set `STAGING_OBJECT_CONFIG_INIT=I_ACKNOWLEDGE_DISPOSABLE_OBJECT_STORE` before starting object services. This one-shot initializer preserves retained configuration/data and refuses implicit credential changes. No host object-store/console port is published; the S3-only proxy is on an internal network and the underlying management APIs are on another internal network inaccessible to backend/tools.
+
+After PostgreSQL/Mongo/private object services are available, set `STAGING_OBJECT_BOOTSTRAP=I_ACKNOWLEDGE_NEW_EMPTY_OBJECT_STORAGE` and the existing authority operator intent, then explicitly run the tools-profile `object-bootstrap` service. Provision empty Mongo indexes with `backend-tools`, and explicitly initialize the authority CLOSED. Run `object-reconcile-cli --plan /plans/reconcile.json` with the observed revision/timeline/generation and public isolation/history/recovery references. Only then use the existing durable coordinator's explicit OPEN procedure. Both normal and live preflight remain separate from bootstrap; no backend silently creates a bucket or regenerates history.
+
+If a remote effect is interrupted, keep CLOSED, stop all writers and disable restart paths. Restart only the isolated C2 object-data/proxy after that effect while retaining volumes, inspect exact version/checksum and Mongo/ledger evidence, then use the host isolation gate and existing admin receipt plus operator resolution. A same-timeline established delete may be retried explicitly with `object-effects-cli`; A intents never become B work. For restore, install fresh B CLOSED, verify/adopt current exact references using `object-reconcile-cli`, retain absent/orphan objects, then separately reconcile/open. Do not run these new-empty tools as production migration or reset commands.
+
+This Compose stack is a **local simulation**, not an externally provisioned staging or production deployment. It fixes the backend at one instance and uses a single-node MongoDB 7.0.45 replica set for transaction and index-contract exercises. It cannot prove failover, capacity, shared uploads across replicas, external timeline control, public TLS ownership, or model quality.
+
+## Prerequisites and configuration
+
+- Docker Engine with Compose V2 and `linux/amd64` image support; enough disk and memory for the locked Python inference dependencies. Container builds and runtime behavior still require validation on a Docker host.
+- Resolve `app.staging.test` and `api.staging.test` to `127.0.0.1` on that host. Port 8443 is published **only** on loopback. Caddy uses a locally generated internal CA. Trust it only for this disposable exercise; no private key is tracked.
+- Copy `.env.staging.example` to ignored `.env.staging.local`. Replace both `CHANGE_ME` placeholders with distinct random values that pass the existing backend and pronunciation config validators. Never use production or historical credentials. The disposable Mongo URI is fixed in Compose and cannot be redirected by an env file. Keep `STAGING_DATA_WRITE_MODE=CLOSED` initially.
+- Run `node scripts/validate-staging-deployment.cjs` from the repository root. This validates files only; it never contacts a service. `manifest.example.json` holds nonsecret local identities, protocol 2, one backend replica, and pending artifact/model digests. For a reviewed, nonsecret manifest with real digests, use `--manifest <PATH> --strict --build-id <PUBLIC_BUILD_ID> --timeline-id <UUID>`; strict validation rejects pending identities and does not read an env file.
+
+The web API endpoint is a public **build-time** value. The backend and pronunciation tokens enter only at container runtime via Compose environment substitution. A real staging deployment needs separate secret injection, authenticated Mongo, stable certificate ownership, and operator-controlled artifact digests. Do not expose this uncredentialed disposable Mongo beyond its internal network.
+
+## Build, start, and explicit bootstrap
+
+Use the same Compose file and env file in each command. The commands below are for an isolated local Docker host:
+
+```sh
+docker compose -f deployment/staging/compose.json --env-file deployment/staging/.env.staging.local build
+docker compose -f deployment/staging/compose.json --env-file deployment/staging/.env.staging.local up -d
+docker compose -f deployment/staging/compose.json --env-file deployment/staging/.env.staging.local ps
+```
+
+`mongo-init` waits for Mongo, initializes `staging-rs` if absent, and waits for the primary. It does not create application data. Backend readiness should remain 503 until the explicit index and timeline bootstrap below. Start order alone is never treated as readiness.
+
+Index bootstrap is a separate operator action, not part of backend startup. Set `STAGING_BOOTSTRAP=I_ACKNOWLEDGE_DISPOSABLE_STAGING` in the ignored local env file, then run:
+
+```sh
+docker compose -f deployment/staging/compose.json --env-file deployment/staging/.env.staging.local --profile tools run --rm backend-tools node deployment/staging/bootstrap-indexes.cjs
+```
+
+The tool accepts only the exact local Compose URI/database/replica set and a synthetic timeline UUID. It creates missing critical indexes, refuses incompatible existing indexes or duplicates, and never deletes data. The application still uses **VERIFY-ONLY** index readiness. The timeline singleton is initialized separately by the existing operator CLI, with a new event UUID generated by the operator:
+
+```sh
+docker compose -f deployment/staging/compose.json --env-file deployment/staging/.env.staging.local --profile tools run --rm backend-tools node lingua_ai_backend/dist/src/tooling/timeline-control-cli.js initialize --target 44444444-4444-4444-8444-444444444444 --event <NEW_UUID_V4> --operator local-staging --confirm-database lingua_staging --confirm-production --maintenance-isolated
+```
+
+The local timeline starts **CLOSED**. Inspect readiness through `https://api.staging.test:8443/health/ready`; do not open writes until the disposable target and isolation are confirmed. To perform synthetic writes only, explicitly switch the ignored env file to `STAGING_DATA_WRITE_MODE=OPEN`, use the operator CLI `open` transition with expected timeline, `CLOSED` state and version `0`, and recreate the backend container. The existing runbook in `docs/` governs timeline transitions. Never reuse this local UUID for real staging or production.
+
+## Local checks to run on a Docker host
+
+- Verify `mongo` reports a primary, sessions/snapshot transactions and majority commits succeed, and backend `/health/ready` returns 200 only after correct indexes, control record, and writable upload volume exist. Break one disposable critical index, observe 503, and restore it only through explicit bootstrap or fresh disposable state.
+- `curl -k --resolve app.staging.test:8443:127.0.0.1 https://app.staging.test:8443/` and likewise `api.staging.test` for `/health/live` and `/health/ready`. `-k` is only for the local Caddy CA. Check SPA fallback, `index.html` revalidation, hashed asset immutability, no maps, upload size, CORS allow/deny cases, request IDs, and sanitized forwarded client IP. Confirm Mongo and pronunciation have no published ports or ingress routes.
+- For synthetic upload persistence, use a throwaway account and safe image through the existing API, then restart/recreate **backend only**. Confirm Mongo data, upload serving/deletion, timeline ID, and readiness persist. Do not remove named volumes before this check.
+- Mount a reviewed **disposable** model fixture under `/models/model` in `model-cache` before expecting pronunciation readiness. With no model, `/health/live` can succeed while `/health/ready` must fail. The image disables downloads and requires a distinct service token. No model weights or production credentials are in the image. The service is reachable from backend on `inference`, never from ingress; enable the backend feature only for a controlled fixture call.
+- Send SIGTERM to backend and pronunciation and observe graceful drain/readiness behavior. The images use exec-form process commands. Exercise Mongo unavailable, upload read-only/missing, and pronunciation unavailable cases on the disposable stack. No such runtime result is claimed until witnessed.
+
+## Stop and cleanup
+
+`docker compose -f deployment/staging/compose.json --env-file deployment/staging/.env.staging.local stop` stops processes while preserving named volumes. Container replacement also preserves them. `down` removes containers and networks; **do not use `down --volumes`** unless explicitly discarding this disposable simulation after evidence is recorded.
+
+## Boundaries for later work
+
+External expected timeline/maintenance history with independent CAS is **REQUIRED FOR 11B-C, NOT YET PROVISIONED**. The named upload volume proves only single-instance persistence until a Docker exercise confirms it; shared namespace and recovery behavior belong to 11B-C. Global limiting, multi-instance safety and capacity belong to 11B-D. The local TLS CA proves termination and proxy behavior only, not DNS ownership, public certificates, CDN/WAF, firewall, or production ingress. Real Mongo replica failover, backup/restore and operator credential rotation remain unverified.
+
+## Phase 11B-C1 required authority (supersedes legacy control setup above)
+
+The staging profile now requires independent PostgreSQL control on a separate private network and volume. The old B2 Mongo CLI commands above are historical LEGACY_LOCAL instructions and cannot mutate required-mode deployments. Use the explicit coordinator and [C1 architecture/recovery procedure](../../INDEPENDENT_TIMELINE_AUTHORITY.md). Provision three distinct synthetic 64-character hex authority passwords in an ignored env file; normal backend startup never initializes an authority row. Do not adopt retained B2 data as a new environment. The independent authority is still disposable validation, not real staging infrastructure; shared uploads remain out of scope.
+
+## R2 filesystem barrier and explicit recovery
+
+Required staging manifests select `authority.fileEffectFencing=DURABLE_EFFECTS_V1`. An older/missing control schema fails closed; backend startup does not migrate it. Upload writes/deletes/cleanup and writable health probes register durable permits. CLOSE is incomplete while one remains, and SQL rejects maintenance, new timeline allocation and reopening until completion or explicit isolated recovery. Closed live preflight does not write probe files.
+
+Index bootstrap is restricted to a new, empty environment. Supply the existing `STAGING_BOOTSTRAP=I_ACKNOWLEDGE_DISPOSABLE_STAGING`, `STAGING_AUTHORITY_BOOTSTRAP=I_ACKNOWLEDGE_NEW_EMPTY_ENVIRONMENT` and explicit operator intent. It refuses initialized or missing-but-historical authority state and nonempty application data. Open/reconcile requests require an independently reviewed `historyContinuityReference` as well as upload recovery evidence.
+
+For interrupted permits, stop all project writers and disable restart paths. Use the host-only `verify-file-isolation.cjs --project <approved-disposable-project>` gate; it checks container/network/store identities and outstanding Mongo/authority work without printing user records. Only after successful isolation may an administrator add `--effect <UUID> --reference <public-ticket> --issue-receipt`. The normal operator then supplies that receipt with `resolve-effect`, explicit recovery evidence and current CAS/Mongo CLOSED version. Reader/operator credentials cannot mint receipts. Keep deployment changes frozen after this snapshot check. See the [full R2 protocol](../../INDEPENDENT_TIMELINE_AUTHORITY.md) and [writer inventory](../../RESTORED_STATE_WRITERS.md). No production restore, shared-upload or multi-instance readiness follows.

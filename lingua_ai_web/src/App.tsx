@@ -1,7 +1,11 @@
+import { TimelineBoundary } from './components/TimelineBoundary';
+import { ClientRecoveryNotice } from './components/ClientRecoveryNotice';
+import { ReleaseCompatibilityNotice } from './components/ReleaseCompatibilityNotice';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { LanguageProvider } from './context/LanguageContext';
 import { TargetLanguageProvider } from './context/TargetLanguageContext';
+import { SyncProvider } from './context/SyncContext';
 import { ProgressProvider } from './context/ProgressContext';
 import { SoundProvider } from './context/SoundContext';
 import { ThemeProvider } from './context/ThemeContext';
@@ -52,20 +56,26 @@ import { NetworkProvider } from './context/NetworkContext';
 export default function App() {
   return (
     <NetworkProvider>
+      <ReleaseCompatibilityNotice />
       <AuthProvider>
-        <SoundProvider>
-          <TargetLanguageProvider>
-            <ProgressProvider>
-              <LanguageProvider>
-                <ThemeProvider>
-                  <Router>
-                    <AppRoutes />
-                  </Router>
-                </ThemeProvider>
-              </LanguageProvider>
-            </ProgressProvider>
-          </TargetLanguageProvider>
-        </SoundProvider>
+        <TimelineBoundary>
+        <ClientRecoveryNotice />
+        <SyncProvider>
+          <SoundProvider>
+            <TargetLanguageProvider>
+              <ProgressProvider>
+                <LanguageProvider>
+                  <ThemeProvider>
+                    <Router>
+                      <AppRoutes />
+                    </Router>
+                  </ThemeProvider>
+                </LanguageProvider>
+              </ProgressProvider>
+            </TargetLanguageProvider>
+          </SoundProvider>
+        </SyncProvider>
+        </TimelineBoundary>
       </AuthProvider>
     </NetworkProvider>
   );

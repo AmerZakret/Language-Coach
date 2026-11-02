@@ -1,0 +1,71 @@
+{
+  "schemaVersion": 1,
+  "environment": "staging",
+  "deploymentIdentity": "language-coach-11b-local-disposable",
+  "buildId": "phase11b-local",
+  "protocolRevision": 2,
+  "dataTimelineId": "44444444-4444-4444-8444-444444444444",
+  "mongo": {
+    "targetIdentity": "local-compose-single-node",
+    "host": "mongo:27017",
+    "database": "lingua_staging",
+    "replicaSet": "staging-rs"
+  },
+  "uploads": {
+    "storageIdentity": "language-coach-11b-local_uploads",
+    "root": "/srv/uploads"
+  },
+  "pronunciation": {
+    "internalUrl": "http://pronunciation:8001",
+    "modelIdentity": "UNPROVISIONED_FIXTURE",
+    "modelSha256": "PENDING_MODEL"
+  },
+  "artifacts": {
+    "backendSha256": "PENDING_BUILD",
+    "webSha256": "PENDING_BUILD",
+    "pronunciationSha256": "PENDING_BUILD"
+  },
+  "ingress": {
+    "webUrl": "https://app.staging.test:8443",
+    "apiUrl": "https://api.staging.test:8443",
+    "trustedProxyIp": "172.30.50.10"
+  },
+  "backendInstances": 1,
+  "clientFloor": {
+    "protocolRevision": 2,
+    "capability": "timeline-aware-protocol-2"
+  },
+  "externalTimelineControl": "DURABLE_POSTGRESQL_C1",
+  "authority": {
+    "type": "postgresql",
+    "mode": "DURABLE_REQUIRED",
+    "fileEffectFencing": "DURABLE_EFFECTS_V1",
+    "environmentIdentity": "language-coach-11b-local",
+    "storageIdentity": "language-coach-11b-local_authority-data",
+    "backupIdentity": "language-coach-11b-local-authority-independent",
+    "generation": 1,
+    "revision": 1,
+    "writeMode": "CLOSED"
+  },
+  "objectStorage": {
+    "backend": "S3",
+    "bucketIdentity": "language-coach-c2-local",
+    "namespace": "community",
+    "environmentIdentity": "language-coach-11b-local",
+    "storageIdentity": "language-coach-11b-local_object-data",
+    "durabilityClass": "SINGLE_NODE_VERSIONED",
+    "artifactIdentity": "chrislusf/seaweedfs:4.51@sha256:f7a49e3f3972ebed5be2ed4befa4a0c68eb7bdddba6e692d42729ceb545134b8",
+    "applicationRoleIdentity": "c2-community-runtime",
+    "migrationState": "NEW_EMPTY",
+    "reconciliationStatus": "PENDING",
+    "readinessEvidence": {
+      "identity": "PENDING",
+      "privateAccess": "PENDING",
+      "crossProcess": "PENDING",
+      "reconciliation": "PENDING"
+    },
+    "verificationReference": "PENDING",
+    "timelineId": "44444444-4444-4444-8444-444444444444",
+    "generation": 1
+  }
+}

@@ -40,42 +40,42 @@ class DummyData {
 
   static List<Lesson> _getEnglishLessons() {
     return [
-      Lesson(id: 'en_1', targetLanguage: 'en', title: 'Greetings & Introductions', description: 'Learn how to greet people and introduce yourself.', category: 'Vocabulary', difficulty: 'Beginner', duration: 5, xpReward: 20, questions: [
+      Lesson(id: 'en_b_1', targetLanguage: 'en', title: 'Greetings & Introductions', description: 'Learn how to greet people and introduce yourself.', category: 'Vocabulary', difficulty: 'Beginner', duration: 5, xpReward: 20, questions: [
         Question(id: 'en1q1', question: 'Translate: "Merhaba, nasılsın?"', options: ['Hello, how are you?', 'Goodbye, see you!', 'Good night!', 'What is your name?'], correctAnswer: 'Hello, how are you?', type: 'multiple_choice'),
         Question(id: 'en1q2', question: 'What does "Nice to meet you" mean?', options: ['Hoşça kal', 'Tanıştığıma memnun oldum', 'Günaydın', 'Teşekkürler'], correctAnswer: 'Tanıştığıma memnun oldum', type: 'multiple_choice'),
         Question(id: 'en1q3', question: 'Complete: "My name ___ Ali."', options: ['am', 'is', 'are', 'be'], correctAnswer: 'is', type: 'fill_blank'),
         Question(id: 'en1q4', question: 'Which is a greeting?', options: ['Goodbye', 'Sorry', 'Good morning', 'Please'], correctAnswer: 'Good morning', type: 'multiple_choice'),
         Question(id: 'en1q5', question: 'Translate: "Ben Türkiye\'denim."', options: ['I am from Turkey.', 'I like Turkey.', 'Turkey is big.', 'I go to Turkey.'], correctAnswer: 'I am from Turkey.', type: 'multiple_choice'),
       ]),
-      Lesson(id: 'en_2', targetLanguage: 'en', title: 'Classroom & School Words', description: 'Learn words you use every day at school.', category: 'Vocabulary', difficulty: 'Beginner', duration: 5, xpReward: 20, questions: [
+      Lesson(id: 'en_b_2', targetLanguage: 'en', title: 'Classroom & School Words', description: 'Learn words you use every day at school.', category: 'Vocabulary', difficulty: 'Beginner', duration: 5, xpReward: 20, questions: [
         Question(id: 'en2q1', question: 'What is "kalem" in English?', options: ['Book', 'Pen', 'Desk', 'Bag'], correctAnswer: 'Pen', type: 'multiple_choice'),
         Question(id: 'en2q2', question: 'Translate: "öğretmen"', options: ['Student', 'Teacher', 'Doctor', 'Driver'], correctAnswer: 'Teacher', type: 'multiple_choice'),
         Question(id: 'en2q3', question: '"I read a ___" — choose the correct word.', options: ['chair', 'book', 'window', 'door'], correctAnswer: 'book', type: 'fill_blank'),
         Question(id: 'en2q4', question: 'What does "homework" mean?', options: ['Ev', 'Ödev', 'Okul', 'Sınıf'], correctAnswer: 'Ödev', type: 'multiple_choice'),
         Question(id: 'en2q5', question: 'Which word is a school item?', options: ['Eraser', 'Kitchen', 'Garden', 'Bedroom'], correctAnswer: 'Eraser', type: 'multiple_choice'),
       ]),
-      Lesson(id: 'en_3', targetLanguage: 'en', title: 'Family Members', description: 'Learn how to talk about your family.', category: 'Vocabulary', difficulty: 'Beginner', duration: 6, xpReward: 25, questions: [
+      Lesson(id: 'en_b_3', targetLanguage: 'en', title: 'Family Members', description: 'Learn how to talk about your family.', category: 'Vocabulary', difficulty: 'Beginner', duration: 6, xpReward: 25, questions: [
         Question(id: 'en3q1', question: 'What does "uncle" mean in Turkish?', options: ['Baba', 'Amca / Dayı', 'Kardeş', 'Kuzen'], correctAnswer: 'Amca / Dayı', type: 'multiple_choice'),
         Question(id: 'en3q2', question: 'Translate: "kız kardeş"', options: ['Brother', 'Sister', 'Mother', 'Daughter'], correctAnswer: 'Sister', type: 'multiple_choice'),
         Question(id: 'en3q3', question: 'Complete: "My ___ is a doctor." (anne)', options: ['father', 'mother', 'brother', 'uncle'], correctAnswer: 'mother', type: 'fill_blank'),
         Question(id: 'en3q4', question: '"Grandfather" means:', options: ['Büyükanne', 'Büyükbaba', 'Amca', 'Teyze'], correctAnswer: 'Büyükbaba', type: 'multiple_choice'),
         Question(id: 'en3q5', question: 'Which sentence is correct?', options: ['I have two brother.', 'I have two brothers.', 'I has two brothers.', 'I am two brothers.'], correctAnswer: 'I have two brothers.', type: 'multiple_choice'),
       ]),
-      Lesson(id: 'en_4', targetLanguage: 'en', title: 'Daily Routine', description: 'Describe what you do every day.', category: 'Grammar', difficulty: 'Beginner', duration: 6, xpReward: 25, questions: [
+      Lesson(id: 'en_b_4', targetLanguage: 'en', title: 'Daily Routine', description: 'Describe what you do every day.', category: 'Grammar', difficulty: 'Beginner', duration: 6, xpReward: 25, questions: [
         Question(id: 'en4q1', question: 'Complete: "I ___ breakfast at 8."', options: ['eat', 'eats', 'eating', 'am eat'], correctAnswer: 'eat', type: 'fill_blank'),
         Question(id: 'en4q2', question: 'Translate: "Okula giderim."', options: ['I go to school.', 'I like school.', 'School is good.', 'I am at school.'], correctAnswer: 'I go to school.', type: 'multiple_choice'),
         Question(id: 'en4q3', question: 'What does "I wake up early" mean?', options: ['Geç kalırım', 'Erken kalkarım', 'Erken yatarım', 'Geç yatarım'], correctAnswer: 'Erken kalkarım', type: 'multiple_choice'),
         Question(id: 'en4q4', question: 'Choose the correct sentence:', options: ['She go to work.', 'She goes to work.', 'She going to work.', 'She gone to work.'], correctAnswer: 'She goes to work.', type: 'multiple_choice'),
         Question(id: 'en4q5', question: 'Complete: "We ___ TV in the evening."', options: ['watches', 'watch', 'watching', 'watched'], correctAnswer: 'watch', type: 'fill_blank'),
       ]),
-      Lesson(id: 'en_5', targetLanguage: 'en', title: 'Food & Drinks', description: 'Learn food vocabulary and ordering phrases.', category: 'Vocabulary', difficulty: 'Elementary', duration: 7, xpReward: 30, questions: [
+      Lesson(id: 'en_b_5', targetLanguage: 'en', title: 'Food & Drinks', description: 'Learn food vocabulary and ordering phrases.', category: 'Vocabulary', difficulty: 'Elementary', duration: 7, xpReward: 30, questions: [
         Question(id: 'en5q1', question: 'What is "ekmek" in English?', options: ['Butter', 'Cheese', 'Bread', 'Rice'], correctAnswer: 'Bread', type: 'multiple_choice'),
         Question(id: 'en5q2', question: 'Translate: "Bir çay, lütfen."', options: ['One coffee, please.', 'One tea, please.', 'One water, please.', 'One juice, please.'], correctAnswer: 'One tea, please.', type: 'multiple_choice'),
         Question(id: 'en5q3', question: '"I am hungry" means:', options: ['Susadım', 'Açım', 'Yorgunum', 'Mutluyum'], correctAnswer: 'Açım', type: 'multiple_choice'),
         Question(id: 'en5q4', question: 'Which is a drink?', options: ['Chicken', 'Orange juice', 'Pasta', 'Salad'], correctAnswer: 'Orange juice', type: 'multiple_choice'),
         Question(id: 'en5q5', question: 'Complete: "Can I have the ___, please?"', options: ['menu', 'table', 'chair', 'kitchen'], correctAnswer: 'menu', type: 'fill_blank'),
       ]),
-      Lesson(id: 'en_6', targetLanguage: 'en', title: 'Asking Questions', description: 'Learn how to ask basic questions in English.', category: 'Grammar', difficulty: 'Elementary', duration: 7, xpReward: 30, questions: [
+      Lesson(id: 'en_b_6', targetLanguage: 'en', title: 'Asking Questions', description: 'Learn how to ask basic questions in English.', category: 'Grammar', difficulty: 'Elementary', duration: 7, xpReward: 30, questions: [
         Question(id: 'en6q1', question: "How do you ask someone's name?", options: ['Where are you?', 'What is your name?', 'How old are you?', 'Who is he?'], correctAnswer: 'What is your name?', type: 'multiple_choice'),
         Question(id: 'en6q2', question: 'Translate: "Nerelisin?"', options: ['How are you?', 'Where are you from?', 'What do you do?', 'How old are you?'], correctAnswer: 'Where are you from?', type: 'multiple_choice'),
         Question(id: 'en6q3', question: 'Complete: "___ you like coffee?"', options: ['Are', 'Do', 'Is', 'Does'], correctAnswer: 'Do', type: 'fill_blank'),

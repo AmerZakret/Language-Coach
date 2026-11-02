@@ -1,18 +1,30 @@
-import { useState, useEffect } from "react";
+import { dataTimeline } from '../utils/dataTimeline';
+import { readTimelineCache, writeTimelineCache } from '../utils/timelineCache';
+import { targetLanguageCode, targetLanguageTtsLocale } from '../utils/targetLanguage';
+import type { TargetLanguageCode } from '../types/language';
+import { useState, useEffect, useRef, useCallback } from "react";
 import { ArrowLeft, ArrowRight, Plus, Edit2, Trash2, BookOpen, GraduationCap, X, Calendar, MessageSquare, AlertCircle, Volume2, Star, Play, Pause, Shuffle, Maximize2, Lightbulb } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useTheme } from "../context/ThemeContext";
 import { useLanguage } from "../context/LanguageContext";
 import { useTargetLanguage } from "../context/TargetLanguageContext";
 import apiClient from "../api/apiClient";
+import { useSync } from "../context/SyncContext";
 import { useNetwork } from "../context/NetworkContext";
-import { pushToOfflineQueue, processOfflineQueue } from "../utils/offlineQueue";
+import { pushToOfflineQueue, isPendingBackendCard, processOfflineQueue, getFailedOfflineActions, subscribeOfflineQueue } from "../utils/offlineQueue";
+import { getUserProgressKey } from "../utils/userKey";
+import { useSessionGuard } from "../utils/useSessionGuard";
+import { getSessionRequestConfig } from "../utils/queueSession";
+import { createFlashcardOperationId, serializeFlashcardMutation } from "../utils/flashcardMutation";
+
+import { mutateLocalGuestCards } from '../utils/localGuestCards';
 
 interface CardData {
   _id: string;
   userId: string;
   targetWord: string;
   turkishTranslation: string;
+  targetLanguage?: TargetLanguageCode;
   exampleSentence?: string;
   note?: string;
   interval: number;
@@ -25,49 +37,68 @@ interface CardData {
   };
 }
 
+function reviewedCard(card: CardData, score: number): CardData {
+  let easinessFactor = card.easinessFactor || 2.5;
+  let interval = card.interval || 0;
+  let reviewCount = card.reviewCount || 0;
+
+  if (score >= 3) {
+    if (reviewCount === 0) {
+      interval = 1;
+    } else if (reviewCount === 1) {
+      interval = 6;
+    } else {
+      interval = Math.round(interval * easinessFactor);
+    }
+    reviewCount += 1;
+  } else {
+    reviewCount = 0;
+    interval = 1;
+  }
+
+  easinessFactor = easinessFactor + (0.1 - (5 - score) * (0.08 + (5 - score) * 0.02));
+  if (easinessFactor < 1.3) easinessFactor = 1.3;
+
+  const nextReviewDate = new Date(Date.now() + interval * 24 * 60 * 60 * 1000).toISOString();
+  return { ...card, easinessFactor, interval, reviewCount, nextReviewDate };
+}
+
 const SCORE_KEYS = ["forgot", "hard", "okay", "easy", "very_easy", "perfect"];
 
-const LANGUAGE_CODES: Record<string, string> = {
-  English: 'en',
-  German: 'de',
-  Spanish: 'es',
-  French: 'fr',
-  Arabic: 'ar',
-  Turkish: 'tr',
-};
-
-const LANGUAGE_VOICES: Record<string, string> = {
-  en: 'en-US',
-  de: 'de-DE',
-  es: 'es-ES',
-  fr: 'fr-FR',
-  ar: 'ar-SA',
-  tr: 'tr-TR',
-};
-
 export function FlashcardsPage() {
-  const { user, isGuest } = useAuth();
+  const { user, isGuest, token } = useAuth();
+  const queueOwner = getUserProgressKey(user, isGuest, token);
+  const localOnly = queueOwner === 'local_guest';
   const { isDark } = useTheme();
   const { t } = useLanguage();
   const { targetLanguage } = useTargetLanguage();
+  const captureContext = useSessionGuard(queueOwner, targetLanguage);
   const userId = user?.id || user?.email || (isGuest ? 'guest@lingua.ai' : 'unknown');
   const { isOffline } = useNetwork();
-
+  const reviewInFlight = useRef<symbol | null>(null);
+  const [failedReviewCount, setFailedReviewCount] = useState(0);
   useEffect(() => {
-    const syncOfflineData = async () => {
-      if (!isOffline && userId) {
-        try {
-          const success = await processOfflineQueue(userId);
-          if (success) {
-            fetchCards();
-          }
-        } catch (e) {
-          console.error("Offline sync failed", e);
-        }
-      }
+    const isCurrent = captureContext();
+    const refresh = () => {
+      if (!isCurrent()) return;
+      try { setFailedReviewCount(getFailedOfflineActions().filter(action => action.type === 'review-flashcard').length); }
+      catch { setFailedReviewCount(-1); } // Preserve corrupt storage; submissions still fail closed.
     };
-    syncOfflineData();
-  }, [isOffline, userId]);
+    refresh();
+    return subscribeOfflineQueue(refresh);
+  }, [captureContext]);
+  const pendingMutationIds = useRef(new Map<string, { id: string; dataTimelineId: string }>());
+  const mutationRequest = (operation: string, payload: object) => {
+    const key = `${queueOwner}|${targetLanguage}|${operation}|${JSON.stringify(payload)}`;
+    let id = pendingMutationIds.current.get(key);
+    if (!id) {
+      id = { id: createFlashcardOperationId(), ...dataTimeline.capture() };
+      pendingMutationIds.current.set(key, id);
+    }
+    return { key, config: { ...getSessionRequestConfig(), dataTimelineId: id.dataTimelineId, headers: { 'X-Idempotency-Key': id.id } } };
+  };
+
+  const { syncRevision, lastDrainSucceeded } = useSync();
 
   // View & Modal states
   const [view, setView] = useState<"list" | "study">("list");
@@ -110,9 +141,128 @@ export function FlashcardsPage() {
   const [hintVisible, setHintVisible] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
+  const fetchCards = useCallback(async () => {
+    const isCurrent = captureContext();
+    if (!isCurrent()) return;
+    const requestConfig = getSessionRequestConfig();
+    setLoading(true);
+    setError(null);
+    try {
+      if (localOnly) {
+        const cachedAll = readTimelineCache(`flashcards_all_${userId}_${targetLanguage}`, localOnly);
+        const cachedDue = readTimelineCache(`flashcards_due_${userId}_${targetLanguage}`, localOnly);
+        const all = cachedAll ? JSON.parse(cachedAll) as CardData[] : null;
+        if (all) setAllCards(all);
+        if (all || cachedDue) {
+          const cards = all ? all.filter(card => Date.parse(card.nextReviewDate) <= Date.now()) : JSON.parse(cachedDue!);
+          setDueCards(cards);
+          setOriginalDueCards(cards);
+        }
+        return;
+      }
+      const allRes = await apiClient.get(`/flashcards/all?targetLanguage=${targetLanguageCode(targetLanguage)}`, requestConfig);
+      if (!isCurrent()) return;
+      setAllCards(allRes.data);
+
+      const dueRes = await apiClient.get(`/flashcards/due?targetLanguage=${targetLanguageCode(targetLanguage)}`, requestConfig);
+      if (!isCurrent()) return;
+      setDueCards(dueRes.data);
+      setOriginalDueCards(dueRes.data);
+
+      writeTimelineCache(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(allRes.data), localOnly);
+      writeTimelineCache(`flashcards_due_${userId}_${targetLanguage}`, JSON.stringify(dueRes.data), localOnly);
+    } catch (e) {
+      if (!isCurrent()) return;
+      console.error("Failed to fetch cards from server, loading cached.", e);
+      const cachedAll = readTimelineCache(`flashcards_all_${userId}_${targetLanguage}`, localOnly);
+      const cachedDue = readTimelineCache(`flashcards_due_${userId}_${targetLanguage}`, localOnly);
+      if (cachedAll) setAllCards(JSON.parse(cachedAll));
+      if (cachedDue) {
+        setDueCards(JSON.parse(cachedDue));
+        setOriginalDueCards(JSON.parse(cachedDue));
+      }
+      
+      setError(t("offline_data"));
+      setTimeout(() => { if (isCurrent()) setError(null); }, 5000);
+    } finally {
+      if (isCurrent()) setLoading(false);
+    }
+  }, [captureContext, localOnly, targetLanguage, t, userId]);
+
+  const handleStudyScore = useCallback(async (score: number) => {
+    const isCurrent = captureContext();
+    if (!isCurrent() || reviewInFlight.current) return;
+    const card = dueCards[currentStudyIndex];
+    if (!card) return;
+    const submission = Symbol('review');
+    reviewInFlight.current = submission;
+    try {
+      if (localOnly) {
+        const { all } = await mutateLocalGuestCards<CardData>(targetLanguage,
+          latest => latest.map(current => current._id === card._id ? reviewedCard(current, score) : current), isCurrent);
+        if (!isCurrent()) return;
+        setAllCards(all);
+      } else {
+        // Persist BEFORE the first HTTP attempt, even online. The queue owns the
+        // one operation ID, retry policy, receipt replay and matching-ID ack.
+        await pushToOfflineQueue('review-flashcard', { cardId: card._id, score }, queueOwner);
+        if (!isCurrent()) return;
+        const updatedAll = allCards.map(current => current._id === card._id ? reviewedCard(current, score) : current);
+        setAllCards(updatedAll);
+        try { writeTimelineCache(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(updatedAll), localOnly); }
+        catch { setError('Review is pending. The local card preview could not be cached.'); }
+        if (!isOffline) {
+          // A failed/ambiguous attempt remains durable. The application sync
+          // coordinator also resumes this work after reconnect or page disposal.
+          try { await processOfflineQueue(userId, true); }
+          catch { if (isCurrent()) setError('Review is pending and will sync when available.'); }
+        }
+      }
+      if (!isCurrent()) return;
+      setStudyResults(previous => [...previous, score]);
+      if (currentStudyIndex + 1 >= dueCards.length) {
+        setStudyFinished(true);
+        setIsPlaying(false);
+      } else {
+        setCurrentStudyIndex(previous => previous + 1);
+        setFlipped(false);
+        setHintVisible(false);
+      }
+    } catch {
+      if (isCurrent()) {
+        setIsPlaying(false);
+        setError('Review could not be saved. Refresh your cards before continuing. Pending reviews are retained.');
+      }
+    } finally {
+      if (reviewInFlight.current === submission) reviewInFlight.current = null;
+    }
+  }, [captureContext, dueCards, currentStudyIndex, localOnly, targetLanguage, queueOwner, allCards, userId, isOffline]);
+
   useEffect(() => {
+    // Keep the active study snapshot stable when its own queued review drains.
+    if (view !== 'list' || isOffline || syncRevision === 0 || !lastDrainSucceeded) return;
+    // A sync notification schedules a refresh; it never resets study state in
+    // the same render/effect commit. Cleanup cancels superseded notifications.
+    let active = true;
+    void Promise.resolve().then(() => { if (active) return fetchCards(); });
+    return () => { active = false; };
+  }, [view, isOffline, syncRevision, lastDrainSucceeded, fetchCards]);
+
+  useEffect(() => {
+    pendingMutationIds.current.clear();
+    reviewInFlight.current = null;
+    setAllCards([]);
+    setDueCards([]);
+    setOriginalDueCards([]);
+    setModal(null);
+    setSelectedCard(null);
+    setDeleteConfirmId(null);
+    setSuccessMsg(null);
+    setIsPlaying(false);
+    setView('list');
+    setStudyResults([]);
     fetchCards();
-  }, [user, targetLanguage]);
+  }, [user, targetLanguage, captureContext, fetchCards]);
 
   useEffect(() => {
     const handleFullscreenChange = () => {
@@ -131,42 +281,13 @@ export function FlashcardsPage() {
           setFlipped(true);
         } else {
           // Record automatic default pass (score 4)
-          handleStudyScore(4, false);
+          void handleStudyScore(4);
         }
       }, 4000);
     }
     return () => clearInterval(timer);
-  }, [isPlaying, flipped, currentStudyIndex, dueCards, view, studyFinished]);
+  }, [isPlaying, flipped, view, studyFinished, handleStudyScore]);
 
-  const fetchCards = async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const allRes = await apiClient.get(`/flashcards/all?userId=${userId}&targetLanguage=${targetLanguage}`);
-      setAllCards(allRes.data);
-
-      const dueRes = await apiClient.get(`/flashcards/due?userId=${userId}&targetLanguage=${targetLanguage}`);
-      setDueCards(dueRes.data);
-      setOriginalDueCards(dueRes.data);
-
-      localStorage.setItem(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(allRes.data));
-      localStorage.setItem(`flashcards_due_${userId}_${targetLanguage}`, JSON.stringify(dueRes.data));
-    } catch (e) {
-      console.error("Failed to fetch cards from server, loading cached.", e);
-      const cachedAll = localStorage.getItem(`flashcards_all_${userId}_${targetLanguage}`);
-      const cachedDue = localStorage.getItem(`flashcards_due_${userId}_${targetLanguage}`);
-      if (cachedAll) setAllCards(JSON.parse(cachedAll));
-      if (cachedDue) {
-        setDueCards(JSON.parse(cachedDue));
-        setOriginalDueCards(JSON.parse(cachedDue));
-      }
-      
-      setError(t("offline_data"));
-      setTimeout(() => setError(null), 5000);
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const handleOpenAdd = () => {
     setFormData({ targetWord: "", turkishTranslation: "", exampleSentence: "", note: "" });
@@ -186,26 +307,46 @@ export function FlashcardsPage() {
 
   const handleSaveCard = async (e: React.FormEvent) => {
     e.preventDefault();
+    const isCurrent = captureContext();
+    if (!isCurrent()) return;
     if (!formData.targetWord || !formData.turkishTranslation) {
       setError(t("field_required_error"));
       return;
     }
 
-    if (isOffline) {
+    if (localOnly) {
+      try {
+        const newCard: CardData = { _id: `local_${createFlashcardOperationId()}`, userId, ...formData,
+          interval: 0, easinessFactor: 2.5, nextReviewDate: new Date().toISOString(), reviewCount: 0 };
+        const { all, due } = await mutateLocalGuestCards<CardData>(targetLanguage, latest => modal === 'add'
+          ? [newCard, ...latest] : latest.map(card => card._id === selectedCard?._id ? { ...card, ...formData } : card), isCurrent);
+        if (!isCurrent()) return;
+        setAllCards(all); setDueCards(due); setOriginalDueCards(due); setModal(null);
+        showSuccess(t(modal === 'add' ? 'flashcard_created' : 'flashcard_updated'));
+      } catch (error) { if (isCurrent()) setError((error as Error).message); }
+      return;
+    }
+
+    if (isOffline || (modal === 'edit' && selectedCard && isPendingBackendCard(selectedCard._id, queueOwner))) {
       if (modal === "add") {
-        const tempId = `local_${Date.now()}`;
+        const tempId = `local_${createFlashcardOperationId()}`;
         const newCard: CardData = {
           _id: tempId,
           userId,
           targetWord: formData.targetWord,
           turkishTranslation: formData.turkishTranslation,
-          exampleSentence: formData.exampleSentence || undefined,
-          note: formData.note || undefined,
+          exampleSentence: formData.exampleSentence,
+          note: formData.note,
           interval: 0,
           easinessFactor: 2.5,
           nextReviewDate: new Date().toISOString(),
           reviewCount: 0,
         };
+        try { await pushToOfflineQueue('create-flashcard', {
+          tempId, userId, targetLanguage, ...formData
+        }, queueOwner); }
+        catch (error) { if (isCurrent()) setError((error as Error).message); return; }
+        if (!isCurrent()) return;
         const updatedAll = [newCard, ...allCards];
         setAllCards(updatedAll);
         
@@ -214,91 +355,104 @@ export function FlashcardsPage() {
         setDueCards(updatedDue);
         setOriginalDueCards([newCard, ...originalDueCards]);
         
-        localStorage.setItem(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(updatedAll));
-        localStorage.setItem(`flashcards_due_${userId}_${targetLanguage}`, JSON.stringify(updatedDue));
+        writeTimelineCache(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(updatedAll), localOnly);
+        writeTimelineCache(`flashcards_due_${userId}_${targetLanguage}`, JSON.stringify(updatedDue), localOnly);
         
-        pushToOfflineQueue('create-flashcard', {
-          tempId,
-          userId,
-          targetLanguage,
-          ...formData
-        });
         showSuccess(t("flashcard_created"));
       } else if (modal === "edit" && selectedCard) {
+        try { await pushToOfflineQueue('update-flashcard', {
+          cardId: selectedCard._id, targetLanguage, ...formData
+        }, queueOwner); }
+        catch (error) { if (isCurrent()) setError((error as Error).message); return; }
+        if (!isCurrent()) return;
         const updatedAll = allCards.map(c => c._id === selectedCard._id ? { ...c, ...formData } : c);
         const updatedDue = dueCards.map(c => c._id === selectedCard._id ? { ...c, ...formData } : c);
         setAllCards(updatedAll);
         setDueCards(updatedDue);
         setOriginalDueCards(originalDueCards.map(c => c._id === selectedCard._id ? { ...c, ...formData } : c));
         
-        localStorage.setItem(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(updatedAll));
-        localStorage.setItem(`flashcards_due_${userId}_${targetLanguage}`, JSON.stringify(updatedDue));
+        writeTimelineCache(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(updatedAll), localOnly);
+        writeTimelineCache(`flashcards_due_${userId}_${targetLanguage}`, JSON.stringify(updatedDue), localOnly);
         
-        pushToOfflineQueue('update-flashcard', {
-          cardId: selectedCard._id,
-          targetLanguage,
-          ...formData
-        });
         showSuccess(t("flashcard_updated"));
       }
       setModal(null);
       return;
     }
 
+    const payload = serializeFlashcardMutation({ targetLanguage, ...formData });
+    const mutation = mutationRequest(modal === 'add' ? 'create' : `update:${selectedCard?._id}`, payload);
     try {
       if (modal === "add") {
-        await apiClient.post("/flashcards", {
-          userId,
-          targetLanguage,
-          ...formData,
-        });
+        await apiClient.post("/flashcards", payload, mutation.config);
+        if (!isCurrent()) return;
+        pendingMutationIds.current.delete(mutation.key);
         showSuccess(t("flashcard_created"));
       } else if (modal === "edit" && selectedCard) {
-        await apiClient.put(`/flashcards/${selectedCard._id}`, {
-          ...formData,
-          targetLanguage,
-        });
+        await apiClient.put(`/flashcards/${selectedCard._id}`, payload, mutation.config);
+        if (!isCurrent()) return;
+        pendingMutationIds.current.delete(mutation.key);
         showSuccess(t("flashcard_updated"));
       }
       setModal(null);
       fetchCards();
     } catch (err: any) {
+      if (!isCurrent()) return;
       console.error("Failed to save card", err);
       setError(err.response?.data?.message || t("failed_save_card"));
     }
   };
 
   const handleDeleteCard = async (cardId: string) => {
-    if (isOffline) {
+    const isCurrent = captureContext();
+    if (!isCurrent()) return;
+    if (localOnly) {
+      try {
+        const { all, due } = await mutateLocalGuestCards<CardData>(targetLanguage, latest => latest.filter(card => card._id !== cardId), isCurrent);
+        if (!isCurrent()) return;
+        setAllCards(all); setDueCards(due); setOriginalDueCards(due);
+        showSuccess(t('flashcard_deleted')); setDeleteConfirmId(null);
+      } catch (error) { if (isCurrent()) setError((error as Error).message); }
+      return;
+    }
+    if (isOffline || isPendingBackendCard(cardId, queueOwner)) {
+      try { await pushToOfflineQueue('delete-flashcard', { cardId }, queueOwner); }
+      catch (error) { if (isCurrent()) setError((error as Error).message); return; }
+      if (!isCurrent()) return;
       const updatedAll = allCards.filter(c => c._id !== cardId);
       const updatedDue = dueCards.filter(c => c._id !== cardId);
       setAllCards(updatedAll);
       setDueCards(updatedDue);
       setOriginalDueCards(originalDueCards.filter(c => c._id !== cardId));
       
-      localStorage.setItem(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(updatedAll));
-      localStorage.setItem(`flashcards_due_${userId}_${targetLanguage}`, JSON.stringify(updatedDue));
+      writeTimelineCache(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(updatedAll), localOnly);
+      writeTimelineCache(`flashcards_due_${userId}_${targetLanguage}`, JSON.stringify(updatedDue), localOnly);
       
-      pushToOfflineQueue('delete-flashcard', { cardId });
       showSuccess(t("flashcard_deleted"));
       setDeleteConfirmId(null);
       return;
     }
 
+    const mutation = mutationRequest(`delete:${cardId}`, {});
     try {
-      await apiClient.delete(`/flashcards/${cardId}`);
+      await apiClient.delete(`/flashcards/${cardId}`, mutation.config);
+      if (!isCurrent()) return;
+      pendingMutationIds.current.delete(mutation.key);
       showSuccess(t("flashcard_deleted"));
       setDeleteConfirmId(null);
       fetchCards();
     } catch (err: any) {
+      if (!isCurrent()) return;
       console.error("Failed to delete card", err);
       setError(t("failed_delete_card"));
     }
   };
 
   const showSuccess = (msg: string) => {
+    const isCurrent = captureContext();
+    if (!isCurrent()) return;
     setSuccessMsg(msg);
-    setTimeout(() => setSuccessMsg(null), 3000);
+    setTimeout(() => { if (isCurrent()) setSuccessMsg(null); }, 3000);
   };
 
   // Study functions
@@ -314,79 +468,19 @@ export function FlashcardsPage() {
     setView("study");
   };
 
-  const handleStudyScore = async (score: number, _manual: boolean = true) => {
-    const card = dueCards[currentStudyIndex];
-    if (card) {
-      if (isOffline) {
-        // Local SM-2 calculation
-        let easinessFactor = card.easinessFactor || 2.5;
-        let interval = card.interval || 0;
-        let reviewCount = card.reviewCount || 0;
-
-        if (score >= 3) {
-          if (reviewCount === 0) {
-            interval = 1;
-          } else if (reviewCount === 1) {
-            interval = 6;
-          } else {
-            interval = Math.round(interval * easinessFactor);
-          }
-          reviewCount += 1;
-        } else {
-          reviewCount = 0;
-          interval = 1;
-        }
-        
-        easinessFactor = easinessFactor + (0.1 - (5 - score) * (0.08 + (5 - score) * 0.02));
-        if (easinessFactor < 1.3) easinessFactor = 1.3;
-
-        const nextReviewDate = new Date(Date.now() + interval * 24 * 60 * 60 * 1000).toISOString();
-        
-        const updatedCard = {
-          ...card,
-          easinessFactor,
-          interval,
-          reviewCount,
-          nextReviewDate,
-        };
-
-        const updatedAll = allCards.map(c => c._id === card._id ? updatedCard : c);
-        setAllCards(updatedAll);
-        localStorage.setItem(`flashcards_all_${userId}_${targetLanguage}`, JSON.stringify(updatedAll));
-
-        pushToOfflineQueue('review-flashcard', { cardId: card._id, score });
-      } else {
-        try {
-          await apiClient.put(`/flashcards/${card._id}/review`, { score });
-        } catch (e) {
-          console.error("Failed to save review to backend", e);
-        }
-      }
-    }
-
-    setStudyResults((prev) => [...prev, score]);
-    if (currentStudyIndex + 1 >= dueCards.length) {
-      setStudyFinished(true);
-      setIsPlaying(false);
-    } else {
-      setCurrentStudyIndex((prev) => prev + 1);
-      setFlipped(false);
-      setHintVisible(false);
-    }
-  };
 
   const speakWord = (text: string, langKey?: string, e?: React.MouseEvent) => {
+    const isCurrent = captureContext();
     if (e) e.stopPropagation();
     if ('speechSynthesis' in window) {
       window.speechSynthesis.cancel();
       const utterance = new SpeechSynthesisUtterance(text);
-      const shortCode = LANGUAGE_CODES[targetLanguage] || 'en';
-      const voiceLocale = langKey === 'tr' ? 'tr-TR' : (LANGUAGE_VOICES[shortCode] || 'en-US');
+      const voiceLocale = langKey === 'tr' ? 'tr-TR' : targetLanguageTtsLocale(targetLanguage);
       utterance.lang = voiceLocale;
       window.speechSynthesis.speak(utterance);
     } else {
       setError(t("tts_unsupported"));
-      setTimeout(() => setError(null), 3000);
+      setTimeout(() => { if (isCurrent()) setError(null); }, 3000);
     }
   };
 
@@ -413,10 +507,11 @@ export function FlashcardsPage() {
   };
 
   const toggleFullscreen = () => {
+    const isCurrent = captureContext();
     const element = document.getElementById("study-container");
     if (!element) return;
     if (!document.fullscreenElement) {
-      element.requestFullscreen().then(() => setIsFullscreen(true)).catch(err => {
+      element.requestFullscreen().then(() => { if (isCurrent()) setIsFullscreen(true); }).catch(err => {
         console.error("Error entering fullscreen mode", err);
       });
     } else {
@@ -475,6 +570,18 @@ export function FlashcardsPage() {
           <AlertCircle size={18} />
           <span style={{ fontSize: "13px", fontWeight: 600 }}>{error}</span>
           <button onClick={() => setError(null)} className="ml-2 hover:opacity-70"><X size={14} /></button>
+        </div>
+      )}
+      {failedReviewCount < 0 && (
+        <div role="alert" className="p-4 mb-4 rounded-xl">
+          Saved review work cannot be read. It has been preserved. Recover local storage before submitting reviews.
+        </div>
+      )}
+      {failedReviewCount > 0 && (
+        <div role="alert" className="p-4 mb-4 rounded-xl" style={{ background: "var(--l-surface)", border: "1px solid #F59E0B" }}>
+          {failedReviewCount} review(s) could not be saved and were retained for inspection. They will not retry automatically.
+          Refresh your cards to reconcile server state, then review the affected cards again.
+          <button onClick={() => { void fetchCards(); }} className="ml-2 underline">Refresh cards</button>
         </div>
       )}
       {successMsg && (
@@ -846,7 +953,7 @@ export function FlashcardsPage() {
                               key={i}
                               onClick={(e) => {
                                 e.stopPropagation();
-                                handleStudyScore(i, true);
+                                void handleStudyScore(i);
                               }}
                               className="flex flex-col items-center py-2.5 rounded-xl border hover:-translate-y-0.5 transition-all duration-200"
                               style={{ background: c.bg, borderColor: c.border }}

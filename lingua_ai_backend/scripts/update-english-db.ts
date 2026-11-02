@@ -1,3 +1,4 @@
+import './local-lesson-tool-guard.cjs';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from '../src/app.module';
 import { getModelToken } from '@nestjs/mongoose';

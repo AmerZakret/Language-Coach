@@ -1,9 +1,9 @@
+import { targetLanguageCode, targetLanguageTtsLocale } from '../utils/targetLanguage';
 import { useState, useEffect, useRef } from "react";
-import { Mic, Square, Sparkles, AlertCircle, Volume2, Loader, Zap, CheckCircle2, WifiOff } from "lucide-react";
+import { Mic, Square, Sparkles, AlertCircle, Volume2, Loader, CheckCircle2, WifiOff } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useLanguage } from "../context/LanguageContext";
 import { useTargetLanguage } from "../context/TargetLanguageContext";
-import { useProgress } from "../context/ProgressContext";
 import { useNetwork } from "../context/NetworkContext";
 import { assessPronunciation } from "../api/pronunciationApi";
 import type { PronunciationAssessmentResult } from "../api/pronunciationApi";
@@ -14,24 +14,6 @@ interface Flashcard {
   targetWord: string;
   turkishTranslation: string;
 }
-
-const LANGUAGE_CODES: Record<string, string> = {
-  English: 'en',
-  German: 'de',
-  Spanish: 'es',
-  French: 'fr',
-  Arabic: 'ar',
-  Turkish: 'tr',
-};
-
-const LANGUAGE_VOICES: Record<string, string> = {
-  en: 'en-US',
-  de: 'de-DE',
-  es: 'es-ES',
-  fr: 'fr-FR',
-  ar: 'ar-SA',
-  tr: 'tr-TR',
-};
 
 function ScoreRing({ value, color, label }: { value: number; color: string; label: string }) {
   const r = 36;
@@ -57,7 +39,6 @@ export function PronunciationPracticePage() {
   const { user } = useAuth();
   const { t } = useLanguage();
   const { targetLanguage } = useTargetLanguage();
-  const { addXp } = useProgress();
   const { isOffline } = useNetwork();
 
   // Mode/Source State
@@ -65,16 +46,6 @@ export function PronunciationPracticePage() {
   const [targetText, setTargetText] = useState("");
   const [nativeTranslation, setNativeTranslation] = useState("");
 
-  if (isOffline) {
-    return (
-      <div className="flex flex-col items-center justify-center text-center p-8 border rounded-2xl h-[450px]" style={{ background: "var(--l-surface)", borderColor: "var(--l-border)", color: "var(--l-text)" }}>
-        <WifiOff size={48} className="text-amber-500 mb-4 animate-bounce" />
-        <h2 style={{ fontSize: "20px", fontWeight: 800 }}>{t("offline_only_title")}</h2>
-        <p style={{ fontSize: "14px", color: "var(--l-muted)", marginTop: "8px", maxWidth: "340px" }}>{t("offline_only_desc")}</p>
-      </div>
-    );
-  }
-  
   // Dynamic Sources Data
   const [flashcards, setFlashcards] = useState<Flashcard[]>([]);
 
@@ -91,23 +62,26 @@ export function PronunciationPracticePage() {
   const [error, setError] = useState<string | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const timerRef = useRef<any>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
 
   // Fetch Flashcards on load
   useEffect(() => {
+    if (isOffline) return;
+    let active = true;
     const fetchSources = async () => {
       try {
         if (user?.id && user.id !== "guest") {
-          const fcRes = await apiClient.get(`/flashcards/all?userId=${user.id}&targetLanguage=${targetLanguage}`);
-          setFlashcards(fcRes.data || []);
+          const fcRes = await apiClient.get(`/flashcards/all?targetLanguage=${targetLanguageCode(targetLanguage)}`);
+          if (active) setFlashcards(fcRes.data || []);
         }
       } catch (e) {
         console.error("Failed to load pronunciation sources", e);
       }
     };
-    fetchSources();
-  }, [targetLanguage, user]);
+    void fetchSources();
+    return () => { active = false; };
+  }, [isOffline, targetLanguage, user]);
 
   // Reset audio & results when targetText changes
   useEffect(() => {
@@ -140,11 +114,10 @@ export function PronunciationPracticePage() {
 
   // Text-To-Speech playback
   const handleListen = () => {
-    if (!targetText.trim()) return;
+    if (isOffline || !targetText.trim()) return;
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(targetText);
-    const code = LANGUAGE_CODES[targetLanguage] || "en";
-    const voiceCode = LANGUAGE_VOICES[code] || "en-US";
+    const voiceCode = targetLanguageTtsLocale(targetLanguage);
     utterance.lang = voiceCode;
 
     // Load available voices
@@ -157,6 +130,7 @@ export function PronunciationPracticePage() {
   };
 
   const startRecording = async () => {
+    if (isOffline) return;
     setMicPermissionError(null);
     setAudioBlob(null);
     setAudioUrl(null);
@@ -209,18 +183,17 @@ export function PronunciationPracticePage() {
   };
 
   const handleSubmitAssessment = async () => {
-    if (!audioBlob || !targetText.trim()) return;
+    if (isOffline || !audioBlob || !targetText.trim()) return;
 
     setLoading(true);
     setError(null);
     setResult(null);
 
-    const langCode = LANGUAGE_CODES[targetLanguage] || "en";
+    const langCode = targetLanguageCode(targetLanguage);
 
     try {
       const assessment = await assessPronunciation({
         audio: audioBlob,
-        userId: user?.id || "guest",
         targetText: targetText.trim(),
         targetLanguage: langCode,
         nativeTranslation: nativeTranslation.trim() || undefined,
@@ -229,11 +202,6 @@ export function PronunciationPracticePage() {
       });
 
       setResult(assessment);
-
-      // Award XP on success (only if score is decent!)
-      if (assessment.pronunciationScore >= 70) {
-        addXp(10);
-      }
     } catch (e: any) {
       console.error(e);
       setError(e.response?.data?.message || t('failed_pronunciation'));
@@ -247,6 +215,17 @@ export function PronunciationPracticePage() {
     if (score >= 70) return "#F59E0B"; // Orange
     return "#EF4444"; // Red
   };
+
+  if (isOffline) {
+    return (
+      <div className="flex flex-col items-center justify-center text-center p-8 border rounded-2xl h-[450px]" style={{ background: "var(--l-surface)", borderColor: "var(--l-border)", color: "var(--l-text)" }}>
+        <WifiOff size={48} className="text-amber-500 mb-4 animate-bounce" />
+        <h2 style={{ fontSize: "20px", fontWeight: 800 }}>{t("offline_only_title")}</h2>
+        <p style={{ fontSize: "14px", color: "var(--l-muted)", marginTop: "8px", maxWidth: "340px" }}>{t("offline_only_desc")}</p>
+      </div>
+    );
+  }
+
 
   return (
     <div className="p-6 max-w-5xl mx-auto space-y-6 animate-fade-in" style={{ background: "var(--l-bg)", minHeight: "100vh" }}>
@@ -443,7 +422,7 @@ export function PronunciationPracticePage() {
               <AlertCircle size={36} className="mx-auto text-red-500" />
               <h3 className="font-bold text-sm text-red-600">{t('evaluation_failed')}</h3>
               <p className="text-xs leading-relaxed" style={{ color: "var(--l-text)" }}>{error}</p>
-              <p className="text-[10px]" style={{ color: "var(--l-muted)" }}>Please verify that uvicorn/whisper is running at http://localhost:8001</p>
+              <p className="text-[10px]" style={{ color: "var(--l-muted)" }}>Pronunciation feedback is temporarily unavailable. Check your connection and try again.</p>
             </div>
           )}
 
@@ -493,13 +472,7 @@ export function PronunciationPracticePage() {
                 <p className="text-xs leading-relaxed font-semibold" style={{ color: "var(--l-text2)" }}>{result.aiFeedback}</p>
               </div>
 
-              {/* XP Award badge */}
-              {result.pronunciationScore >= 70 && (
-                <div className="flex items-center justify-center gap-2 p-3 rounded-xl text-xs font-bold" style={{ background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.25)", color: "#B45309" }}>
-                  <Zap size={14} />
-                  <span>{t('xp_earned_badge')}</span>
-                </div>
-              )}
+
             </div>
           )}
 

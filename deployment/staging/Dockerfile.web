@@ -1,0 +1,21 @@
+FROM node:22.14.0-bookworm-slim AS build
+WORKDIR /src
+RUN npm install --global npm@10.9.0
+COPY . .
+WORKDIR /src/lingua_ai_web
+RUN npm ci
+ARG VITE_API_URL
+ARG BUILD_ID=phase11b-local
+RUN test -n "$VITE_API_URL" && VITE_API_URL="$VITE_API_URL" VITE_BUILD_ID="$BUILD_ID" npm run build
+WORKDIR /src
+RUN mkdir -p /out && node scripts/package-release.cjs web /out/web
+
+FROM caddy:2.11.6-alpine AS runtime
+WORKDIR /srv
+COPY --from=build --chown=10001:10001 /out/web/ /srv/
+COPY deployment/staging/Caddyfile.web /etc/caddy/Caddyfile
+ENV XDG_DATA_HOME=/tmp/caddy/data XDG_CONFIG_HOME=/tmp/caddy/config
+USER 10001:10001
+EXPOSE 8080
+HEALTHCHECK --interval=15s --timeout=3s --retries=3 CMD wget -q -O /dev/null http://127.0.0.1:8080/index.html || exit 1
+CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]

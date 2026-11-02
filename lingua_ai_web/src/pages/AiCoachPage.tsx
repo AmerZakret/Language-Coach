@@ -1,11 +1,14 @@
+import { subscribeIntentAcknowledgements } from '../utils/onlineIntents';
 import { useState, useRef, useEffect } from "react";
 import { Send, Trash2, Sparkles, User, Utensils, BookOpen, MessageSquare, ShoppingCart, WifiOff } from "lucide-react";
 import aiCoachImg from "../assets/images/ai-coach-icon.png";
 import { useAuth } from "../context/AuthContext";
 import { useLanguage } from "../context/LanguageContext";
 import { useTargetLanguage } from "../context/TargetLanguageContext";
+import { useSessionGuard } from "../utils/useSessionGuard";
+import { getUserProgressKey } from "../utils/userKey";
 import { useNetwork } from "../context/NetworkContext";
-import { sendMessage, getChatHistory, clearChatHistory, type ChatMessage } from "../api/aiCoachApi";
+import { prepareSendMessage, sendMessage, getChatHistory, clearChatHistory, type ChatMessage } from "../api/aiCoachApi";
 
 const STARTER_PROMPTS = [
   { Icon: Utensils, key: "prompt_restaurant" },
@@ -15,79 +18,103 @@ const STARTER_PROMPTS = [
 ];
 
 export function AiCoachPage() {
-  const { user, isGuest } = useAuth();
+  const { user, isGuest, token } = useAuth();
   const { language, t } = useLanguage();
   const { targetLanguage } = useTargetLanguage();
   const { isOffline } = useNetwork();
+  const ownerNamespace = getUserProgressKey(user, isGuest, token);
+  const captureSession = useSessionGuard(ownerNamespace, targetLanguage);
+  const [recoveryRevision, setRecoveryRevision] = useState(0);
+  useEffect(() => subscribeIntentAcknowledgements(ownerNamespace, () => setRecoveryRevision(value => value + 1)), [ownerNamespace]);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(true);
+  const [recoveryMessage, setRecoveryMessage] = useState<string | null>(null);
+  const activeMutation = useRef<symbol | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
-
-  if (isOffline) {
-    return (
-      <div className="flex flex-col items-center justify-center text-center p-8 border rounded-2xl h-[450px]" style={{ background: "var(--l-surface)", borderColor: "var(--l-border)", color: "var(--l-text)" }}>
-        <WifiOff size={48} className="text-amber-500 mb-4 animate-bounce" />
-        <h2 style={{ fontSize: "20px", fontWeight: 800 }}>{t("offline_only_title")}</h2>
-        <p style={{ fontSize: "14px", color: "var(--l-muted)", marginTop: "8px", maxWidth: "340px" }}>{t("offline_only_desc")}</p>
-      </div>
-    );
-  }
-
-  const userId = user?.id || user?.email || (isGuest ? 'guest' : 'unknown');
-
+  const historyRevision = useRef(0);
   useEffect(() => {
+    // Connectivity changes must retain uncertain operations for receipt replay.
+    activeMutation.current = null;
+  }, [captureSession, targetLanguage, token]);
+  useEffect(() => {
+    const isSessionCurrent = captureSession();
+    const revision = ++historyRevision.current;
+    let cancelled = false;
+    const isCurrent = () => !cancelled && isSessionCurrent() && revision === historyRevision.current;
+    setMessages(prev => isCurrent() ? [] : prev);
+    setRecoveryMessage(prev => isCurrent() ? null : prev);
+    setInput(prev => isCurrent() ? '' : prev);
+    setIsTyping(prev => isCurrent() ? false : prev);
+    if (isOffline || !token) {
+      setHistoryLoading(false);
+      return () => { cancelled = true; };
+    }
     const loadHistory = async () => {
       setHistoryLoading(true);
       try {
-        const history = await getChatHistory(userId, targetLanguage);
-        setMessages(history);
-      } catch (e) {
-        console.error('Failed to load chat history', e);
+        const history = await getChatHistory(targetLanguage);
+        if (!isCurrent()) return;
+        setMessages(prev => isCurrent() ? history : prev);
+      } catch {
+        if (isCurrent()) setRecoveryMessage('Could not confirm a previous action. Saved work is preserved. Refresh to recover, or update the client if required.');
       } finally {
-        setHistoryLoading(false);
+        if (isCurrent()) setHistoryLoading(prev => isCurrent() ? false : prev);
       }
     };
     loadHistory();
-  }, [userId, targetLanguage]);
+    return () => { cancelled = true; };
+  }, [captureSession, targetLanguage, isOffline, token, recoveryRevision]);
 
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, isTyping, historyLoading]);
 
   const handleSend = async (content: string) => {
-    if (!content.trim() || isTyping) return;
+    const currentSession = captureSession();
+    const revision = historyRevision.current;
+    const isCurrent = () => currentSession() && revision === historyRevision.current;
+    if (!content.trim() || activeMutation.current || isTyping || historyLoading || !token || !isCurrent()) return;
+    const mutation = Symbol();
+    activeMutation.current = mutation;
     
-    const userMsg: ChatMessage = { role: "user", message: content, createdAt: new Date().toISOString() };
-    setMessages((prev) => [...prev, userMsg]);
-    setInput("");
     setIsTyping(true);
-
     try {
-      const response = await sendMessage({
-        userId,
-        message: content,
-        language: language,
-        targetLanguage: targetLanguage
-      });
+      const request = { message: content, language, targetLanguage };
+      const intent = await prepareSendMessage(request);
+      if (!isCurrent()) return;
+      const userMsg: ChatMessage = { _id: `pending:${intent.id}`, role: 'user', message: content, createdAt: new Date().toISOString() };
+      setMessages(prev => isCurrent() ? [...prev.filter(message => message._id !== userMsg._id), userMsg] : prev);
+      setInput('');
+      const response = await sendMessage(request, intent.id);
 
+      if (!isCurrent()) return;
+      setRecoveryMessage(null);
       setMessages((prev) => {
+        if (!isCurrent()) return prev;
         const filtered = prev.slice(0, -1);
-        const actualUserMsg = response.userMessage || userMsg;
-        const actualAssistantMsg = response.assistantMessage || {
+        const actualUserMsg: ChatMessage = response.userMessage || { ...userMsg, _id: undefined };
+        const actualAssistantMsg: ChatMessage = response.assistantMessage || {
           role: "assistant",
           message: response.reply,
           createdAt: new Date().toISOString()
         };
-        return [...filtered, actualUserMsg, actualAssistantMsg];
+        for (const message of [actualUserMsg, actualAssistantMsg]) {
+          const index = message._id ? filtered.findIndex(existing => existing._id === message._id) : -1;
+          if (index === -1) filtered.push(message);
+          else filtered[index] = message;
+        }
+        return filtered;
       });
-    } catch (e: any) {
-      console.error('AI Coach error', e);
-      setMessages((prev) => prev.slice(0, -1));
-      const errMsg = e.response?.data?.message || t("something_wrong");
-      alert(errMsg);
+    } catch {
+      if (!isCurrent()) return;
+      console.error('client_intent_recovery_needed');
+      setInput(content);
+      setRecoveryMessage('Could not confirm this message. Its original operation is saved. Refresh to recover before sending a different message.');
+      alert("Could not confirm this message. Saved work is preserved; refresh to recover.");
     } finally {
-      setIsTyping(false);
+      if (activeMutation.current === mutation) activeMutation.current = null;
+      if (isCurrent()) setIsTyping(prev => isCurrent() ? false : prev);
     }
   };
 
@@ -102,21 +129,44 @@ export function AiCoachPage() {
   };
 
   const handleClearChat = async () => {
-    if (window.confirm(t("clear_chat_confirm"))) {
+    const currentSession = captureSession();
+    if (!currentSession() || !token || activeMutation.current || isTyping || historyLoading) return;
+    if (window.confirm(t("clear_chat_confirm")) && currentSession()) {
+      const mutation = Symbol();
+      activeMutation.current = mutation;
+      const revision = ++historyRevision.current;
+      const isCurrent = () => currentSession() && revision === historyRevision.current;
       setHistoryLoading(true);
       try {
-        await clearChatHistory(userId, targetLanguage);
-        setMessages([]);
-      } catch (e) {
-        console.error('Failed to clear chat history', e);
+        await clearChatHistory(targetLanguage);
+        if (isCurrent()) setRecoveryMessage(null);
+        if (!isCurrent()) return;
+        const history = await getChatHistory(targetLanguage);
+        if (isCurrent()) setMessages(prev => isCurrent() ? history : prev);
+      } catch {
+        if (isCurrent()) setRecoveryMessage('Could not confirm the clear. Its original operation is saved. Refresh to recover; do not issue a new clear.');
       } finally {
-        setHistoryLoading(false);
+        if (activeMutation.current === mutation) activeMutation.current = null;
+        if (isCurrent()) setHistoryLoading(prev => isCurrent() ? false : prev);
       }
     }
   };
 
+  if (isOffline) {
+    return (
+      <div className="flex flex-col items-center justify-center text-center p-8 border rounded-2xl h-[450px]" style={{ background: "var(--l-surface)", borderColor: "var(--l-border)", color: "var(--l-text)" }}>
+        <WifiOff size={48} className="text-amber-500 mb-4 animate-bounce" />
+        <h2 style={{ fontSize: "20px", fontWeight: 800 }}>{t("offline_only_title")}</h2>
+        <p style={{ fontSize: "14px", color: "var(--l-muted)", marginTop: "8px", maxWidth: "340px" }}>{t("offline_only_desc")}</p>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col h-full animate-fade-in" style={{ background: "var(--l-bg)" }}>
+      {recoveryMessage && <div role="alert" className="p-4 text-amber-700">{recoveryMessage}
+        <button onClick={() => window.location.reload()} className="ml-3 underline">Reload and recover</button>
+      </div>}
       {/* Header */}
       <div className="flex items-center justify-between px-6 py-4 shrink-0" style={{ borderBottom: "1px solid var(--l-border-subtle)" }}>
         <div className="flex items-center gap-3">

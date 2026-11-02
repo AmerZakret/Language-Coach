@@ -1,4 +1,5 @@
-import { useState, useEffect, useRef } from "react";
+import { subscribeIntentAcknowledgements } from '../utils/onlineIntents';
+import { useState, useEffect, useRef, useCallback } from "react";
 import { Globe, Heart, Trash2, Edit3, Image, X, AlertCircle, Loader, CheckCircle, WifiOff } from "lucide-react";
 import { useAuth } from "../context/AuthContext";
 import { useLanguage } from "../context/LanguageContext";
@@ -11,7 +12,13 @@ import {
   deleteCommunityPost,
   toggleLikeCommunityPost
 } from "../api/communityApi";
+import { useSessionGuard } from '../utils/useSessionGuard';
+import { getOfflineQueueSession, isSessionCurrent } from '../utils/queueSession';
+import { getUserProgressKey } from '../utils/userKey';
+import { communityQuery, communityCacheKey, readCommunityFeed, writeCommunityFeed, validCommunityFeed,
+  invalidateCommunityFeed, communityNetworkFailure } from '../utils/communityFeedCache';
 import type { CommunityPost } from "../api/communityApi";
+import { CommunityImage } from "../components/CommunityImage";
 
 const LANGUAGES = ["All", "English", "German", "Spanish", "French", "Arabic"];
 
@@ -24,7 +31,7 @@ const LANGUAGE_FLAGS: Record<string, string> = {
 };
 
 export function CommunityPage() {
-  const { user } = useAuth();
+  const { user, token, isGuest } = useAuth();
   const { t, language } = useLanguage();
   const { targetLanguage } = useTargetLanguage();
   const { isOffline } = useNetwork();
@@ -42,6 +49,8 @@ export function CommunityPage() {
   const [newPostImagePreview, setNewPostImagePreview] = useState<string | null>(null);
   const [learningLanguage, setLearningLanguage] = useState(targetLanguage);
   const [isPosting, setIsPosting] = useState(false);
+  const currentDraft = useRef({ text: newPostText, image: newPostImage, language: learningLanguage });
+  useEffect(() => { currentDraft.current = { text: newPostText, image: newPostImage, language: learningLanguage }; }, [newPostText, newPostImage, learningLanguage]);
   const [postSuccess, setPostSuccess] = useState(false);
 
   // Edit State
@@ -52,45 +61,90 @@ export function CommunityPage() {
   // Delete State
   const [deletingPostId, setDeletingPostId] = useState<string | null>(null);
 
+  const pendingMutations = useRef(new Map<string, { payload: string; id: string }>());
+  const operationFor = (slot: string, payload: string) => {
+    const key = `${session.revision}:${slot}`;
+    const previous = pendingMutations.current.get(key);
+    if (previous?.payload === payload) return previous.id;
+    const id = crypto.randomUUID();
+    pendingMutations.current.set(key, { payload, id });
+    return id;
+  };
+  const completeOperation = (slot: string, id: string) => {
+    const key = `${session.revision}:${slot}`;
+    if (pendingMutations.current.get(key)?.id !== id) return false;
+    return pendingMutations.current.delete(key);
+  };
+
   const fileInputRef = useRef<HTMLInputElement>(null);
   const backendBaseUrl = import.meta.env.VITE_API_URL || "http://localhost:3000";
 
-  // Load posts
-  const fetchFeed = async () => {
-    setLoading(true);
-    setError(null);
-    const cacheKey = `linguaai_community_feed_${selectedLanguage}`;
+  const session = getOfflineQueueSession();
+  const query = communityQuery(getUserProgressKey(user, isGuest, token), selectedLanguage, 1, 50);
+  const queryKey = communityCacheKey(query);
+  const [recoveryRevision, setRecoveryRevision] = useState(0);
+  useEffect(() => subscribeIntentAcknowledgements(query.ownerNamespace, () => setRecoveryRevision(value => value + 1)), [query.ownerNamespace]);
+  const captureSession = useSessionGuard(query.ownerNamespace, queryKey);
+  const feedRevision = useRef(0);
+  const reactionRevisions = useRef(new Map<string, number>());
+  const canUseBackend = !!token && query.ownerNamespace !== 'local_guest';
+
+  const ownerNamespace = query.ownerNamespace;
+  const fetchFeed = useCallback(async () => {
+    const query = communityQuery(ownerNamespace, selectedLanguage, 1, 50);
+    const currentSession = captureSession();
+    const revision = ++feedRevision.current;
+    const isCurrent = () => currentSession() && revision === feedRevision.current;
+    if (!isCurrent()) return;
+    setLoading(prev => isCurrent() ? true : prev);
+    setError(prev => isCurrent() ? null : prev);
     try {
-      const data = await getCommunityPosts({
-        page: 1,
-        limit: 50,
-        language: selectedLanguage === "All" ? undefined : selectedLanguage
-      });
-      setPosts(data.items || []);
-      localStorage.setItem(cacheKey, JSON.stringify(data.items || []));
+      if (!canUseBackend) throw new Error('Sign in to use Community.');
+      if (isOffline) {
+        const cached = readCommunityFeed(query);
+        if (!cached) throw new Error('Community cache unavailable');
+        setPosts(prev => isCurrent() ? cached.items : prev);
+        return;
+      }
+      const data = await getCommunityPosts({ page: query.page, limit: query.limit,
+        language: query.language === 'All' ? undefined : query.language });
+      if (!isCurrent()) return;
+      if (!validCommunityFeed(data, query)) throw new Error('Malformed Community feed');
+      writeCommunityFeed(query, data);
+      setPosts(prev => isCurrent() ? data.items : prev);
     } catch (e) {
-      console.error("Failed to load community feed", e);
-      const cached = localStorage.getItem(cacheKey);
-      if (cached) {
-        try {
-          setPosts(JSON.parse(cached));
-        } catch {
-          setError(t("could_not_load_posts"));
-        }
-      } else {
-        setError(t("could_not_load_posts"));
+      if (!isCurrent()) return;
+      const cached = canUseBackend && communityNetworkFailure(e) ? readCommunityFeed(query) : undefined;
+      if (cached) setPosts(prev => isCurrent() ? cached.items : prev);
+      else {
+        setPosts(prev => isCurrent() ? [] : prev);
+        setError(prev => isCurrent() ? t('could_not_load_posts') : prev);
       }
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(prev => isCurrent() ? false : prev);
     }
-  };
+  }, [ownerNamespace, selectedLanguage, captureSession, canUseBackend, isOffline, t]);
 
   useEffect(() => {
-    fetchFeed();
-  }, [selectedLanguage]);
+    const isCurrent = captureSession();
+    setPosts(prev => isCurrent() ? [] : prev);
+    void fetchFeed();
+    return () => { feedRevision.current++; };
+  }, [captureSession, fetchFeed, targetLanguage, recoveryRevision]);
+
+  useEffect(() => {
+    const isCurrent = captureSession();
+    setNewPostText(prev => isCurrent() ? '' : prev);
+    setNewPostImage(prev => isCurrent() ? null : prev); setNewPostImagePreview(prev => isCurrent() ? null : prev);
+    setEditingPostId(prev => isCurrent() ? null : prev); setEditingText(prev => isCurrent() ? '' : prev);
+    setDeletingPostId(prev => isCurrent() ? null : prev);
+    setIsPosting(prev => isCurrent() ? false : prev); setIsUpdating(prev => isCurrent() ? false : prev);
+    setPostSuccess(prev => isCurrent() ? false : prev);
+  }, [session.revision, query.ownerNamespace, token]);
 
   // Handle image pick
   const handleImageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!captureSession()() || !canUseBackend) return;
     const file = e.target.files?.[0];
     if (file) {
       if (file.size > 5 * 1024 * 1024) {
@@ -111,6 +165,8 @@ export function CommunityPage() {
   // Submit new post
   const handleCreatePost = async (e: React.FormEvent) => {
     e.preventDefault();
+    const isCurrent = captureSession();
+    if (!isCurrent() || !canUseBackend) return;
     if (isOffline) {
       alert("You are offline. Creating posts is disabled.");
       return;
@@ -130,44 +186,61 @@ export function CommunityPage() {
         formData.append("image", newPostImage);
       }
 
+      feedRevision.current++;
       await createCommunityPost(formData);
-      setNewPostText("");
-      clearImage();
+      if (isCurrent() && isSessionCurrent(session)) invalidateCommunityFeed(query.ownerNamespace, { language: learningLanguage });
+      if (!isCurrent()) return;
+      if (currentDraft.current.text === newPostText && currentDraft.current.image === newPostImage
+        && currentDraft.current.language === learningLanguage) {
+        setNewPostText("");
+        clearImage();
+      }
       setPostSuccess(true);
-      setTimeout(() => setPostSuccess(false), 3000);
+      setTimeout(() => { if (isCurrent()) setPostSuccess(prev => isCurrent() ? false : prev); }, 3000);
       fetchFeed();
-    } catch (e) {
-      console.error("Failed to create community post", e);
-      alert(t("failed_submit_post"));
+    } catch {
+      if (!isCurrent()) return;
+      console.error("client_intent_recovery_needed");
+      alert("Could not confirm this post. Saved action is preserved; refresh to recover before posting again.");
     } finally {
-      setIsPosting(false);
+      if (isCurrent()) setIsPosting(prev => isCurrent() ? false : prev);
     }
   };
 
   // Liking post
   const handleToggleLike = async (postId: string) => {
+    const viewCurrent = captureSession();
+    const revision = (reactionRevisions.current.get(postId) || 0) + 1;
+    reactionRevisions.current.set(postId, revision);
+    const isCurrent = () => viewCurrent() && reactionRevisions.current.get(postId) === revision;
+    if (!isCurrent() || !canUseBackend) return;
     if (isOffline) {
       alert("You are offline. Liking posts is disabled.");
       return;
     }
+    feedRevision.current++;
     try {
       // Optimistic update
       setPosts((prev: CommunityPost[]) =>
-        prev.map((post: CommunityPost) => {
+        !isCurrent() ? prev : prev.map((post: CommunityPost) => {
           if (post._id === postId) {
             const liked = !post.likedByMe;
             return {
               ...post,
               likedByMe: liked,
-              likesCount: liked ? post.likesCount + 1 : post.likesCount - 1
+              likesCount: liked ? post.likesCount + 1 : Math.max(0, post.likesCount - 1)
             };
           }
           return post;
         })
       );
-      await toggleLikeCommunityPost(postId);
-    } catch (e) {
-      console.error("Failed to toggle like", e);
+      const result = await toggleLikeCommunityPost(postId, !posts.find(p => p._id === postId)?.likedByMe);
+      if (isCurrent() && isSessionCurrent(session)) invalidateCommunityFeed(query.ownerNamespace, { postId });
+      if (!isCurrent()) return;
+      setPosts(prev => !isCurrent() ? prev : prev.map(post => post._id === postId ? { ...post, ...result } : post));
+    } catch {
+      if (!isCurrent()) return;
+      console.error("community_reaction_refresh_needed");
       // Revert if failed
       fetchFeed();
     }
@@ -175,36 +248,60 @@ export function CommunityPage() {
 
   // Editing post inline
   const startEditing = (post: CommunityPost) => {
+    if (!captureSession()() || !canUseBackend) return;
     setEditingPostId(post._id);
     setEditingText(post.text || "");
   };
 
   const handleUpdatePost = async (postId: string) => {
-    if (!editingText.trim()) return;
+    const isCurrent = captureSession();
+    if (!isCurrent() || !canUseBackend) return;
+    const post = posts.find(post => post._id === postId);
+    if (!editingText.trim() && !post?.imageUrl) return;
     setIsUpdating(true);
     try {
       const formData = new FormData();
-      formData.append("text", editingText);
-      await updateCommunityPost(postId, formData);
+      formData.append("text", editingText.trim());
+      feedRevision.current++;
+      formData.append('expectedRevision', String(post?.revision ?? 0));
+      const operationId = operationFor(`edit:${postId}`, JSON.stringify([editingText.trim(), post?.revision ?? 0]));
+      await updateCommunityPost(postId, formData, operationId);
+      if (!completeOperation(`edit:${postId}`, operationId)) return;
+      if (isCurrent() && isSessionCurrent(session)) invalidateCommunityFeed(query.ownerNamespace, { postId, language: post?.learningLanguage });
+      if (!isCurrent()) return;
       setEditingPostId(null);
       fetchFeed();
-    } catch (e) {
-      console.error("Failed to update post", e);
-      alert(t("failed_update_post"));
+    } catch {
+      if (!isCurrent()) return;
+      console.error("community_update_refresh_needed");
+      await fetchFeed();
+      if (isCurrent()) setEditingPostId(null);
+      if (isCurrent()) alert("Edit outcome is uncertain or conflicted. The feed was refreshed; check the latest revision before retrying.");
     } finally {
-      setIsUpdating(false);
+      if (isCurrent()) setIsUpdating(prev => isCurrent() ? false : prev);
     }
   };
 
   // Deleting post
   const handleDeletePost = async (postId: string) => {
+    const isCurrent = captureSession();
+    if (!isCurrent() || !canUseBackend) return;
+    feedRevision.current++;
+    const post = posts.find(post => post._id === postId);
     try {
-      await deleteCommunityPost(postId);
+      const operationId = operationFor(`delete:${postId}`, String(post?.revision ?? 0));
+      await deleteCommunityPost(postId, post?.revision ?? 0, operationId);
+      if (!completeOperation(`delete:${postId}`, operationId)) return;
+      if (isCurrent() && isSessionCurrent(session)) invalidateCommunityFeed(query.ownerNamespace, { postId, language: post?.learningLanguage });
+      if (!isCurrent()) return;
       setDeletingPostId(null);
-      setPosts((prev: CommunityPost[]) => prev.filter((p: CommunityPost) => p._id !== postId));
-    } catch (e) {
-      console.error("Failed to delete post", e);
-      alert(t("failed_delete_post"));
+      await fetchFeed();
+    } catch {
+      if (!isCurrent()) return;
+      console.error("community_delete_refresh_needed");
+      await fetchFeed();
+      if (isCurrent()) setDeletingPostId(null);
+      if (isCurrent()) alert("Deletion could not be confirmed. Check the refreshed feed before retrying.");
     }
   };
 
@@ -471,7 +568,7 @@ export function CommunityPage() {
                         </button>
                         <button
                           onClick={() => handleUpdatePost(post._id)}
-                          disabled={isUpdating || !editingText.trim()}
+                          disabled={isUpdating || (!editingText.trim() && !post.imageUrl)}
                           className="btn-primary py-1 px-3 text-xs"
                         >
                           {isUpdating ? t("updating") : t("save")}
@@ -484,12 +581,7 @@ export function CommunityPage() {
 
                   {imageUrl && (
                     <div className="rounded-2xl overflow-hidden border max-h-[400px] w-full" style={{ borderColor: "var(--l-border-subtle)", background: "var(--l-surface2)" }}>
-                      <img
-                        src={imageUrl}
-                        alt="post content"
-                        className="w-full object-cover max-h-[400px] hover:scale-[1.01] transition-transform duration-300 cursor-zoom-in"
-                        style={{ display: "block" }}
-                      />
+                      <CommunityImage src={imageUrl} token={token} baseUrl={backendBaseUrl} />
                     </div>
                   )}
                 </div>

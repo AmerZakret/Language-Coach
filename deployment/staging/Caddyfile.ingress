@@ -1,0 +1,31 @@
+{
+    auto_https disable_redirects
+    skip_install_trust
+}
+
+https://app.staging.test:8443 {
+    tls internal
+    reverse_proxy web:8080 {
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+        header_up -Forwarded
+        header_up -X-Real-IP
+    }
+}
+
+https://api.staging.test:8443 {
+    tls internal
+    request_body {
+        max_size 11MB
+    }
+    reverse_proxy backend:3000 {
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+        header_up -Forwarded
+        header_up -X-Real-IP
+    }
+}
+
+http://:8081 {
+    respond /health/live "ok" 200
+}

@@ -1,3 +1,6 @@
+import '../../services/api_response.dart';
+import '../../services/data_timeline.dart';
+import 'target_language.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../services/progress_service.dart';
@@ -11,62 +14,69 @@ class TargetLanguageService extends ChangeNotifier {
   TargetLanguageService._internal();
 
   String _currentLanguage = 'en';
+  int _languageVersion = 0;
   late SharedPreferences _prefs;
 
   String get currentLanguage => _currentLanguage;
+  int get languageVersion => _languageVersion;
 
-  static String toShortCode(String lang) {
-    switch (lang.toLowerCase()) {
-      case 'english': return 'en';
-      case 'german': return 'de';
-      case 'spanish': return 'es';
-      case 'french': return 'fr';
-      case 'arabic': return 'ar';
-      default: return 'en';
-    }
-  }
-
-  static String toFullName(String code) {
-    switch (code) {
-      case 'en': return 'English';
-      case 'de': return 'German';
-      case 'es': return 'Spanish';
-      case 'fr': return 'French';
-      case 'ar': return 'Arabic';
-      default: return 'English';
-    }
-  }
-
+  static String toShortCode(String language) => TargetLanguage.code(language);
+  static String toFullName(String language) => TargetLanguage.name(language);
   Future<void> init() async {
+    final session = AuthService().captureSession();
+    final version = ++_languageVersion;
     _prefs = await SharedPreferences.getInstance();
-    _currentLanguage = _prefs.getString('targetLanguage') ?? 'en';
+    if (!session.isDataCurrent || version != _languageVersion) return;
+    final saved = _prefs.getString('targetLanguage');
+    // A missing preference starts a new English session. Invalid saved values
+    // retain the current selection and are reported instead of coercing to en.
+    final normalized = TargetLanguage.tryCode(saved);
+    if (saved == null) {
+      _currentLanguage = 'en';
+    } else if (normalized != null) {
+      _currentLanguage = normalized;
+    } else {
+      debugPrint('Ignoring unsupported saved target language: $saved');
+    }
     notifyListeners();
   }
 
   Future<void> setLanguage(String langCode, {bool syncToBackend = true}) async {
-    _currentLanguage = langCode;
-    await _prefs.setString('targetLanguage', _currentLanguage);
-
-    if (syncToBackend) {
-      final auth = AuthService();
-      if (auth.isLoggedIn && !auth.isGuest) {
-        try {
-          await UserApiService().updateProfile(
-            targetLanguage: toFullName(langCode),
-          );
-        } catch (e) {
-          debugPrint('Failed to sync target language to backend: $e');
-        }
+    final session = AuthService().captureSession();
+    final version = ++_languageVersion;
+    bool isCurrent() => session.isDataCurrent && version == _languageVersion;
+    final requested = TargetLanguage.code(langCode);
+    final auth = AuthService();
+    if (syncToBackend && auth.isLoggedIn && !auth.isGuest) {
+      // The boundary commits immutable timeline evidence before either the
+      // backend write or this persistent optimistic preference.
+      DataTimeline().captureNewWork();
+      try {
+        await UserApiService().updateProfile(targetLanguage: requested);
+      } on TimelineRecoveryRequired {
+        if (!isCurrent()) return;
+        rethrow;
+      } catch (e) {
+        if (!isCurrent()) return;
+        if (e is! ApiException) rethrow;
+        debugPrint('Failed to sync target language to backend: $e');
       }
     }
+    if (!isCurrent()) return;
+    _currentLanguage = requested;
+    await _prefs.setString('targetLanguage', requested);
+    if (!isCurrent()) return;
     
     ProgressService().reloadProgress();
     notifyListeners();
   }
 
   Future<void> resetLanguage() async {
+    final session = AuthService().captureSession();
+    final version = ++_languageVersion;
     _currentLanguage = 'en';
     await _prefs.remove('targetLanguage');
+    if (!session.isDataCurrent || version != _languageVersion) return;
     notifyListeners();
   }
 
@@ -78,7 +88,7 @@ class TargetLanguageService extends ChangeNotifier {
       case 'de': return isTr ? 'Almanca' : 'German';
       case 'fr': return isTr ? 'Fransızca' : 'French';
       case 'ar': return isTr ? 'Arapça' : 'Arabic';
-      default: return isTr ? 'İngilizce' : 'English';
+      default: return code;
     }
   }
 
@@ -89,7 +99,7 @@ class TargetLanguageService extends ChangeNotifier {
       case 'de': return '🇩🇪';
       case 'fr': return '🇫🇷';
       case 'ar': return '🇸🇦';
-      default: return '🇬🇧';
+      default: return '🌐';
     }
   }
 }

@@ -12,16 +12,26 @@ export class User extends Document {
   @Prop({ required: true })
   passwordHash: string;
 
+  @Prop({ default: false })
+  isGuest: boolean;
+
   @Prop({ default: 'Beginner' })
   level: string;
 
   @Prop({ default: 0 })
   totalXp: number;
 
+  @Prop({ default: 0, min: 0 })
+  progressEpoch: number;
+
+  // Serializes score-only/duplicate completion checks with an owner reset.
+  @Prop({ default: 0 })
+  progressWriteRevision: number;
+
   @Prop({ default: 0 })
   streak: number;
 
-  @Prop({ default: 'English' })
+  @Prop({ default: 'en' })
   targetLanguage: string;
 
   @Prop({ type: Map, of: Number, default: {} })

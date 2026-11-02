@@ -1,3 +1,4 @@
+import { MutationTimelineModule } from '../operations/mutation-timeline';
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ProgressController } from './progress.controller';
@@ -5,13 +6,16 @@ import { ProgressService } from './progress.service';
 import { Progress, ProgressSchema } from './schemas/progress.schema';
 import { User, UserSchema } from '../users/schemas/user.schema';
 import { Lesson, LessonSchema } from '../lessons/schemas/lesson.schema';
+import { ProgressReset, ProgressResetSchema } from './schemas/progress-reset.schema';
 
 @Module({
   imports: [
+    MutationTimelineModule,
     MongooseModule.forFeature([
       { name: Progress.name, schema: ProgressSchema },
       { name: User.name, schema: UserSchema },
       { name: Lesson.name, schema: LessonSchema },
+      { name: ProgressReset.name, schema: ProgressResetSchema },
     ]),
   ],
   controllers: [ProgressController],

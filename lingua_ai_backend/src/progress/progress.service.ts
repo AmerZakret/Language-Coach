@@ -1,72 +1,66 @@
-import { Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
+import { MutationTimeline } from '../operations/mutation-timeline';
+import { observedTransaction } from '../operations/observed-transaction';
+import { receiptEvent } from '../operations/telemetry';
+import { targetLanguageCode, targetLanguageQuery, tryTargetLanguage } from '../common/target-language';
+import { BadRequestException, ConflictException, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { InjectConnection, InjectModel } from '@nestjs/mongoose';
+import { ClientSession, Connection, Model, Types, mongo } from 'mongoose';
 import { Progress } from './schemas/progress.schema';
 import { User } from '../users/schemas/user.schema';
 import { Lesson } from '../lessons/schemas/lesson.schema';
+import { ProgressReset } from './schemas/progress-reset.schema';
+import { deriveLevel, validXp } from '../common/xp-level';
+import { initializeDevelopmentIndexes } from '../operations/schema-startup';
 
 @Injectable()
 export class ProgressService implements OnModuleInit {
   constructor(
+    @InjectConnection() private readonly connection: Connection,
     @InjectModel(Progress.name) private progressModel: Model<Progress>,
     @InjectModel(User.name) private userModel: Model<User>,
     @InjectModel(Lesson.name) private lessonModel: Model<Lesson>,
+    @InjectModel(ProgressReset.name) private resetModel: Model<ProgressReset>,
+    private readonly timeline: MutationTimeline,
   ) {}
 
-  /**
-   * NestJS Lifecycle Hook:
-   * Triggers automatically when the module is fully initialized.
-   * Runs the database data migration helper.
-   */
-  async onModuleInit() {
-    await this.migrateLegacyProgress();
-  }
+  async onModuleInit() { await initializeDevelopmentIndexes(this.resetModel); }
 
-  /**
-   * Database Migration Helper:
-   * Older database schemas saved targetLanguage using short codes ('en', 'de').
-   * This migration script scans progress records missing standard fields and resolves them to full names (e.g. 'English').
-   */
-  private async migrateLegacyProgress() {
-    try {
-      const legacyProgressList = await this.progressModel.find({ targetLanguage: { $exists: false } }).exec();
-      if (legacyProgressList.length === 0) return;
-
-      const shortToFull: Record<string, string> = {
-        en: 'English',
-        de: 'German',
-        es: 'Spanish',
-        fr: 'French',
-        ar: 'Arabic',
-        English: 'English',
-        German: 'German',
-        Spanish: 'Spanish',
-        French: 'French',
-        Arabic: 'Arabic',
-      };
-
-      for (const p of legacyProgressList) {
-        const lesson = await this.lessonModel.findOne({ id: p.lessonId }).exec();
-        p.targetLanguage = lesson ? (shortToFull[lesson.targetLanguage] || lesson.targetLanguage) : 'English';
-        await p.save();
-      }
-      console.log(`Migrated ${legacyProgressList.length} legacy progress records.`);
-    } catch (e) {
-      console.error('Failed to migrate legacy progress records', e);
+  private assertEpoch(expected: number, current: number, reset = false) {
+    if (!Number.isSafeInteger(expected) || expected < 0) {
+      throw new BadRequestException({
+        code:
+          expected === undefined
+            ? 'MISSING_PROGRESS_EPOCH'
+            : 'INVALID_PROGRESS_EPOCH',
+        message: 'A valid progress epoch is required',
+      });
     }
+    if (expected !== current)
+      throw new ConflictException({
+        code: reset
+          ? expected < current
+            ? 'STALE_RESET_EPOCH'
+            : 'FUTURE_RESET_EPOCH'
+          : expected < current
+            ? 'STALE_PROGRESS_EPOCH'
+            : 'FUTURE_PROGRESS_EPOCH',
+        message:
+          expected < current
+            ? 'Progress was reset; this work is obsolete'
+            : 'Progress epoch is ahead of the server',
+      });
   }
 
   /**
-   * Helper function to find a user profile in MongoDB by email or ObjectId.
+   * Resolve only the MongoDB identity supplied by an authenticated controller.
    */
-  private async findUser(userId: string): Promise<User | null> {
-    const isObjectId = Types.ObjectId.isValid(userId);
-    return this.userModel.findOne({
-      $or: [
-        { email: userId },
-        ...(isObjectId ? [{ _id: new Types.ObjectId(userId) }] : []),
-      ],
-    }).exec();
+  private async findUser(userId: string, session: ClientSession | null = null): Promise<User> {
+    if (!Types.ObjectId.isValid(userId)) {
+      throw new NotFoundException('Authenticated user not found');
+    }
+    const user = await this.userModel.findById(userId).session(session).exec();
+    if (!user) throw new NotFoundException('Authenticated user not found');
+    return user;
   }
 
   /**
@@ -75,87 +69,55 @@ export class ProgressService implements OnModuleInit {
    * 2. Returns an array of completed lesson IDs.
    */
   async getUserProgress(userId: string, targetLanguage?: string) {
-    const user = await this.findUser(userId);
-    if (!user) {
-      // Return default empty state instead of crashing if user is not yet created
-      return {
-        userId,
-        stats: {
-          totalXp: 0,
-          streak: 0,
-          completedLessonsCount: 0,
-        },
-        completedLessons: [],
-        level: 'Beginner',
-      };
-    }
+    const session = await this.connection.startSession();
+    try {
+      return await observedTransaction(session, 'progress', () => this.getProgressSnapshot(userId, targetLanguage, session),
+        { readConcern: { level: 'snapshot' } });
+    } finally { await session.endSession(); }
+  }
+
+  private async getProgressSnapshot(userId: string, targetLanguage: string | undefined, session: ClientSession) {
+    const user = await this.findUser(userId, session);
 
     const filter: Record<string, any> = { userId: user._id.toString() };
-    if (targetLanguage) {
-      const shortToFull: Record<string, string> = {
-        en: 'English',
-        de: 'German',
-        es: 'Spanish',
-        fr: 'French',
-        ar: 'Arabic',
-        English: 'English',
-        German: 'German',
-        Spanish: 'Spanish',
-        French: 'French',
-        Arabic: 'Arabic',
-      };
-      const lang = shortToFull[targetLanguage] || targetLanguage;
-      filter.targetLanguage = lang; // Filter completed records by target language
+    if (targetLanguage !== undefined) {
+      const language = targetLanguageQuery(targetLanguage);
+      const legacyLessons = await this.lessonModel.find({ targetLanguage: language }).session(session).select('id').lean();
+      filter.$or = [{ targetLanguage: language },
+        { targetLanguage: { $exists: false }, lessonId: { $in: legacyLessons.map(lesson => lesson.id) } }];
     }
 
     const completedProgressList = await this.progressModel
       .find(filter)
+      .session(session)
       .exec();
 
     const completedLessons = completedProgressList.map((p) => ({
       lessonId: p.lessonId,
       score: p.score,
+      ...(p.awardedXp !== undefined ? { awardedXp: p.awardedXp } : {}),
+      ...(p.progressEpoch !== undefined ? { progressEpoch: p.progressEpoch } : {}),
       completedAt: (p as any).createdAt || new Date().toISOString(),
     }));
 
-    // Extract language-scoped XP and Levels from User schemas maps
-    let totalXp = user.totalXp;
-    let level = user.level || 'Beginner';
-    if (targetLanguage) {
-      const shortToFull: Record<string, string> = {
-        en: 'English',
-        de: 'German',
-        es: 'Spanish',
-        fr: 'French',
-        ar: 'Arabic',
-        English: 'English',
-        German: 'German',
-        Spanish: 'Spanish',
-        French: 'French',
-        Arabic: 'Arabic',
-      };
-      const lang = shortToFull[targetLanguage] || targetLanguage;
-      if (user.xpPerLanguage) {
-        totalXp = user.xpPerLanguage.get(lang) || 0;
-      } else {
-        totalXp = 0;
-      }
-      if (user.levelPerLanguage) {
-        level = user.levelPerLanguage.get(lang) || 'Beginner';
-      } else {
-        level = 'Beginner';
-      }
+    // Preserve the existing language-scoped response fields. Unfiltered stats
+    // are global; filtered stats/level describe that language. Reads never repair.
+    let totalXp = validXp(user.totalXp);
+    if (targetLanguage !== undefined) {
+      const code = targetLanguageCode(targetLanguage);
+      totalXp = this.languageXp(user, code);
     }
 
     return {
-      userId: user.email,
+      userId: user._id.toString(),
+      progressEpoch: user.progressEpoch ?? 0,
       stats: {
         totalXp,
         streak: user.streak,
         completedLessonsCount: completedLessons.length,
       },
       completedLessons,
-      level,
+      level: deriveLevel(totalXp),
     };
   }
 
@@ -166,140 +128,253 @@ export class ProgressService implements OnModuleInit {
    * 3. Checks if the user already completed this lesson to prevent double-crediting XP.
    * 4. Updates MongoDB, calculates CEFR level boundaries based on total XP, and saves.
    */
-  async completeLesson(userId: string, lessonId: string, score: number) {
-    let user = await this.findUser(userId);
-    if (!user) {
-      if (userId.includes('@') || userId === 'guest') {
-        user = await this.userModel.create({
-          name: userId.split('@')[0].toUpperCase(),
-          email: userId,
-          passwordHash: 'placeholder-hash',
-          totalXp: 0,
-          streak: 0,
-          level: 'Beginner',
-          xpPerLanguage: {},
-          levelPerLanguage: {},
-        });
-      } else {
-        throw new NotFoundException(`User with ID ${userId} not found`);
-      }
+  async completeLesson(
+    userId: string,
+    lessonId: string,
+    score: number,
+    progressEpoch: number,
+  ) {
+    // The completion's unique key and the XP award commit together. MongoDB
+    // retries write conflicts, including simultaneous different lessons.
+    const scope = await this.timeline.admission();
+    const run = () =>
+      this.timeline.transaction(
+        'progress',
+        async (session) => {
+          let user = await this.findUser(userId, session);
+          this.assertEpoch(progressEpoch, user.progressEpoch ?? 0);
+          const lesson = await this.lessonModel
+            .findOne({ id: lessonId })
+            .session(session)
+            .lean();
+          if (!lesson)
+            throw new NotFoundException(`Lesson with ID ${lessonId} not found`);
+          const lang = targetLanguageCode(lesson.targetLanguage);
+          const existing = await this.progressModel
+            .findOne({ userId: user._id.toString(), lessonId })
+            .session(session);
+          let xpEarned = 0;
+          if (!existing) {
+            xpEarned = validXp(lesson.xpReward);
+            // Check existing authoritative totals and overflow before any award.
+            validXp(validXp(user.totalXp) + xpEarned);
+            validXp(this.languageXp(user, lang) + xpEarned);
+            await this.progressModel.create(
+              [
+                {
+                  userId: user._id.toString(),
+                  lessonId,
+                  score,
+                  status: 'completed',
+                  targetLanguage: lang,
+                  awardedXp: xpEarned,
+                  progressEpoch,
+                },
+              ],
+              { session },
+            );
+            if (!user.xpPerLanguage || !user.levelPerLanguage) {
+              await this.userModel.updateOne(
+                { _id: user._id },
+                {
+                  $set: {
+                    ...(!user.xpPerLanguage ? { xpPerLanguage: {} } : {}),
+                    ...(!user.levelPerLanguage ? { levelPerLanguage: {} } : {}),
+                  },
+                },
+                { session },
+              );
+            }
+            user = (await this.userModel.findOneAndUpdate(
+              { _id: user._id },
+              {
+                $inc: {
+                  totalXp: xpEarned,
+                  [`xpPerLanguage.${lang}`]: xpEarned,
+                },
+              },
+              { returnDocument: 'after', session },
+            ))!;
+            const xp = this.languageXp(user, lang);
+            await this.userModel.updateOne(
+              { _id: user._id },
+              {
+                $set: {
+                  level: deriveLevel(user.totalXp),
+                  [`levelPerLanguage.${lang}`]: deriveLevel(xp),
+                },
+              },
+              { session },
+            );
+          } else if (score > existing.score) {
+            await this.progressModel.updateOne(
+              { _id: existing._id },
+              { $max: { score } },
+              { session },
+            );
+          }
+          // Even duplicate/score-only completions must contend on the owner with
+          // reset. A read-only epoch check could otherwise commit after a reset.
+          await this.userModel.updateOne(
+            { _id: user._id },
+            { $inc: { progressWriteRevision: 1 } },
+            { session },
+          );
+          return {
+            message: 'Lesson marked as completed',
+            data: {
+              userId: user._id.toString(),
+              lessonId,
+              score: Math.max(score, existing?.score ?? score),
+              progressEpoch,
+              targetLanguage: lang,
+              xpEarned,
+              newTotalXp: this.languageXp(user, lang),
+            },
+          };
+        },
+        scope,
+      );
+    try {
+      return await run();
+    } catch (error) {
+      // Two first attempts may race on the unique completion index. Read the
+      // winner in a fresh transaction; this path never awards its XP again.
+      if (error?.code !== 11000) throw error;
+      return await run();
     }
-
-    const lesson = await this.lessonModel.findOne({ id: lessonId }).exec();
-    if (!lesson) {
-      throw new NotFoundException(`Lesson with ID ${lessonId} not found`);
-    }
-
-    const shortToFull: Record<string, string> = {
-      en: 'English',
-      de: 'German',
-      es: 'Spanish',
-      fr: 'French',
-      ar: 'Arabic',
-      English: 'English',
-      German: 'German',
-      Spanish: 'Spanish',
-      French: 'French',
-      Arabic: 'Arabic',
-    };
-    const lang = shortToFull[lesson.targetLanguage] || lesson.targetLanguage || 'English';
-
-    // Query composite unique index to prevent duplicate completion logs
-    let progress = await this.progressModel
-      .findOne({ userId: user._id.toString(), lessonId })
-      .exec();
-
-    let newXpEarned = 0;
-    if (!progress) {
-      // Create fresh progress log
-      progress = await this.progressModel.create({
-        userId: user._id.toString(),
-        lessonId,
-        score,
-        status: 'completed',
-        targetLanguage: lang,
-      });
-
-      newXpEarned = lesson.xpReward;
-
-      // Initialize language maps if null
-      if (!user.xpPerLanguage) {
-        user.xpPerLanguage = new Map();
-      }
-      if (!user.levelPerLanguage) {
-        user.levelPerLanguage = new Map();
-      }
-
-      // Add XP and recalculate language levels thresholds
-      const currentLangXp = user.xpPerLanguage.get(lang) || 0;
-      const newLangXp = currentLangXp + newXpEarned;
-      user.xpPerLanguage.set(lang, newLangXp);
-
-      let level = 'Beginner';
-      if (newLangXp >= 2200) level = 'Advanced';
-      else if (newLangXp >= 1400) level = 'Upper-Intermediate';
-      else if (newLangXp >= 900) level = 'Intermediate';
-      else if (newLangXp >= 500) level = 'Pre-Intermediate';
-      else if (newLangXp >= 200) level = 'Elementary';
-      user.levelPerLanguage.set(lang, level);
-
-      // Save global user progress variables
-      user.totalXp += newXpEarned;
-      user.level = level;
-
-      // Mark map modifications so Mongoose knows it needs to serialize updates
-      user.markModified('xpPerLanguage');
-      user.markModified('levelPerLanguage');
-      await user.save();
-    } else {
-      // If already completed, overwrite only if the new quiz score is higher
-      if (score > progress.score) {
-        progress.score = score;
-        await progress.save();
-      }
-    }
-
-    const langXp = user.xpPerLanguage ? (user.xpPerLanguage.get(lang) || 0) : user.totalXp;
-
-    return {
-      message: 'Lesson marked as completed',
-      data: {
-        userId: user.email,
-        lessonId,
-        score,
-        xpEarned: newXpEarned,
-        newTotalXp: langXp,
-      },
-    };
   }
 
-  /**
-   * Reset User Progress:
-   * Deletes all progress documents and wipes XP/level maps on the User profile.
-   */
-  async resetProgress(userId: string) {
-    const user = await this.findUser(userId);
-    if (!user) {
-      throw new NotFoundException(`User with ID/Email ${userId} not found`);
+  private languageXp(user: User, code: string): number {
+    // Keep Phase 5D's additive alias compatibility. Historical overlap cannot
+    // be inferred from bucket values, so never merge/dedupe/rewrite those keys.
+    // Every new award increments only the canonical bucket, exactly once.
+    return [...(user.xpPerLanguage ?? [])].reduce((total, [key, xp]) =>
+      tryTargetLanguage(key) === code ? validXp(total + validXp(xp)) : total, 0);
+  }
+
+  private validateResetRequest(expectedEpoch: number, operationId: string) {
+    if (typeof operationId !== 'string' || !/^[A-Za-z0-9._:-]{1,128}$/.test(operationId)) {
+      throw new BadRequestException({ code: 'INVALID_OPERATION_ID', message: 'A valid X-Idempotency-Key is required' });
     }
+    if (!Number.isSafeInteger(expectedEpoch) || expectedEpoch < 0 || expectedEpoch >= Number.MAX_SAFE_INTEGER) {
+      throw new BadRequestException({ code: expectedEpoch === undefined ? 'MISSING_PROGRESS_EPOCH' : 'INVALID_PROGRESS_EPOCH', message: 'A valid expected epoch is required' });
+    }
+  }
 
-    // Clear progress collection references
-    await this.progressModel.deleteMany({ userId: user._id.toString() }).exec();
+  private resetResult(userId: string, expectedEpoch: number, receipt: ProgressReset) {
+    if (receipt.expectedEpoch !== expectedEpoch) {
+      receiptEvent('receipt.conflict', 'progress_reset', userId, receipt.operationId);
+      throw new ConflictException({
+      code: 'RESET_IDEMPOTENCY_CONFLICT', message: 'Idempotency key was used for a different request',
+      });
+    }
+    return { message: 'Progress successfully reset', userId, progressEpoch: receipt.progressEpoch,
+      operationId: receipt.operationId, expectedEpoch: receipt.expectedEpoch };
+  }
 
-    // Reset XP metrics
-    user.totalXp = 0;
-    user.streak = 0;
-    user.level = 'Beginner';
-    user.xpPerLanguage = new Map();
-    user.levelPerLanguage = new Map();
-    
-    user.markModified('xpPerLanguage');
-    user.markModified('levelPerLanguage');
-    await user.save();
+  // Read a durable result only. Recovery must never execute a quarantined reset.
+  async getResetReceipt(
+    userId: string,
+    expectedEpoch: number,
+    operationId: string,
+  ) {
+    const scope = await this.timeline.admission();
+    return this.timeline.transaction(
+      'reset-recovery',
+      async (session) => {
+        this.validateResetRequest(expectedEpoch, operationId);
+        const user = await this.findUser(userId, session);
+        const receipt = await this.resetModel
+          .findOne({ userId: user._id.toString(), operationId })
+          .session(session);
+        if (!receipt)
+          throw new NotFoundException({
+            code: 'RESET_NOT_COMMITTED',
+            message: 'No committed reset receipt found',
+          });
+        this.timeline.assertReceipt(receipt, scope);
+        const result = this.resetResult(userId, expectedEpoch, receipt);
+        receiptEvent('reset.recovered', 'progress_reset', userId, operationId);
+        return result;
+      },
+      scope,
+    );
+  }
 
-    return {
-      message: 'Progress successfully reset',
-      userId: user.email,
-    };
+  async resetProgress(
+    userId: string,
+    expectedEpoch: number,
+    operationId: string,
+  ) {
+    const scope = await this.timeline.admission();
+    this.validateResetRequest(expectedEpoch, operationId);
+    const result = (receipt: ProgressReset) => this.resetResult(userId, expectedEpoch, receipt);
+    let created = false;
+    const run = () =>
+      this.timeline.transaction(
+        'progress-reset',
+        async (session) => {
+          created = false;
+          const user = await this.findUser(userId, session);
+          const receipt = await this.resetModel
+            .findOne({ userId: user._id.toString(), operationId })
+            .session(session);
+          if (receipt) {
+            this.timeline.assertReceipt(receipt, scope);
+            receiptEvent(
+              'receipt.replay',
+              'progress_reset',
+              userId,
+              operationId,
+            );
+            return result(receipt);
+          }
+          this.assertEpoch(expectedEpoch, user.progressEpoch ?? 0, true);
+          const [saved] = await this.resetModel.create(
+            [
+              {
+                userId: user._id.toString(),
+                operationId,
+                expectedEpoch,
+                progressEpoch: expectedEpoch + 1,
+                dataTimelineId: scope.dataTimelineId,
+              },
+            ],
+            { session },
+          );
+          await this.progressModel
+            .deleteMany({ userId: user._id.toString() })
+            .session(session);
+          await this.userModel.updateOne(
+            { _id: user._id },
+            {
+              $set: {
+                totalXp: 0,
+                streak: 0,
+                level: 'Beginner',
+                xpPerLanguage: {},
+                levelPerLanguage: {},
+                progressEpoch: expectedEpoch + 1,
+              },
+            },
+            { session },
+          );
+          created = true;
+          return result(saved);
+        },
+        scope,
+      );
+    let outcome: Awaited<ReturnType<typeof run>>;
+    try {
+      outcome = await run();
+    } catch (error) {
+      if (!(error instanceof mongo.MongoServerError) || error.code !== 11000)
+        throw error;
+      outcome = await run();
+    }
+    if (created)
+      receiptEvent('receipt.created', 'progress_reset', userId, operationId);
+    return outcome;
   }
 }

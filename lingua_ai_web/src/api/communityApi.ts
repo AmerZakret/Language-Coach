@@ -1,3 +1,8 @@
+import { dataTimeline, TimelineRecoveryRequired } from '../utils/dataTimeline';
+import { getSessionRequestConfig, isSessionCurrent } from '../utils/queueSession';
+import { communityCreatePayload, durableMutation, recoverBeforeRead } from './intentRecovery';
+import { mutationRequest, newMutationId } from './mutationRequest';
+import { targetLanguageCode, targetLanguageName, tryTargetLanguageCode } from '../utils/targetLanguage';
 import apiClient from './apiClient';
 
 export interface CommunityPost {
@@ -12,6 +17,7 @@ export interface CommunityPost {
   likedByMe?: boolean;
   createdAt: string;
   updatedAt: string;
+  revision?: number;
 }
 
 export interface GetCommunityPostsResponse {
@@ -27,36 +33,51 @@ export const getCommunityPosts = async (params: {
   limit?: number;
   language?: string;
 }): Promise<GetCommunityPostsResponse> => {
+  const session = getSessionRequestConfig().sessionSnapshot;
+  const timeline = dataTimeline.context();
+  await recoverBeforeRead('community');
+  if (!dataTimeline.isContext(timeline)) throw new TimelineRecoveryRequired();
+  if (!isSessionCurrent(session)) throw new Error('Community session changed');
   const response = await apiClient.get<GetCommunityPostsResponse>('/community/posts', {
-    params,
+    ...{ sessionSnapshot: session },
+    params: { ...params, ...(params.language && params.language.toLowerCase() !== 'all' ? { language: targetLanguageCode(params.language) } : {}) },
   });
+  return { ...response.data, items: response.data.items.map(displayPost) };
+};
+
+export const createCommunityPost = async (formData: FormData, operationId?: string): Promise<CommunityPost> => {
+  const session = getSessionRequestConfig().sessionSnapshot;
+  const timeline = dataTimeline.capture();
+  const language = formData.get('learningLanguage');
+  if (language != null) formData.set('learningLanguage', targetLanguageCode(language));
+  const payload = await communityCreatePayload(formData);
+  if (!isSessionCurrent(session)) throw new Error('Mutation session changed');
+  return displayPost(await durableMutation<CommunityPost>('community-create', String(payload.learningLanguage), payload, operationId, timeline));
+};
+
+export const updateCommunityPost = async (id: string, formData: FormData, operationId = newMutationId()): Promise<CommunityPost> => {
+  const response = await mutationRequest(operationId, config => apiClient.put<CommunityPost>(`/community/posts/${id}`, formData, { ...config,
+    headers: { ...config.headers, 'Content-Type': 'multipart/form-data' },
+  }));
+  return displayPost(response.data);
+};
+
+export const deleteCommunityPost = async (id: string, revision: number, operationId = newMutationId()): Promise<{ success: boolean }> => {
+  const session = getSessionRequestConfig().sessionSnapshot;
+  try {
+    const response = await mutationRequest(operationId, config => apiClient.delete<{ success: boolean }>(`/community/posts/${id}`, { ...config, headers: { ...config.headers, 'X-Resource-Revision': revision } }));
+    return response.data;
+  } catch (error) {
+    if (isSessionCurrent(session) && (error as { response?: { status?: number } })?.response?.status === 404) return { success: true };
+    throw error;
+  }
+};
+
+export const toggleLikeCommunityPost = async (id: string, liked: boolean, operationId = newMutationId()): Promise<{ likesCount: number; likedByMe: boolean }> => {
+  const response = await mutationRequest(operationId, config => apiClient.post<{ likesCount: number; likedByMe: boolean }>(`/community/posts/${id}/like`, { liked }, config), `reaction:${id}`);
   return response.data;
 };
 
-export const createCommunityPost = async (formData: FormData): Promise<CommunityPost> => {
-  const response = await apiClient.post<CommunityPost>('/community/posts', formData, {
-    headers: {
-      'Content-Type': 'multipart/form-data',
-    },
-  });
-  return response.data;
-};
-
-export const updateCommunityPost = async (id: string, formData: FormData): Promise<CommunityPost> => {
-  const response = await apiClient.put<CommunityPost>(`/community/posts/${id}`, formData, {
-    headers: {
-      'Content-Type': 'multipart/form-data',
-    },
-  });
-  return response.data;
-};
-
-export const deleteCommunityPost = async (id: string): Promise<{ success: boolean }> => {
-  const response = await apiClient.delete<{ success: boolean }>(`/community/posts/${id}`);
-  return response.data;
-};
-
-export const toggleLikeCommunityPost = async (id: string): Promise<{ likesCount: number; likedByMe: boolean }> => {
-  const response = await apiClient.post<{ likesCount: number; likedByMe: boolean }>(`/community/posts/${id}/like`);
-  return response.data;
-};
+const displayPost = (post: CommunityPost): CommunityPost => ({ ...post,
+  learningLanguage: tryTargetLanguageCode(post.learningLanguage) ? targetLanguageName(post.learningLanguage) : post.learningLanguage,
+});

@@ -1,8 +1,10 @@
+import { IsTargetLanguage } from '../../common/target-language';
 import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class CreateCommunityPostDto {
   @IsString()
   @IsNotEmpty()
+  @IsTargetLanguage()
   learningLanguage: string;
 
   @IsString()

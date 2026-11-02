@@ -1,0 +1,2 @@
+-r requirements.txt
+# HTTPX test transport is already pinned and hashed in the runtime Hub graph.

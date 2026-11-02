@@ -1,3 +1,4 @@
+import { readTimelineCache, writeTimelineCache } from '../utils/timelineCache';
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { BookOpen, CheckCircle2, Lock, Star } from "lucide-react";
@@ -9,6 +10,7 @@ import { getLessons } from "../api/lessonsApi";
 import { fallbackLessons } from "../data/fallbackLessons";
 import type { Lesson } from "../types/lesson";
 import { isLessonLocked } from "../utils/lessonLock";
+import { lessonLanguageCode } from "../utils/lessonLanguage";
 
 export function LessonsPage() {
 
@@ -27,18 +29,18 @@ export function LessonsPage() {
       try {
         const data = await getLessons(targetLanguage);
         setLessons(data);
-        localStorage.setItem(cacheKey, JSON.stringify(data));
+        writeTimelineCache(cacheKey, JSON.stringify(data));
       } catch (e) {
         console.error("Failed to load lessons, using cache or fallback", e);
-        const cached = localStorage.getItem(cacheKey);
+        const cached = readTimelineCache(cacheKey);
         if (cached) {
           try {
             setLessons(JSON.parse(cached));
           } catch {
-            setLessons(fallbackLessons.filter((l) => l.targetLanguage === targetLanguage));
+            setLessons(fallbackLessons.filter((l) => l.targetLanguage === lessonLanguageCode(targetLanguage)));
           }
         } else {
-          setLessons(fallbackLessons.filter((l) => l.targetLanguage === targetLanguage));
+          setLessons(fallbackLessons.filter((l) => l.targetLanguage === lessonLanguageCode(targetLanguage)));
         }
       } finally {
         setLoading(false);
