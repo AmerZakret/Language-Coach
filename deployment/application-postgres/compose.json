@@ -1,0 +1,97 @@
+{
+  "name": "language-coach-m3a",
+  "services": {
+    "app-postgres": {
+      "image": "postgres:17.9-bookworm",
+      "environment": {
+        "POSTGRES_USER": "lc_app_bootstrap",
+        "POSTGRES_DB": "lc_app_m3a",
+        "POSTGRES_PASSWORD": "${M3A_ADMIN_PASSWORD:?explicit synthetic admin password required}",
+        "M3A_MIGRATOR_PASSWORD": "${M3A_MIGRATOR_PASSWORD:?explicit synthetic migrator password required}",
+        "M3A_RUNTIME_PASSWORD": "${M3A_RUNTIME_PASSWORD:?explicit synthetic runtime password required}",
+        "M3A_REFERENCE_PASSWORD": "${M3A_REFERENCE_PASSWORD:?explicit synthetic reference password required}",
+        "M3A_PROBE_PASSWORD": "${M3A_PROBE_PASSWORD:?explicit synthetic probe password required}",
+        "M3A_OPERATOR_PASSWORD": "${M3A_OPERATOR_PASSWORD:?explicit synthetic operator password required}",
+        "M3A_AUDIT_PASSWORD": "${M3A_AUDIT_PASSWORD:?explicit synthetic audit password required}"
+      },
+      "volumes": [
+        "app-data:/var/lib/postgresql/data",
+        "./provision.sh:/docker-entrypoint-initdb.d/010-application.sh:ro"
+      ],
+      "networks": ["application"],
+      "command": [
+        "postgres",
+        "-c",
+        "max_connections=40",
+        "-c",
+        "shared_buffers=64MB",
+        "-c",
+        "fsync=on",
+        "-c",
+        "full_page_writes=on",
+        "-c",
+        "synchronous_commit=on"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD-SHELL",
+          "pg_isready -h 127.0.0.1 -U lc_app_bootstrap -d lc_app_m3a"
+        ],
+        "interval": "2s",
+        "timeout": "2s",
+        "retries": 30
+      },
+      "mem_limit": "384m",
+      "cpus": 1,
+      "restart": "no"
+    },
+    "tests": {
+      "image": "language-coach-m3a-tools:local",
+      "build": {
+        "context": "../..",
+        "dockerfile": "deployment/application-postgres/Dockerfile.tools"
+      },
+      "profiles": ["tools"],
+      "working_dir": "/workspace/lingua_ai_backend",
+      "volumes": [
+        "../../lingua_ai_backend/src/persistence:/workspace/lingua_ai_backend/src/persistence:ro",
+        "../../lingua_ai_backend/src/tooling/application-migrate-cli.ts:/workspace/lingua_ai_backend/src/tooling/application-migrate-cli.ts:ro",
+        "../../lingua_ai_backend/migrations/application:/workspace/lingua_ai_backend/migrations/application:ro",
+        "../../lingua_ai_backend/tsconfig.json:/workspace/lingua_ai_backend/tsconfig.json:ro",
+        "../../lingua_ai_backend/package.json:/workspace/lingua_ai_backend/package.json:ro",
+        "./jest.config.cjs:/workspace/deployment/application-postgres/jest.config.cjs:ro",
+        "./restart-probe.cjs:/workspace/deployment/application-postgres/restart-probe.cjs:ro"
+      ],
+      "user": "node",
+      "cap_drop": ["ALL"],
+      "security_opt": ["no-new-privileges:true"],
+      "read_only": true,
+      "tmpfs": ["/tmp:rw,noexec,nosuid,size=256m"],
+      "networks": ["application"],
+      "environment": {
+        "APPLICATION_PG_MODE": "foundation-test",
+        "APPLICATION_PG_DISPOSABLE": "true",
+        "APPLICATION_PG_ENVIRONMENT": "synthetic-m3a",
+        "APPLICATION_PG_STORAGE_IDENTITY": "synthetic-m3a-app",
+        "APPLICATION_PG_INSTANCE_ID": "33333333-3333-4333-8333-333333333333",
+        "M3A_ADMIN_PASSWORD": "${M3A_ADMIN_PASSWORD:?required}",
+        "M3A_MIGRATOR_PASSWORD": "${M3A_MIGRATOR_PASSWORD:?required}",
+        "M3A_RUNTIME_PASSWORD": "${M3A_RUNTIME_PASSWORD:?required}",
+        "M3A_REFERENCE_PASSWORD": "${M3A_REFERENCE_PASSWORD:?required}",
+        "M3A_PROBE_PASSWORD": "${M3A_PROBE_PASSWORD:?required}",
+        "M3A_OPERATOR_PASSWORD": "${M3A_OPERATOR_PASSWORD:?required}",
+        "M3A_AUDIT_PASSWORD": "${M3A_AUDIT_PASSWORD:?required}"
+      },
+      "command": [
+        "node",
+        "/opt/m3a/node_modules/jest/bin/jest.js",
+        "--runInBand",
+        "--config",
+        "/workspace/deployment/application-postgres/jest.config.cjs"
+      ],
+      "depends_on": { "app-postgres": { "condition": "service_healthy" } }
+    }
+  },
+  "networks": { "application": { "internal": true } },
+  "volumes": { "app-data": {} }
+}

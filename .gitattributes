@@ -1,1 +1,6 @@
 * text=auto
+
+# Application migration integrity hashes raw bytes; POSIX bootstrap also needs LF.
+/lingua_ai_backend/migrations/application/*.sql text eol=lf
+/lingua_ai_backend/migrations/application/manifest.json text eol=lf
+/deployment/application-postgres/provision.sh text eol=lf

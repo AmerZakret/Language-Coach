@@ -1,0 +1,6 @@
+FROM node:22.14.0-bookworm-slim@sha256:1c18d9ab3af4585870b92e4dbc5cac5a0dc77dd13df1a5905cea89fc720eb05b
+WORKDIR /opt/m3a
+COPY lingua_ai_backend/package.json lingua_ai_backend/package-lock.json ./
+RUN npm ci --ignore-scripts --no-audit --no-fund
+ENV NODE_PATH=/opt/m3a/node_modules
+WORKDIR /workspace/lingua_ai_backend

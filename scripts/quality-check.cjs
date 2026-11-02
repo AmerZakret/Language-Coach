@@ -15,7 +15,7 @@ function snapshot() {
 }
 // Never pass inherited application credentials/configuration into quality checks.
 const safeEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) =>
-  !/^(OBJECT_STORAGE_.*|UPLOAD_STORAGE_BACKEND|UPLOAD_MIGRATION_STATE|TIMELINE_AUTHORITY_.*|AUTHORITY_.*|DEPLOYMENT_PROFILE|DATA_TIMELINE_ID|DATA_WRITE_MODE|CLIENT_PROTOCOL_POLICY|RELEASE_BUILD_ID|NODE_ENV|MONGODB_URI|JWT_SECRET|GEMINI_.*|AI_ENABLED|PRONUNCIATION_.*|WHISPER_.*|CORS_ORIGINS|UPLOAD_ROOT|VITE_.*|ALLOW_LOCAL_.*|TRUST_PROXY)$/.test(name)));
+  !/^(APPLICATION_PG_.*|APPLICATION_DATABASE_URL|OBJECT_STORAGE_.*|UPLOAD_STORAGE_BACKEND|UPLOAD_MIGRATION_STATE|TIMELINE_AUTHORITY_.*|AUTHORITY_.*|DEPLOYMENT_PROFILE|DATA_TIMELINE_ID|DATA_WRITE_MODE|CLIENT_PROTOCOL_POLICY|RELEASE_BUILD_ID|NODE_ENV|MONGODB_URI|JWT_SECRET|GEMINI_.*|AI_ENABLED|PRONUNCIATION_.*|WHISPER_.*|CORS_ORIGINS|UPLOAD_ROOT|VITE_.*|ALLOW_LOCAL_.*|TRUST_PROXY)$/.test(name)));
 // Keep disposable Mongo binaries in the ignored test dependency cache, not in
 // a developer database directory. CI may download only this test server binary.
 safeEnv.MONGOMS_DOWNLOAD_DIR ||= join(root, 'lingua_ai_backend/node_modules/.cache/mongodb-memory-server');
@@ -63,7 +63,7 @@ const jobs = {
       CORS_ORIGINS: 'https://app.example.invalid', UPLOAD_ROOT: resolve(root, '.quality-upload-contract') };
     run(npm, ['run', 'validate:prod'], cwd, env); run(npm, ['run', 'preflight:deploy'], cwd, env);
   },
-  hygiene() { run(process.execPath, ['--test', 'scripts/quality-tools.test.cjs', 'scripts/release-artifacts.test.cjs', 'scripts/validate-staging-deployment.test.cjs']); run(process.execPath, ['scripts/validate-staging-deployment.cjs']); run(process.execPath, ['scripts/check-hygiene.cjs']); },
+  hygiene() { run(process.execPath, ['--test', 'scripts/quality-tools.test.cjs', 'scripts/release-artifacts.test.cjs', 'scripts/validate-staging-deployment.test.cjs', 'scripts/application-pg-checkout.test.cjs']); run(process.execPath, ['scripts/validate-staging-deployment.cjs']); run(process.execPath, ['scripts/check-hygiene.cjs']); },
 };
 function main() {
   const selected = process.argv[2] || 'all';

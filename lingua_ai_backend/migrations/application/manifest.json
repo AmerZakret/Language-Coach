@@ -1,0 +1,67 @@
+{
+  "format": 1,
+  "serverMajor": 17,
+  "encodingVersion": "LC-PG-TEXT-1",
+  "review": "M2-R1-M3-A",
+  "minimumRuntime": "m3-a-foundation",
+  "previousManifest": null,
+  "roles": [
+    "lc_app_owner",
+    "lc_app_migrator",
+    "lc_app_runtime",
+    "lc_app_reference",
+    "lc_app_probe",
+    "lc_app_operator",
+    "lc_app_audit"
+  ],
+  "entries": [
+    {
+      "id": "0001_foundation",
+      "ordinal": 1,
+      "sha256": "cb5c652572134beac4e3c4f0127b2a1cd9dcc37eb95eb8073d3c9da81f5c4233",
+      "transaction": "required",
+      "previous": null,
+      "catalogSha256": "33afc53c36cdea6fa8d04c9418dd90465d7948505dcbdb9ad9217dc0e3aa8d80"
+    },
+    {
+      "id": "0002_users_lessons",
+      "ordinal": 2,
+      "sha256": "0f02fe3287b60ad03e156c84b8ec08528a87babffdab4d8d6adaa71bc896b158",
+      "transaction": "required",
+      "previous": "0001_foundation",
+      "catalogSha256": "768ba455ed0b6ee0be8552d15a20ecd9cf75b2bd0b5e6f2e897f71323f2948b5"
+    },
+    {
+      "id": "0003_learning_receipts",
+      "ordinal": 3,
+      "sha256": "521600e7bdebf69377cef19847cb886d89e4f9df8b11e870d4b4f543c13542c9",
+      "transaction": "required",
+      "previous": "0002_users_lessons",
+      "catalogSha256": "fc9635b2269854575d6c5fa9a09a528c9c25449982b4031a227fee5e0451f332"
+    },
+    {
+      "id": "0004_community_chat",
+      "ordinal": 4,
+      "sha256": "9ce2c47cabecd6cdde3408c9e163fc075f6a02745436c242a84c27feca9f93c0",
+      "transaction": "required",
+      "previous": "0003_learning_receipts",
+      "catalogSha256": "c13cd0dede5c335b4c08550da2ce67a59ffcffbace7ac20caeadd1eea0ff30ae"
+    },
+    {
+      "id": "0005_control_and_evidence",
+      "ordinal": 5,
+      "sha256": "e88222d509f2c6e40cca219af3e6791ba12a536c01d68c3b2ab4c30b97b8ae2d",
+      "transaction": "required",
+      "previous": "0004_community_chat",
+      "catalogSha256": "4cc978ec65cc0a00fef6723d8264cae5d305a71e2a8a8cf1666639b5aec326a6"
+    },
+    {
+      "id": "0006_indexes_permissions",
+      "ordinal": 6,
+      "sha256": "bb9c497b30d2f9b8c6ecae37edc0c6ea9dd8f18c8512c8a729dd4834d2a5abfd",
+      "transaction": "required",
+      "previous": "0005_control_and_evidence",
+      "catalogSha256": "cca527da1eab4329c55c09fd878e558edee39eb1ad3c4c5eb5da97f587a70173"
+    }
+  ]
+}
